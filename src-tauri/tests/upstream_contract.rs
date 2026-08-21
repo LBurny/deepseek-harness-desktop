@@ -313,17 +313,32 @@ async fn probe_ws(dsh: &Dsh, c: &mut Checker) {
     use futures::StreamExt;
     for path in [upstream::EVENTS_MUX_PATH, upstream::EVENTS_HOST_PATH] {
         let url = format!("ws://127.0.0.1:{}{}", dsh.port, path);
-        let (mut stream, _) = match tokio_tungstenite::connect_async(&url).await {
-            Ok(v) => v,
-            Err(e) => {
-                c.check(
-                    &format!("WS {path} 无 Origin 握手"),
-                    false,
-                    format!("connect 失败: {e}"),
-                    "WS 信任栅栏或端点变了（影响 notify/ws.rs）",
-                );
-                continue;
+        // 启动竞态宽限：HTTP 路由先就绪（GET 立即可探 426），WS 升级通道挂载
+        // 可能晚几百毫秒；快机器（CI runner）就绪即探会撞窗（0.3.0 release CI
+        // 实踩，本地慢机从未复现）。5s 内重试，持续失败才算漂移
+        let mut last_err = String::new();
+        let mut stream = None;
+        let connect_deadline = Instant::now() + Duration::from_secs(5);
+        while Instant::now() < connect_deadline {
+            match tokio_tungstenite::connect_async(&url).await {
+                Ok((s, _)) => {
+                    stream = Some(s);
+                    break;
+                }
+                Err(e) => {
+                    last_err = e.to_string();
+                    tokio::time::sleep(Duration::from_millis(200)).await;
+                }
             }
+        }
+        let Some(mut stream) = stream else {
+            c.check(
+                &format!("WS {path} 无 Origin 握手"),
+                false,
+                format!("connect 失败（5s 重试后）: {last_err}"),
+                "WS 信任栅栏或端点变了（影响 notify/ws.rs）",
+            );
+            continue;
         };
         c.check(&format!("WS {path} 无 Origin 握手"), true, "", "");
         // 帧观察窗口：空闲 dsh 可能无帧——观察到就断言形状，观察不到不算漂移
