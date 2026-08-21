@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-08-21
+
+### Added
+
+- Remote access: new "项目" (Project) tab on the session page, between 轨迹 (Trace) and 信息 (Info) — browse the current session's workspace file tree from the phone and preview images (png/jpeg/webp/gif), rendered Markdown (headings/tables/task lists, relative-path images resolved through the file endpoint) and line-numbered code/text with a wrap toggle; unsupported types and oversized previews offer a download button instead. Implemented as shell-owned routes under `/__dsh-desktop/` (self-contained page + resolve/list/file APIs) served by the token-gated reverse proxy, with the page embedded via an injected iframe tab (mobile.js) — zero modification of dsh files. Session→workspace resolution reads `$DSH_HOME/storages/workspace.json` read-only (schema pinned by contract probes); requested paths are restricted to normal components, canonicalized and prefix-checked (escape/junction → 403); text previews cap at 8MB, all files at 64MB, download exempt from the preview cap. The desktop app is unaffected: the tab only exists on responses passing through the remote proxy. As part of this the token gate moved from fallback-handler-internal logic to a Router-wide axum middleware — shell-owned routes mounted ahead of the fallback would otherwise have bypassed authentication (regression test `gate_covers_shell_routes`)
+
+### Changed
+
+- Mobile session header: the upstream "Session log" pill is shrunk (32px height / 111px min-width → 26px / content-width) inside the 700px breakpoint so it no longer crowds the tab bar. The doubled `[class*="_sessionLogButton"]` selector (0-2-0 specificity) is required because upstream's stylesheet is JS-runtime-injected after ours; a new contract probe (`SESSION_LOG_BUTTON_NEEDLE`) goes red if upstream renames the CSS Modules local name, instead of the rule silently dying
+- dsh runtime 0.1.0-rc.8 → 0.1.1-rc.2 (fetch-runtime.ps1 pin): upstream added image upload via Files API, the DeepSeek-V4-Flash-Vision-Exp model, responsive Markdown tables and a Bubblewrap /proc escape fix — no drift in any probed fact (entry/command shape, WS frames, settings keys, workspace schema, localStorage key, picker needles, plugin CLI)
+
+Tests: 188 → 198 (197 passed + 1 ignored)
+
 ## [0.2.2] - 2026-08-21
 
 ### Changed
