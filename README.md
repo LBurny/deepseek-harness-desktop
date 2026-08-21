@@ -24,9 +24,10 @@ A desktop shell for [deepseek-harness](https://github.com/deepseek-ai/deepseek-h
 - **Official UI in a native window.** Spawns `dsh web` on a free loopback port and opens the official Web UI as soon as it is ready.
 - **Remote access from your phone.** One click in the tray menu starts a Cloudflare Quick Tunnel (cloudflared is bundled) behind the shell's token-gated proxy; scan the QR code and the full dsh Web UI is on your phone. The random token regenerates on every start and dies the moment you stop it — no server, account, or configuration needed.
 - **Guided first launch.** A stage-based progress bar shows runtime preparation, service startup, and readiness while the app initializes for the first time.
-- **Tray resident.** Closing the window hides it to the tray (or exits — your choice in Settings). Tray menu: open, diagnostics, skills, MCP servers, remote access, restart service, settings, quit.
+- **Tray resident.** Closing the window hides it to the tray (or exits — your choice in Settings). Tray menu: open, diagnostics, plugins, skills, MCP servers, remote access, restart service, settings, quit.
 - **Native notifications.** dsh approval requests and questions become Windows notifications while the window is hidden; completed turns can notify too, with optional built-in sounds.
 - **Skills and MCP management.** Enable, disable, or delete skills (hot-reloaded by dsh's watcher) and import them from codex/claude/opencode; edit dsh's MCP server entries with hot-reload, no restart needed.
+- **Plugin management.** Search the npm registry and install, uninstall, or update dsh plugins from the panel. Operations run dsh's official plugin subcommand with the bundled pnpm and stream their output; plugins take effect after a service restart, which the panel offers with one click.
 - **Crash resilience.** The dsh process is supervised and restarted with exponential backoff.
 - **Theme and language following.** The title bar and the shell's own pages follow dsh's light/dark/system theme; the tray menu and local pages follow dsh's UI language (Chinese/English).
 - **Diagnostics panel.** Service state, port, PID, live logs, remote-access state, one-click restart, and an autostart toggle.
