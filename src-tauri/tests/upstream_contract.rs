@@ -313,14 +313,17 @@ async fn probe_ws(dsh: &Dsh, c: &mut Checker) {
     use futures::StreamExt;
     for path in [upstream::EVENTS_MUX_PATH, upstream::EVENTS_HOST_PATH] {
         let url = format!("ws://127.0.0.1:{}{}", dsh.port, path);
-        let Ok((mut stream, _)) = tokio_tungstenite::connect_async(&url).await else {
-            c.check(
-                &format!("WS {path} 无 Origin 握手"),
-                false,
-                "connect 失败",
-                "WS 信任栅栏或端点变了（影响 notify/ws.rs）",
-            );
-            continue;
+        let (mut stream, _) = match tokio_tungstenite::connect_async(&url).await {
+            Ok(v) => v,
+            Err(e) => {
+                c.check(
+                    &format!("WS {path} 无 Origin 握手"),
+                    false,
+                    format!("connect 失败: {e}"),
+                    "WS 信任栅栏或端点变了（影响 notify/ws.rs）",
+                );
+                continue;
+            }
         };
         c.check(&format!("WS {path} 无 Origin 握手"), true, "", "");
         // 帧观察窗口：空闲 dsh 可能无帧——观察到就断言形状，观察不到不算漂移
