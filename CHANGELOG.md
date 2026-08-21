@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-08-21
+
+### Changed
+
+- The dsh subprocess now spawns with `<DSH_HOME>/profiles/web/node_modules/.bin` prepended to PATH (new `dsh_child_path` in process.rs — the same pattern plugins.rs already used for the bundled pnpm). Plugin-shipped CLIs installed into the profile by the plugin manager are not on the user's PATH, so session terminals and tool subprocesses could not resolve them by name — diagnosed from a real modlens 3.22.0 install where the tool itself loaded fine but `modlens ...` in the dsh terminal failed with "The term 'modlens' is not recognized", forcing users to dig out the absolute path under `%LOCALAPPDATA%` to run the plugin's own setup commands. Base PATH entries are preserved in order; with no parent PATH the result is just the `.bin` entry. The upstream fact (pnpm's standard `node_modules/.bin` layout inside a profile) is pinned in upstream.rs as `PROFILE_BIN_DIR_SEGMENTS`; layout drift degrades silently to the old behavior, never a crash. Scope note: this only fixes command resolution — plugins writing config outside the session workspace (e.g. `~/.modlens/config.json`) remain subject to dsh's own sandbox policy, by upstream design
+
+Tests: 186 → 188 (187 passed + 1 ignored)
+
 ## [0.2.1] - 2026-08-21
 
 ### Fixed
