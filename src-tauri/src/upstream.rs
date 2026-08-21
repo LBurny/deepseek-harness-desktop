@@ -195,6 +195,13 @@ pub const PROFILE_MANIFEST_FILE: &str = "package.json";
 /// 清单 JSON 路径：已装依赖 / 插件层列表（reconcile 只认声明 dsh.bundle 的包）。
 pub const MANIFEST_DEPENDENCIES_KEY: &str = "dependencies";
 pub const MANIFEST_BUNDLES_POINTER: &str = "/dsh/profile/bundles";
+/// profile 内插件依赖的 bin 目录段（pnpm 在 profile 目录装包后生成的
+/// node_modules/.bin 标准布局，插件自带 CLI 的 shim 落在此处，Windows 为
+/// 无扩展/.CMD/.ps1 三件套）。上游出处：dsh plugin 子命令内部以 pnpm add
+/// 写进 profile 目录。影响：process.rs spawn dsh 时把它前置进子进程 PATH，
+/// 会话终端/工具子进程才能按名解析插件 CLI；pnpm 若改 .bin 布局则解析不到
+/// （静默退化，不崩——用户只能满路径调用）。
+pub const PROFILE_BIN_DIR_SEGMENTS: &[&str] = &["node_modules", ".bin"];
 /// 壳内置 pnpm 两个文件（fetch-runtime.ps1 产出，位于 node.exe 同目录）。
 pub const PNPM_JS_FILE: &str = "pnpm.cjs";
 pub const PNPM_CMD_FILE: &str = "pnpm.cmd";

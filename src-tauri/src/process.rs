@@ -2,6 +2,8 @@ use crate::diagnostics::LogRing;
 use crate::platform::Platform;
 use crate::port::{free_port, wait_ready};
 use crate::runtime::RuntimePaths;
+use std::ffi::OsString;
+use std::path::Path;
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -135,6 +137,13 @@ impl DshProcess {
                 // 就是浏览器，必须抑制（否则每次启动额外弹浏览器标签页）
                 .arg(crate::upstream::DSH_NO_OPEN_FLAG)
                 .env("DSH_HOME", &self.inner.paths.home)
+                // 插件自带 CLI 装在 profile 的 node_modules/.bin（不在用户 PATH
+                // 上），前置进子进程 PATH 后会话终端/工具子进程才能按名解析——
+                // 否则装完 modlens 这类插件后在 dsh 终端敲不到它的命令。
+                .env(
+                    "PATH",
+                    dsh_child_path(&self.inner.paths.home, std::env::var_os("PATH")),
+                )
                 .current_dir(&self.inner.paths.work_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -249,5 +258,53 @@ impl DshProcess {
         let line = line.into();
         self.inner.log_ring.push_line(line.clone());
         (self.inner.on_event)(ProcessEvent::Log(line));
+    }
+}
+
+/// dsh 子进程的 PATH：把 profile 插件依赖的 .bin 目录前置为首项，其余项
+/// 原样保留。base 为父进程 PATH（None 表示未设置，结果只含 .bin 一项）。
+fn dsh_child_path(home: &Path, base: Option<OsString>) -> OsString {
+    let profile = crate::upstream::join_segments(home, crate::upstream::PROFILE_DIR_SEGMENTS);
+    let bin = crate::upstream::join_segments(&profile, crate::upstream::PROFILE_BIN_DIR_SEGMENTS);
+    let mut entries = vec![bin];
+    if let Some(ref b) = base {
+        entries.extend(std::env::split_paths(b));
+    }
+    // split_paths 拆出的项不含分隔符，join 实际不会失败；真失败退回原 PATH 也比丢光强
+    std::env::join_paths(entries).unwrap_or_else(|_| base.unwrap_or_default())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    #[test]
+    fn child_path_prepends_profile_bin_and_preserves_base() {
+        // 插件自带 CLI（如 modlens）装在 <home>/profiles/web/node_modules/.bin，
+        // 不在用户 PATH 上；不前置则 dsh 会话终端里按名解析不到插件命令
+        // （实踩：装完 modlens 后在会话里敲 modlens 报"不是 cmdlet"，只能满路径调）。
+        let home = PathBuf::from(r"C:\dsh-home");
+        let base = Some(OsString::from(r"C:\Windows;C:\Users\x\AppData\Roaming\npm"));
+        let out = dsh_child_path(&home, base);
+        let entries: Vec<PathBuf> = std::env::split_paths(&out).collect();
+        assert_eq!(
+            entries[0],
+            home.join("profiles").join("web").join("node_modules").join(".bin"),
+            "profile 的 .bin 必须是 PATH 首项，实际：{entries:?}"
+        );
+        assert_eq!(entries[1], PathBuf::from(r"C:\Windows"), "原有 PATH 项须保留且顺序不变");
+        assert_eq!(entries[2], PathBuf::from(r"C:\Users\x\AppData\Roaming\npm"));
+        assert_eq!(entries.len(), 3);
+    }
+
+    #[test]
+    fn child_path_without_base_is_just_profile_bin() {
+        let home = PathBuf::from(r"C:\dsh-home");
+        let out = dsh_child_path(&home, None);
+        let entries: Vec<PathBuf> = std::env::split_paths(&out).collect();
+        assert_eq!(entries.len(), 1);
+        assert!(entries[0].ends_with(".bin"), "实际：{entries:?}");
     }
 }

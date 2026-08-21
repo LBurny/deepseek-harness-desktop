@@ -36,7 +36,9 @@ src-tauri/src/
                     父进程被强杀时内核连带回收整树，防孤儿锁 runtime）；macos/linux 待实现
   process.rs        DshProcess 监督循环：spawn node bin.js web --port N --no-open
                     （dsh-web-app rc.8 起 openBrowser 默认 true，不带则每次启动
-                    额外弹系统浏览器）、指数退避、stop/restart
+                    额外弹系统浏览器）；PATH 前置 profile 的 node_modules/.bin
+                    （插件自带 CLI 在会话终端/工具子进程按名可解析，否则装完
+                    插件敲不到它的命令）、指数退避、stop/restart
   runtime.rs        ensure_runtime：安装目录可写则原地运行内嵌运行时；只读则回退部署副本
                     （.version 比对）；原地模式会清理旧版留下的 %LOCALAPPDATA% 部署副本
   notify/           WS 事件源（ws.rs 泛化 {path, handler, on_connect}，连 events.mux +
