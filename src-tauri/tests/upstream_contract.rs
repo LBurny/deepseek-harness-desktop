@@ -423,6 +423,21 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         format!("hit={hit:?}"),
         "主题键改名：改 upstream::KEY_UI_THEME（影响 theme.rs 跟随与首启播种）",
     );
+    // mobile.css 缩小 Session log 药丸的锚点：CSS Modules 本地名仍在插件包内
+    // （实测落盘：@deepseek-ai/dsh-session-log-export/lib/client.js）
+    let hit = tree_find(
+        &nm,
+        upstream::SESSION_LOG_BUTTON_NEEDLE.as_bytes(),
+        Some("client.js"),
+        4 << 20,
+        4,
+    );
+    c.check(
+        "插件 client.js 仍含 sessionLogButton 本地名",
+        hit.is_some(),
+        format!("hit={hit:?}"),
+        "上游改了类名：mobile.css 的 [class*=\"_sessionLogButton\"] 规则静默失效（药丸回原生尺寸），改 upstream::SESSION_LOG_BUTTON_NEEDLE 与 mobile.css 的选择器",
+    );
 }
 
 /// dsh plugin 子命令（plugins.rs 的装/卸/更新依赖它；上游改版即红）
@@ -527,6 +542,57 @@ fn probe_pickerpatch(rt: &Path, c: &mut Checker) {
     );
 }
 
+/// 远程"项目"标签依赖的上游事实（project.rs/project.html；上游改版即红）
+fn probe_project(rt: &Path, dsh_home: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    // 1) SPA 记当前会话的 localStorage 键（实测落盘：dsh-client-runtime/lib/client.js）
+    let hit = tree_find(
+        &nm,
+        upstream::LOCALSTORAGE_CURRENT_SESSION_KEY.as_bytes(),
+        Some("client.js"),
+        4 << 20,
+        4,
+    );
+    c.check(
+        "SPA 仍用 localStorage 键 dsh.sessions.current 记当前会话",
+        hit.is_some(),
+        format!("hit={hit:?}"),
+        "键名改了：改 upstream::LOCALSTORAGE_CURRENT_SESSION_KEY（project.html 取不到当前会话→'项目'标签空态）",
+    );
+    // 2) 工作区注册表 schema 锚点字段仍在 dsh-workspace 包内
+    let ws_lib = nm
+        .join("@deepseek-ai")
+        .join("dsh-workspace")
+        .join("lib")
+        .join("index.js");
+    let text = fs::read_to_string(&ws_lib).unwrap_or_default();
+    c.check(
+        "dsh-workspace 仍含 sessionIds 字段（workspace.json schema 锚点）",
+        text.contains(upstream::WORKSPACE_SCHEMA_NEEDLE),
+        format!("path={}", ws_lib.display()),
+        "schema 变了：核对 storages/workspace.json 实际结构，改 project.rs 的 Store/Ws 与 upstream 常量",
+    );
+    // 3) 契约环境若已产生 workspace.json，逐项校验 schema（无则宽容通过）
+    let store = upstream::join_segments(dsh_home, upstream::WORKSPACE_STORE_SEGMENTS);
+    if let Ok(t) = fs::read_to_string(&store) {
+        let ok = serde_json::from_str::<serde_json::Value>(&t)
+            .ok()
+            .and_then(|v| v.get("tables")?.get("workspaces")?.as_object().cloned())
+            .is_some_and(|ws| {
+                ws.values().all(|w| {
+                    w.get("path").is_some_and(|p| p.is_string())
+                        && w.get("sessionIds").is_some_and(|s| s.is_array())
+                })
+            });
+        c.check(
+            "storages/workspace.json schema（tables.workspaces[*].path/sessionIds）",
+            ok,
+            format!("path={}", store.display()),
+            "存储结构变了：改 upstream::WORKSPACE_STORE_SEGMENTS 与 project.rs 解析（'项目'标签解析不到工作区）",
+        );
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn upstream_contract() {
     let Some(rt) = runtime_dir() else {
@@ -545,6 +611,7 @@ async fn upstream_contract() {
             probe_http(&dsh, &mut c).await;
             probe_ws(&dsh, &mut c).await;
             probe_mcp(&rt, dsh.home.path(), &mut c);
+            probe_project(&rt, dsh.home.path(), &mut c);
         }
         Err(e) => c.check(
             "dsh web 启动",

@@ -98,6 +98,7 @@ fn make_manager(
         tunnel_exe,
         tunnel_prefix,
         work.to_path_buf(),
+        work.to_path_buf(), // dsh_home：本套件不经项目端点，复用 work 即可
         rx,
         Box::new(move |ev| {
             if let RemoteEvent::Status(s) = ev {

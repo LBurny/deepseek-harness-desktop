@@ -146,7 +146,9 @@ src-tauri/src/
   remote/           远程访问：mod.rs=RemoteManager(生命周期/token/6 命令；reset_link
                     原地轮换 token 吊销泄露链接，域名不变) +
                     proxy.rs(axum token 门岗反向代理，cookie 种发，HTTP 流式转发
-                    + WS 帧桥接；token 存 RwLock 共享单元门岗逐请求读最新值，
+                    + WS 帧桥接；门岗是覆盖全 Router 的 from_fn_with_state
+                    中间件——壳自有路由不过 fallback，只在 handler 内部判断
+                    会让它们绕过鉴权；token 存 RwLock 共享单元门岗逐请求读最新值，
                     桥接挂 drain Notify，重置/停服 notify_waiters 掐断所有已建立连接；
                     转发必须剥 origin/referer/sec-fetch-* 浏览器标记头
                     （dsh /api 信任栅栏：Origin.host≠Host 头或 cross-site → 403）；
@@ -160,6 +162,9 @@ src-tauri/src/
                     克隆进面板（MutationObserver 同步，克隆而非搬家：React 对被移
                     节点 removeChild 必崩），enhanced 标记隐藏原行且跟随
                     matchMedia 断点（离开 700px 摘除，防宽屏统计无处可见）；
+                    "信息"前另有"项目"标签（无断点限制，远程宽屏可用）：
+                    面板=iframe 指 /__dsh-desktop/project，首点才挂 src；
+                    两面板互斥、与原生标签互斥（共享一次捕获期接线）；
                     另在输入卡片工具行"+"旁注入回形针附件按钮（类名克隆同款
                     28px 圆形）：点击调起系统文件选择器（仅 png/jpeg/webp/gif——
                     上游 host sharp 校验只认四种位图，文档不支持），选完构造
@@ -172,6 +177,19 @@ src-tauri/src/
                     /plugins/*/client.js 响应缓冲改写（≤4MB 仅 identity，剥
                     accept-encoding 与条件请求头）：isLoopback 三元式→"host"，
                     修远程每次弹内测声明（非回环源 memory 持久化不落盘）) +
+                    project.rs(手机端"项目"标签后端：project.html 自包含单页
+                    （include_str! 内嵌，iframe 同源自读 localStorage
+                    dsh.sessions.current 拿当前 sessionId，切会话靠 storage
+                    事件+2s 轮询，主题跟父页面 color-scheme）+ resolve/list/file
+                    四条 /__dsh-desktop/* 只读路由：会话→工作区现读
+                    storages/workspace.json（sid 命中 sessionIds，BOM 容忍），
+                    rel 只许 Normal 组件 + canonicalize 前缀禁锢（剥 \\?\
+                    小写化、分隔符边界）防逃逸/junction；目录懒加载、目录优先
+                    排序、单条目失败跳过（fs-local 整列失败教训）、2000 条截断；
+                    file 按扩展名出 MIME，文本 >8MB 与任意 >64MB 413，
+                    download 加 RFC5987 filename*；两个上游事实
+                    （localStorage 键/workspace.json schema）收口 upstream.rs，
+                    契约套件守门；桌面壳不经代理天然无此功能) +
                     tunnel.rs(cloudflared quick tunnel 监督，stdout 解析
                     trycloudflare URL，退避重启后域名变 token 不变)；
                     托盘子菜单开关/复制/二维码/重置(#/remote 窗口)
@@ -205,7 +223,7 @@ docs/design.zh-CN.md / design.md                  设计文档（架构/模块/�
 
 ```bash
 # 开发（需要 fixture 运行时：先跑 scripts/use-fixture-runtime.ps1，再设 DSHDESKTOP_RUNTIME_DIR）
-cd src-tauri && cargo test            # 全部测试（188 个：单元+进程集成+WS通知+控制台窗口+远程访问+上游契约）
+cd src-tauri && cargo test            # 全部测试（198 个：单元+进程集成+WS通知+控制台窗口+远程访问+上游契约）
 pnpm tauri build                      # 产出 src-tauri/target/release/bundle/nsis/DSHDesktop_*_x64-setup.exe
 powershell -File scripts/fetch-runtime.ps1   # 抓取真实运行时到 src-tauri/runtime/windows-x64/
 powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版→安装→启动→全项校验→截图

@@ -13,6 +13,50 @@
   display: none;
 }
 
+/*
+ * 项目标签/面板（mobile.js 注入，iframe 指向 /__dsh-desktop/project）。
+ * 不受 700px 断点限制：远程宽屏（iPad 横屏等）同样可用；桌面壳窗口直连
+ * dsh 不经代理，天然不可见。面板几何与信息面板同款（顶边 JS 量取、z5
+ * 低于输入条座）；宽屏下原生激活标签的视觉降级在此补一份（≤700px 的
+ * 同款规则在下方媒体查询内）。
+ */
+[data-dshmobile-project-tab] {
+  display: block;
+}
+[data-dshmobile-project-tab][data-active] {
+  color: var(--dsw-alias-state-business-primary);
+}
+[data-dshmobile-project-tab][data-active]::after {
+  background: var(--dsw-alias-state-business-primary);
+}
+[class*="_tabs"][data-dshmobile-open] [class*="_tabActive"] {
+  color: var(--dsw-alias-label-tertiary);
+}
+[class*="_tabs"][data-dshmobile-open] [class*="_tabActive"]::after {
+  background: 0 0;
+}
+[data-dshmobile-project] {
+  display: none;
+}
+[class*="_root"][data-dshmobile-project-open] {
+  position: relative;
+}
+[data-dshmobile-project-open] > [data-dshmobile-project] {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  background: var(--dsw-alias-bg-base);
+}
+[data-dshmobile-project] > iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
 @media (max-width: 700px) {
   /*
    * 设置弹窗：全屏化，左侧 188px 固定导航列改顶部横向 tab 条。
@@ -183,6 +227,21 @@
   }
   html[data-dshmobile-enhanced] [class*="_composerStack"] [class*="_root"]:has(> [class*="_sep"]) {
     display: none;
+  }
+
+  /*
+   * Session log 下载按钮（会话头部右侧药丸）：原生 height:32px + min-width:111px
+   * 固定死椭圆尺寸，手机上下缘几乎贴到下方标签栏（间隙仅 4px）。收紧到
+   * 26px 高 + 内容定宽，间隙扩到约 10px。选择器写两遍凑 0-2-0 优先级——
+   * 上游样式由 JS 运行时注入、文档序在我们之后，平级优先级必输。
+   * 锚点 _sessionLogButton 本地名子串；上游改名则回到原生尺寸，功能不损。
+   */
+  [class*="_sessionLogButton"][class*="_sessionLogButton"] {
+    height: 26px;
+    min-width: 0;
+    padding: 3px 10px;
+    font-size: 12px;
+    line-height: 18px;
   }
 
   /*

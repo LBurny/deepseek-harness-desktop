@@ -41,7 +41,9 @@ fn spawn_fixture(port: u16, work: &Path) -> std::process::Child {
 async fn start_proxy(dsh_port: Option<u16>) -> (ProxyHandle, Arc<str>) {
     let token: Arc<str> = dshdesktop_lib::remote::generate_token().into();
     let (_tx, rx) = watch::channel(dsh_port);
-    let handle = spawn_proxy(token.clone(), rx, "127.0.0.1:0".parse().unwrap())
+    // dsh-home 用一次性临时目录（keep 后不自动删除，测试进程结束由 OS 清理）
+    let home = tempfile::tempdir().unwrap().keep();
+    let handle = spawn_proxy(token.clone(), rx, home, "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
     (handle, token)
@@ -58,6 +60,25 @@ fn client() -> reqwest::Client {
 
 async fn get_direct(url: &str) -> reqwest::Result<reqwest::Response> {
     client().get(url).send().await
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gate_covers_shell_routes() {
+    // 门岗中间件化后：壳自有路由（/__dsh-desktop/*）同样被 token 门岗拦截。
+    // 若门岗退回 fallback 内部判断，这些显式路由会绕过鉴权（路由在 Task 4 挂上，
+    // 挂上后无凭据访问将不再是 403 而是 2xx/404——本测试就是那道闸）
+    let (handle, _token) = start_proxy(None).await;
+    let base = format!("http://127.0.0.1:{}", handle.port);
+    for path in [
+        "/__dsh-desktop/project",
+        "/__dsh-desktop/api/resolve?sid=x",
+        "/__dsh-desktop/api/list?sid=x",
+        "/__dsh-desktop/api/file?sid=x&rel=a.txt",
+    ] {
+        let res = get_direct(&format!("{base}{path}")).await.unwrap();
+        assert_eq!(res.status(), 403, "无凭据访问 {path} 必须 403");
+    }
+    handle.shutdown().await;
 }
 
 #[test]

@@ -20,3 +20,6 @@ docs/superpowers/
 
 # 博客文章，仅本地留存，不入库
 docs/blog.zh-CN.md
+
+# dev 模式真实运行时副本（DSHDESKTOP_RUNTIME_DIR 指向），不入库
+.dev-runtime/

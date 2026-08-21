@@ -1,0 +1,396 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>项目</title>
+<!-- dshdesktop-project -->
+<style>
+:root, :root[data-theme="dark"] {
+  --bg:#0f1115; --bg1:#171a21; --fg:#e6e8ee; --fg2:#9aa0ae; --bd:#262b36; --ac:#4c8dff;
+}
+:root[data-theme="light"] {
+  --bg:#f5f6f8; --bg1:#ffffff; --fg:#1c1f26; --fg2:#5c6370; --bd:#e2e4ea; --ac:#2f6fed;
+}
+html, body { margin:0; height:100%; background:var(--bg); color:var(--fg);
+  font:14px/1.55 -apple-system,"Segoe UI",sans-serif; }
+#hd { position:sticky; top:0; z-index:2; display:flex; align-items:center; gap:8px;
+  height:44px; padding:0 12px; border-bottom:1px solid var(--bd); background:var(--bg1); }
+#hd button { background:none; border:0; color:var(--ac); font-size:15px; padding:8px; white-space:nowrap; }
+#crumb { flex:1; min-width:0; display:flex; align-items:baseline; gap:8px; overflow:hidden; }
+#crumb b, #crumb span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+#relPath { color:var(--fg2); font-size:12px; }
+#tree ul { list-style:none; margin:0; padding-left:14px; }
+#tree > ul { padding-left:0; }
+#tree ul ul { border-left:1px solid var(--bd); }
+.row { display:flex; align-items:center; gap:8px; width:100%; min-height:40px; padding:6px 8px;
+  background:none; border:0; color:var(--fg); font-size:15px; text-align:left; }
+.row:active { background:var(--bg1); }
+.ic { width:18px; text-align:center; flex:0 0 auto; }
+.nm { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.sz, .tw { color:var(--fg2); font-size:12px; flex:0 0 auto; }
+.hint { color:var(--fg2); font-size:12.5px; padding:4px 10px; }
+#view img.pic { display:block; max-width:100%; margin:0 auto; }
+.md { max-width:760px; margin:0 auto; padding:14px 16px; word-break:break-word; }
+.md h1, .md h2 { border-bottom:1px solid var(--bd); padding-bottom:6px; }
+.md code { font:0.92em ui-monospace,Consolas,monospace; background:var(--bg1); padding:1px 5px; border-radius:4px; }
+.md pre { background:var(--bg1); padding:10px 12px; border-radius:8px; overflow-x:auto; }
+.md pre code { background:none; padding:0; }
+.md table { border-collapse:collapse; }
+.md th, .md td { border:1px solid var(--bd); padding:4px 8px; }
+.md blockquote { margin:0; padding:2px 12px; border-left:3px solid var(--bd); color:var(--fg2); }
+.md img { max-width:100%; }
+.md a { color:var(--ac); }
+.code { counter-reset:ln; margin:0; padding:8px 0;
+  font:12.5px/1.6 ui-monospace,Consolas,monospace; overflow-x:auto; }
+.ln { display:block; white-space:pre; padding-right:12px; }
+.ln::before { counter-increment:ln; content:counter(ln); display:inline-block; width:3.2em;
+  margin-right:1em; text-align:right; color:var(--fg2); user-select:none; }
+.code.wrap .ln { white-space:pre-wrap; word-break:break-all; }
+#view > .bar { padding:6px 12px; border-bottom:1px solid var(--bd); }
+#view > .bar button { background:none; border:1px solid var(--bd); border-radius:6px;
+  color:var(--fg2); font-size:12.5px; padding:4px 10px; }
+#status { padding:40px 24px; color:var(--fg2); text-align:center; }
+</style>
+</head>
+<body>
+<header id="hd">
+  <button id="back" type="button" hidden></button>
+  <div id="crumb"><b id="wsTitle"></b><span id="relPath"></span></div>
+  <button id="refresh" type="button">⟳</button>
+</header>
+<main id="tree"></main>
+<main id="view" hidden></main>
+<div id="status" hidden></div>
+<script>
+;(() => {
+  const API = '/__dsh-desktop/api'
+  const KEY = 'dsh.sessions.current' // upstream::LOCALSTORAGE_CURRENT_SESSION_KEY
+  const $ = (s) => document.querySelector(s)
+  // 语言/主题跟随父页面（同源 iframe）；父页面不可读时退回中文/系统深浅色
+  const zh = () => { try { return (parent.document.documentElement.lang || '').startsWith('zh') } catch { return true } }
+  const L = {
+    back: () => (zh() ? '‹ 返回' : '‹ Back'),
+    refresh: () => (zh() ? '刷新' : 'Refresh'),
+    noSession: () => (zh() ? '打开一个会话后，这里可以查看其项目文件。' : 'Open a session to browse its project files.'),
+    notFound: () => (zh() ? '未找到当前会话所属的工作区。' : 'Workspace of the current session not found.'),
+    loadFail: () => (zh() ? '加载失败，点右上角重试。' : 'Failed to load. Use the refresh button to retry.'),
+    perm: () => (zh() ? '无权限访问' : 'Permission denied'),
+    gone: () => (zh() ? '文件不存在或已被移动。' : 'File no longer exists.'),
+    tooLarge: (mb) => (zh() ? `文件过大（${mb} MB），无法在线预览。` : `File too large (${mb} MB) to preview.`),
+    unsupported: () => (zh() ? '暂不支持预览该类型。' : 'Preview not available for this type.'),
+    download: () => (zh() ? '下载到手机' : 'Download'),
+    truncated: (n) => (zh() ? `仅显示前 ${n} 条` : `Showing first ${n} entries`),
+    empty: () => (zh() ? '（空目录）' : '(empty)'),
+    wrap: () => (zh() ? '自动换行' : 'Wrap'),
+    nowrap: () => (zh() ? '不换行' : 'No wrap'),
+  }
+
+  let SID = null
+  const sid = () => {
+    try { const v = JSON.parse(localStorage.getItem(KEY) || 'null'); return (v && v.sessionId) || null } catch { return null }
+  }
+  const api = (kind, params) => `${API}/${kind}?sid=${encodeURIComponent(SID)}${params}`
+
+  // 主题跟随：父页面 <html style="color-scheme: dark">（dsh 主题不落 data-theme）
+  const followTheme = () => {
+    const apply = () => {
+      let cs = ''
+      try { cs = parent.document.documentElement.style.colorScheme } catch { /* 静默 */ }
+      if (cs !== 'light' && cs !== 'dark') cs = matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark'
+      document.documentElement.dataset.theme = cs
+    }
+    try {
+      new MutationObserver(apply).observe(parent.document.documentElement, { attributes: true, attributeFilter: ['style'] })
+    } catch { /* 静默 */ }
+    apply()
+  }
+
+  const showStatus = (text) => {
+    const s = $('#status')
+    s.innerHTML = ''
+    const p = document.createElement('p')
+    p.textContent = text
+    s.appendChild(p)
+    s.hidden = false
+    $('#tree').hidden = true
+    $('#view').hidden = true
+  }
+  const hideStatus = () => { $('#status').hidden = true; $('#tree').hidden = false }
+
+  async function boot() {
+    SID = sid()
+    if (!SID) return showStatus(L.noSession())
+    let r
+    try { r = await fetch(api('resolve', '')) } catch { return showStatus(L.loadFail()) }
+    if (r.status === 404) return showStatus(L.notFound())
+    if (!r.ok) return showStatus(L.loadFail())
+    const j = await r.json()
+    $('#wsTitle').textContent = j.title
+    $('#wsTitle').setAttribute('title', j.root) // 长按/悬停可见全路径
+    $('#relPath').textContent = ''
+    hideStatus()
+    $('#tree').innerHTML = ''
+    const ul = document.createElement('ul')
+    $('#tree').appendChild(ul)
+    expandDir(ul, '')
+  }
+
+  // ── 文件树（懒加载：点目录才取子层；再点折叠）
+  const esc = (s) => s.replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]))
+  const fmtSize = (n) => n >= 1048576 ? `${(n / 1048576).toFixed(1)}M` : n >= 1024 ? `${(n / 1024).toFixed(1)}K` : `${n}B`
+  // 与 project.rs 的 mime_for 镜像（决定预览形态），两处同步维护
+  const IMG = ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp', 'ico', 'svg', 'avif']
+  const MD = ['md', 'markdown']
+  const TXT = ['txt','log','json','jsonc','csv','tsv','yaml','yml','toml','xml','html','htm','css','js','jsx','ts','tsx','mjs','cjs','py','rs','go','java','c','h','cpp','hpp','cs','sh','ps1','bat','cmd','ini','cfg','conf','env','sql','vue','svelte','lock','editorconfig','gitignore','dockerfile']
+  const extOf = (name) => { const i = name.lastIndexOf('.'); return i > 0 ? name.slice(i + 1).toLowerCase() : '' }
+  const fileIcon = (name) => { const e = extOf(name); return IMG.includes(e) ? '🖼️' : MD.includes(e) ? '📝' : TXT.includes(e) ? '📄' : '📦' }
+  const appendHint = (ul, text) => {
+    const li = document.createElement('li')
+    li.innerHTML = `<div class="hint">${esc(text)}</div>`
+    ul.appendChild(li)
+  }
+
+  async function expandDir(ul, rel) {
+    const li0 = document.createElement('li')
+    li0.innerHTML = '<div class="hint">…</div>'
+    ul.appendChild(li0)
+    let j
+    try {
+      const r = await fetch(api('list', `&rel=${encodeURIComponent(rel)}`))
+      li0.remove()
+      if (r.status === 403) return appendHint(ul, L.perm())
+      if (!r.ok) return appendHint(ul, L.loadFail())
+      j = await r.json()
+    } catch { li0.remove(); return appendHint(ul, L.loadFail()) }
+    for (const e of j.entries) {
+      const li = document.createElement('li')
+      const btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'row'
+      const childRel = rel ? `${rel}/${e.name}` : e.name
+      if (e.kind === 'dir') {
+        btn.innerHTML = `<span class="ic">📁</span><span class="nm">${esc(e.name)}</span><span class="tw">▸</span>`
+        btn.addEventListener('click', () => toggleDir(btn, li, childRel))
+      } else {
+        btn.innerHTML = `<span class="ic">${fileIcon(e.name)}</span><span class="nm">${esc(e.name)}</span><span class="sz">${fmtSize(e.size)}</span>`
+        btn.addEventListener('click', () => openFile(childRel, e.name))
+      }
+      li.appendChild(btn)
+      ul.appendChild(li)
+    }
+    if (j.truncated) appendHint(ul, L.truncated(2000))
+    if (!j.entries.length) appendHint(ul, L.empty())
+  }
+
+  function toggleDir(btn, li, rel) {
+    const next = li.nextElementSibling
+    if (next && next.classList.contains('sub')) { // 折叠
+      next.remove()
+      btn.querySelector('.tw').textContent = '▸'
+      return
+    }
+    btn.querySelector('.tw').textContent = '▾'
+    const sub = document.createElement('li')
+    sub.className = 'sub'
+    const ul = document.createElement('ul')
+    sub.appendChild(ul)
+    li.after(sub)
+    expandDir(ul, rel)
+  }
+
+  // ── 预览
+  const fileUrl = (rel, dl) => api('file', `&rel=${encodeURIComponent(rel)}${dl ? '&download=1' : ''}`)
+  const dirOf = (rel) => rel.split('/').slice(0, -1).join('/')
+  // md 内相对路径图片 → file 端点（.. 段在客户端归一化；越界由服务端 403 兜底）
+  const joinRel = (base, rel) => {
+    const parts = base ? base.split('/') : []
+    for (const p of rel.split('/')) {
+      if (p === '' || p === '.') continue
+      else if (p === '..') parts.pop()
+      else parts.push(p)
+    }
+    return parts.join('/')
+  }
+
+  function openFile(rel, name) {
+    const e = extOf(name)
+    if (e === 'pdf') { window.open(fileUrl(rel), '_blank'); return }
+    $('#relPath').textContent = rel
+    $('#back').textContent = L.back()
+    $('#back').hidden = false
+    $('#tree').hidden = true
+    $('#status').hidden = true
+    const view = $('#view')
+    view.hidden = false
+    view.innerHTML = ''
+    if (IMG.includes(e)) return showImage(view, rel, name)
+    if (MD.includes(e)) return showText(view, rel, name, true)
+    if (TXT.includes(e) || !e) return showText(view, rel, name, false) // 无扩展名按文本试看（Dockerfile 等）
+    showError(view, rel, L.unsupported())
+  }
+
+  function showImage(view, rel, name) {
+    const img = document.createElement('img')
+    img.className = 'pic'
+    img.alt = name
+    img.src = fileUrl(rel)
+    img.onerror = () => { view.innerHTML = ''; showError(view, rel, L.gone()) }
+    view.appendChild(img)
+    appendDownload(view, rel)
+  }
+
+  async function showText(view, rel, name, isMd) {
+    let r
+    try { r = await fetch(fileUrl(rel)) } catch { return showError(view, rel, L.loadFail()) }
+    if (r.status === 413) { const j = await r.json(); return showError(view, rel, L.tooLarge((j.size / 1048576).toFixed(1))) }
+    if (r.status === 404) return showError(view, rel, L.gone())
+    if (r.status === 403) return showError(view, rel, L.perm())
+    if (!r.ok) return showError(view, rel, L.loadFail())
+    const text = await r.text()
+    if (isMd) {
+      const div = document.createElement('div')
+      div.className = 'md'
+      div.innerHTML = renderMd(text, dirOf(rel))
+      view.appendChild(div)
+    } else {
+      const bar = document.createElement('div')
+      bar.className = 'bar'
+      const tgl = document.createElement('button')
+      tgl.type = 'button'
+      tgl.textContent = L.wrap()
+      bar.appendChild(tgl)
+      const pre = document.createElement('pre')
+      pre.className = 'code'
+      for (const line of text.split('\n')) {
+        const s = document.createElement('span')
+        s.className = 'ln'
+        s.textContent = line || ' '
+        pre.appendChild(s)
+      }
+      tgl.addEventListener('click', () => {
+        pre.classList.toggle('wrap')
+        tgl.textContent = pre.classList.contains('wrap') ? L.nowrap() : L.wrap()
+      })
+      view.appendChild(bar)
+      view.appendChild(pre)
+    }
+    appendDownload(view, rel)
+  }
+
+  function showError(view, rel, msg) {
+    view.innerHTML = ''
+    const p = document.createElement('p')
+    p.className = 'hint'
+    p.style.padding = '24px'
+    p.textContent = msg
+    view.appendChild(p)
+    appendDownload(view, rel)
+  }
+  function appendDownload(view, rel) {
+    const p = document.createElement('p')
+    p.style.textAlign = 'center'
+    const a = document.createElement('a')
+    a.href = fileUrl(rel, true)
+    a.textContent = L.download()
+    a.style.color = 'var(--ac)'
+    p.appendChild(a)
+    view.appendChild(p)
+  }
+
+  // ── 迷你 md 渲染（先整体转义再无 XSS 窗口；相对路径图片改写回 file 端点）
+  function renderMd(src, baseRel) {
+    const imgTag = (alt, u) => {
+      const url = /^(https?:|data:|blob:)/i.test(u) ? u : fileUrl(joinRel(baseRel, u))
+      return `<img class="pic" alt="${alt}" src="${url}" style="max-width:100%">`
+    }
+    const inline = (s) => {
+      let t = esc(s)
+      t = t.replace(/`([^`]+)`/g, '<code>$1</code>')
+      t = t.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (m, a, u) => imgTag(a, u))
+      t = t.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"[^"]*")?\)/g, (m, a, u) =>
+        /^(https?:|mailto:|#)/i.test(u) ? `<a href="${u}" target="_blank" rel="noopener">${a}</a>` : a)
+      t = t.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>').replace(/__([^_]+)__/g, '<strong>$1</strong>')
+      t = t.replace(/\*([^*\n]+)\*/g, '<em>$1</em>').replace(/(^|\W)_([^_\n]+)_(?=\W|$)/g, '$1<em>$2</em>')
+      t = t.replace(/~~([^~]+)~~/g, '<del>$1</del>')
+      return t
+    }
+    const lines = src.split('\n')
+    const out = []
+    let i = 0
+    while (i < lines.length) {
+      const line = lines[i]
+      let m
+      if (/^```/.test(line)) { // 代码围栏
+        const buf = []
+        for (i++; i < lines.length && !/^```\s*$/.test(lines[i]); i++) buf.push(lines[i])
+        i++
+        out.push(`<pre class="code" style="padding:10px 12px">${esc(buf.join('\n'))}</pre>`)
+      } else if ((m = line.match(/^(#{1,6})\s+(.*)$/))) {
+        out.push(`<h${m[1].length}>${inline(m[2])}</h${m[1].length}>`)
+        i++
+      } else if (/^\s*(---|\*\*\*|___)\s*$/.test(line)) {
+        out.push('<hr>')
+        i++
+      } else if (line.startsWith('>')) {
+        const buf = []
+        while (i < lines.length && lines[i].startsWith('>')) buf.push(lines[i++].replace(/^>\s?/, ''))
+        out.push(`<blockquote>${buf.map(inline).join('<br>')}</blockquote>`)
+      } else if (/^\s*\|.*\|\s*$/.test(line) && i + 1 < lines.length && /^\s*\|[\s:|-]+\|\s*$/.test(lines[i + 1])) {
+        const parseRow = (l) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim())
+        const head = parseRow(line)
+        i += 2
+        const rows = []
+        while (i < lines.length && /^\s*\|.*\|\s*$/.test(lines[i])) rows.push(parseRow(lines[i++]))
+        out.push(`<table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join('')}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join('')}</tr>`).join('')}</tbody></table>`)
+      } else if ((m = line.match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/))) { // 任务列表项
+        const buf = []
+        while (i < lines.length) {
+          const t = lines[i].match(/^\s*[-*+]\s+\[([ xX])\]\s+(.*)$/)
+          if (!t) break
+          buf.push(`<li>${t[1] !== ' ' ? '☑' : '☐'} ${inline(t[2])}</li>`)
+          i++
+        }
+        out.push(`<ul>${buf.join('')}</ul>`)
+      } else if (/^\s*[-*+]\s+/.test(line)) {
+        const buf = []
+        while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) buf.push(lines[i++].replace(/^\s*[-*+]\s+/, ''))
+        out.push(`<ul>${buf.map((l) => `<li>${inline(l)}</li>`).join('')}</ul>`)
+      } else if (/^\s*\d+[.)]\s+/.test(line)) {
+        const buf = []
+        while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) buf.push(lines[i++].replace(/^\s*\d+[.)]\s+/, ''))
+        out.push(`<ol>${buf.map((l) => `<li>${inline(l)}</li>`).join('')}</ol>`)
+      } else if (line.trim() === '') {
+        i++
+      } else {
+        const buf = []
+        while (i < lines.length && lines[i].trim() !== '' && !/^(#{1,6}\s|>|```|\s*[-*+]\s|\s*\d+[.)]\s|\s*\|)/.test(lines[i])) buf.push(lines[i++])
+        out.push(`<p>${buf.map(inline).join('<br>')}</p>`)
+      }
+    }
+    return out.join('\n')
+  }
+
+  // ── 会话切换：storage 事件（同源 iframe 可收）+ 2s 轮询兜底
+  let lastSid = sid()
+  const resync = () => { const s = sid(); if (s !== lastSid) { lastSid = s; backToTree(); boot() } }
+  window.addEventListener('storage', (e) => { if (e.key === KEY) resync() })
+  setInterval(resync, 2000)
+
+  const backToTree = () => {
+    $('#view').hidden = true
+    $('#view').innerHTML = ''
+    $('#back').hidden = true
+    $('#relPath').textContent = ''
+    if (SID) $('#tree').hidden = false
+  }
+  $('#back').addEventListener('click', backToTree)
+  $('#refresh').addEventListener('click', () => { backToTree(); boot() })
+  $('#refresh').setAttribute('title', L.refresh())
+
+  followTheme()
+  boot()
+})()
+</script>
+</body>
+</html>

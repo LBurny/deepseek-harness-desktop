@@ -6,6 +6,7 @@
 //! RemoteManager 管生命周期：每次 start 重新生成 token、起代理与隧道监督；
 //! 隧道 URL 就绪后拼出带 token 的链接；stop/退出应用即整体关停，链接立即失效。
 //! 链接泄露时用 reset_link 原地轮换 token 并掐断现有会话（域名不变）。
+pub mod project;
 pub mod proxy;
 pub mod tunnel;
 
@@ -118,6 +119,8 @@ pub struct RemoteManager {
     /// 隧道子进程的前置参数；生产为空，测试注入 fixture 脚本路径（exe=node）
     tunnel_prefix: Vec<String>,
     work_dir: PathBuf,
+    /// dsh-home（代理上 project.rs 的 resolve/list/file 解析 workspace.json 用）
+    dsh_home: PathBuf,
     dsh_port: watch::Receiver<Option<u16>>,
 }
 
@@ -127,6 +130,7 @@ impl RemoteManager {
         tunnel_exe: PathBuf,
         tunnel_prefix: Vec<String>,
         work_dir: PathBuf,
+        dsh_home: PathBuf,
         dsh_port: watch::Receiver<Option<u16>>,
         on_event: Box<dyn Fn(RemoteEvent) + Send + Sync>,
     ) -> Self {
@@ -147,6 +151,7 @@ impl RemoteManager {
             tunnel_exe,
             tunnel_prefix,
             work_dir,
+            dsh_home,
             dsh_port,
         }
     }
@@ -176,6 +181,7 @@ impl RemoteManager {
         let proxy = match spawn_proxy(
             token.clone(),
             self.dsh_port.clone(),
+            self.dsh_home.clone(),
             "127.0.0.1:0".parse().unwrap(),
         )
         .await

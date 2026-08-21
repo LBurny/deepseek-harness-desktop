@@ -14,10 +14,13 @@ use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequest, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
+use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
+use axum::routing::get;
 use axum::Router;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 use tokio::sync::{watch, Notify};
@@ -69,12 +72,14 @@ fn wants_html_document(headers: &HeaderMap) -> bool {
 type TokenCell = Arc<RwLock<Arc<str>>>;
 
 #[derive(Clone)]
-struct ProxyState {
-    token: TokenCell,
+pub(crate) struct ProxyState {
+    pub(crate) token: TokenCell,
     /// 重置链接时 notify_waiters 掐断所有已建立的 WS 桥接
-    drain: Arc<Notify>,
-    dsh_port: watch::Receiver<Option<u16>>,
-    client: reqwest::Client,
+    pub(crate) drain: Arc<Notify>,
+    pub(crate) dsh_port: watch::Receiver<Option<u16>>,
+    pub(crate) client: reqwest::Client,
+    /// dsh-home（project.rs 解析 storages/workspace.json 用），与 skills/mcp 同源
+    pub(crate) dsh_home: PathBuf,
 }
 
 pub struct ProxyHandle {
@@ -106,6 +111,7 @@ impl ProxyHandle {
 pub async fn spawn_proxy(
     token: Arc<str>,
     dsh_port: watch::Receiver<Option<u16>>,
+    dsh_home: PathBuf,
     bind: SocketAddr,
 ) -> std::io::Result<ProxyHandle> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
@@ -128,8 +134,19 @@ pub async fn spawn_proxy(
             .no_proxy()
             .build()
             .expect("reqwest client"),
+        dsh_home,
     };
-    let app = Router::new().fallback(handler).with_state(state);
+    let app = Router::new()
+        // 壳自有路由：手机端"项目"标签的单页与只读文件 API（project.rs）
+        .route(crate::remote::project::PAGE_PATH, get(crate::remote::project::page))
+        .route(crate::remote::project::API_RESOLVE_PATH, get(crate::remote::project::resolve))
+        .route(crate::remote::project::API_LIST_PATH, get(crate::remote::project::list))
+        .route(crate::remote::project::API_FILE_PATH, get(crate::remote::project::file))
+        .fallback(handler)
+        // 门岗必须是覆盖全 Router 的中间件：壳自有路由（/__dsh-desktop/*）若只
+        // 靠 fallback 内部判断会绕过鉴权直接暴露
+        .layer(middleware::from_fn_with_state(state.clone(), gate_middleware))
+        .with_state(state);
     tokio::spawn(async move {
         axum::serve(listener, app)
             .with_graceful_shutdown(async move {
@@ -148,7 +165,9 @@ pub async fn spawn_proxy(
     })
 }
 
-async fn handler(State(st): State<ProxyState>, req: Request) -> Response {
+/// token 门岗中间件（鉴权流与本文件头注释一致）：cookie 放行 / ?token= 播种 302 /
+/// 错 token 延迟 403 / 无凭据 403。覆盖自有路由与转发 fallback 的全部请求。
+async fn gate_middleware(State(st): State<ProxyState>, req: Request, next: Next) -> Response {
     let headers = req.headers();
     let path_and_query = req
         .uri()
@@ -165,11 +184,11 @@ async fn handler(State(st): State<ProxyState>, req: Request) -> Response {
     let current_token = st.token.read().unwrap().clone();
     let cookie_ok = cookie_authed(headers, &current_token);
     match (cookie_ok, query_token) {
-        (true, _) => {} // 已持 cookie：放行（旧链接里的过期 token 不影响）
+        (true, _) => next.run(req).await, // 已持 cookie：放行（旧链接里的过期 token 不影响）
         (false, Some(t)) if token_eq(&t, &current_token) => {
             // 302 剥离 token + 种 cookie；浏览器地址栏不留凭据
             let location = strip_token_query(&path_and_query);
-            return (
+            (
                 StatusCode::FOUND,
                 [
                     (header::LOCATION, location),
@@ -179,14 +198,22 @@ async fn handler(State(st): State<ProxyState>, req: Request) -> Response {
                     ),
                 ],
             )
-                .into_response();
+                .into_response()
         }
         (false, Some(_)) => {
             tokio::time::sleep(WRONG_TOKEN_DELAY).await;
-            return gate();
+            gate()
         }
-        (false, None) => return gate(),
+        (false, None) => gate(),
     }
+}
+
+async fn handler(State(st): State<ProxyState>, req: Request) -> Response {
+    let path_and_query = req
+        .uri()
+        .path_and_query()
+        .map(|pq| pq.as_str().to_string())
+        .unwrap_or_else(|| "/".to_string());
 
     // WS 升级请求（浏览器连 /api/events.*）：HTTP 转发路径会剥离逐跳头导致升级降级，
     // 改为在代理终结握手、按帧桥接到 dsh

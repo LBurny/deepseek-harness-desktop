@@ -1,8 +1,11 @@
 /*
  * DSHDesktop 远程访问移动端增强：
- * 1) 会话页"对话/轨迹"旁追加"信息"标签，点开展示回合统计面板
+ * 1) 会话页"对话/轨迹"旁追加"信息"标签（≤700px），点开展示回合统计面板
  *    （轮步/LLM 耗时/首 token/缓存/token 用量）。
- * 2) 输入卡片工具行（"+" 旁）注入回形针附件按钮，手机端从系统文件
+ * 2) 会话页"信息"前追加"项目"标签（远程全宽可用）：iframe 指向代理托管的
+ *    项目浏览页 /__dsh-desktop/project，手机端浏览当前会话工作区的文件树
+ *    并预览图片/md/代码。桌面壳直连 dsh 不经代理，天然无此标签。
+ * 3) 输入卡片工具行（"+" 旁）注入回形针附件按钮，手机端从系统文件
  *    选择器传图片进草稿（上游只有拖拽/剪贴板两条入口，手机都没有）。
  *
  * 设计要点：
@@ -12,8 +15,8 @@
  *   removeChild 会抛 NotFoundError（切会话卸载统计行时必崩）。
  * - 增强生效（标签已挂上）后给 <html> 打 data-dshmobile-enhanced，
  *   mobile.css 借此隐藏输入区下方的原统计行。
- * - 信息面板打开时只动视觉：原生标签的激活态被 CSS 降级，React 状态不受影响；
- *   点"对话/轨迹"（捕获期监听）退出信息页。
+ * - 面板打开时只动视觉：原生标签的激活态被 CSS 降级，React 状态不受影响；
+ *   点"对话/轨迹"（捕获期监听，两个面板共用一次接线）退出面板。
  */
 (() => {
   try {
@@ -21,11 +24,17 @@
     const PANEL_ATTR = 'data-dshmobile-info'
     const OPEN_ATTR = 'data-dshmobile-info-open'
     const ENHANCED_ATTR = 'data-dshmobile-enhanced'
+    const PROJECT_TAB_ATTR = 'data-dshmobile-project-tab'
+    const PROJECT_PANEL_ATTR = 'data-dshmobile-project'
+    const PROJECT_OPEN_ATTR = 'data-dshmobile-project-open'
+    const PROJECT_URL = '/__dsh-desktop/project'
+    const CLOSE_WIRED = 'data-dshmobile-closewired'
 
     const narrow = () => matchMedia('(max-width: 700px)').matches
     const zh = () => (document.documentElement.lang || '').toLowerCase().startsWith('zh')
     const L = {
       info: () => (zh() ? '信息' : 'Info'),
+      project: () => (zh() ? '项目' : 'Project'),
       title: () => (zh() ? '回合统计' : 'Turn stats'),
       empty: () =>
         zh()
@@ -46,20 +55,58 @@
       return null
     }
 
-    const setup = (tablist) => {
-      const chatRoot = tablist.closest('[class*="_root"]')
+    // 关闭全部增强面板（信息/项目互斥，且都让位给原生标签）
+    const closePanels = (tablist, chatRoot) => {
+      chatRoot.removeAttribute(OPEN_ATTR)
+      chatRoot.removeAttribute(PROJECT_OPEN_ATTR)
+      tablist.removeAttribute('data-dshmobile-open')
+      for (const b of tablist.querySelectorAll(`[${TAB_ATTR}][data-active], [${PROJECT_TAB_ATTR}][data-active]`))
+        b.removeAttribute('data-active')
+    }
+    // 捕获期：点原生"对话/轨迹"退出增强面板（React 自己的标签切换不受影响）。
+    // 每个 tablist 只挂一次（信息/项目两个 setup 都会调）
+    const ensureCloseWiring = (tablist, chatRoot) => {
+      if (tablist.hasAttribute(CLOSE_WIRED)) return
+      tablist.setAttribute(CLOSE_WIRED, '')
+      tablist.addEventListener(
+        'click',
+        (e) => {
+          const t = e.target.closest('[role="tab"]')
+          if (!t || t.hasAttribute(TAB_ATTR) || t.hasAttribute(PROJECT_TAB_ATTR)) return
+          closePanels(tablist, chatRoot)
+        },
+        true,
+      )
+    }
+    // 打开某面板：先关另一个，top 对齐头部底，激活态视觉转移（React 状态不动）
+    const activate = (tablist, chatRoot, header, btn, panel, openAttr) => {
+      closePanels(tablist, chatRoot)
+      panel.style.top = `${header.offsetHeight}px`
+      chatRoot.setAttribute(openAttr, '')
+      tablist.setAttribute('data-dshmobile-open', '')
+      btn.setAttribute('data-active', '')
+    }
+    // 标签按钮：类名克隆自原生标签（摘掉激活态类），视觉与"对话/轨迹"一致
+    const mountTab = (tablist, attr, label, before) => {
       const anyTab = tablist.querySelector('[role="tab"]')
-      const header = tablist.closest('header')
-      if (!chatRoot || !anyTab || !header) return
-
-      // 信息标签：类名克隆自原生标签（摘掉激活态类），视觉与"对话/轨迹"一致
       const btn = document.createElement('button')
       btn.type = 'button'
       btn.setAttribute('role', 'tab')
-      btn.setAttribute(TAB_ATTR, '')
+      btn.setAttribute(attr, '')
+      btn.setAttribute('aria-selected', 'false')
       btn.className = anyTab.className.replace(/\S*_tabActive\S*/g, '').trim()
-      btn.textContent = L.info()
-      tablist.appendChild(btn)
+      btn.textContent = label
+      tablist.insertBefore(btn, before || null)
+      return btn
+    }
+
+    const setupInfo = (tablist) => {
+      const chatRoot = tablist.closest('[class*="_root"]')
+      const header = tablist.closest('header')
+      if (!chatRoot || !header) return
+      ensureCloseWiring(tablist, chatRoot)
+
+      const btn = mountTab(tablist, TAB_ATTR, L.info(), null)
 
       // 信息面板：绝对定位盖在会话区上（顶边 = 头部高），输入条 z7 在其上仍可输入
       const panel = document.createElement('div')
@@ -99,24 +146,9 @@
       }
 
       btn.addEventListener('click', () => {
-        panel.style.top = `${header.offsetHeight}px`
-        chatRoot.setAttribute(OPEN_ATTR, '')
-        tablist.setAttribute('data-dshmobile-open', '')
-        btn.setAttribute('data-active', '')
+        activate(tablist, chatRoot, header, btn, panel, OPEN_ATTR)
         syncStats()
       })
-      // 捕获期：点原生"对话/轨迹"退出信息页（React 自己的标签切换不受影响）
-      tablist.addEventListener(
-        'click',
-        (e) => {
-          const t = e.target.closest('[role="tab"]')
-          if (!t || t.hasAttribute(TAB_ATTR)) return
-          chatRoot.removeAttribute(OPEN_ATTR)
-          tablist.removeAttribute('data-dshmobile-open')
-          btn.removeAttribute('data-active')
-        },
-        true,
-      )
 
       // 统计行文本随回合推进更新（秒级 tick 与回合结束），面板开着时跟随同步
       new MutationObserver(() => {
@@ -135,11 +167,42 @@
       applyEnhanced()
     }
 
+    // 项目标签：面板是 iframe 指向代理托管的项目页（同源，页面自读当前会话）。
+    // 不受 700px 断点限制（远程宽屏也可用；桌面壳不经代理永远看不到）。
+    // 首次点开才挂 iframe src（不点不加载），之后保活（树/预览状态保留）。
+    const setupProject = (tablist) => {
+      const chatRoot = tablist.closest('[class*="_root"]')
+      const header = tablist.closest('header')
+      if (!chatRoot || !header) return
+      ensureCloseWiring(tablist, chatRoot)
+      // 插在信息标签之前（信息可能尚未注入→append；顺序恒为 对话/轨迹/项目/信息）
+      const btn = mountTab(
+        tablist,
+        PROJECT_TAB_ATTR,
+        L.project(),
+        tablist.querySelector(`[${TAB_ATTR}]`),
+      )
+      const panel = document.createElement('div')
+      panel.setAttribute(PROJECT_PANEL_ATTR, '')
+      chatRoot.appendChild(panel)
+      btn.addEventListener('click', () => {
+        if (!panel.firstChild) {
+          const f = document.createElement('iframe')
+          f.src = PROJECT_URL
+          f.setAttribute('title', L.project())
+          panel.appendChild(f)
+        }
+        activate(tablist, chatRoot, header, btn, panel, PROJECT_OPEN_ATTR)
+      })
+    }
+
     const ensure = () => {
-      if (!narrow()) return
       const tablist = document.querySelector('header [role="tablist"]')
-      if (!tablist || tablist.querySelector(`[${TAB_ATTR}]`)) return
-      setup(tablist)
+      if (!tablist) return
+      // 项目标签先行：即使信息标签后挂，顺序仍是 对话/轨迹/项目/信息
+      if (!tablist.querySelector(`[${PROJECT_TAB_ATTR}]`)) setupProject(tablist)
+      // 信息标签维持 ≤700px 门控（宽屏统计行有原生位置，面板反而遮内容）
+      if (narrow() && !tablist.querySelector(`[${TAB_ATTR}]`)) setupInfo(tablist)
     }
 
     // 视图随导航挂载/卸载：监听文档子树，标签栏出现且没挂过就挂

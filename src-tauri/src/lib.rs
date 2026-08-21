@@ -415,6 +415,9 @@ pub fn run() {
                     },
                 )
             });
+            // dsh-home 先克隆出来：paths 随 SharedState move，远程代理的
+            // "项目"标签端点（project.rs）要靠它解析 storages/workspace.json
+            let dsh_home = paths.home.clone();
             handle.manage(diagnostics::SharedState {
                 process: proc,
                 log_ring,
@@ -429,6 +432,7 @@ pub fn run() {
                 cloudflared_exe,
                 vec![],
                 remote_work_dir,
+                dsh_home,
                 port_rx,
                 Box::new(move |ev| match ev {
                     // 链接即凭据：日志只记非敏感字段，隧道输出过 token 脱敏

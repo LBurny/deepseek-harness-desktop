@@ -205,3 +205,24 @@ pub const PROFILE_BIN_DIR_SEGMENTS: &[&str] = &["node_modules", ".bin"];
 /// 壳内置 pnpm 两个文件（fetch-runtime.ps1 产出，位于 node.exe 同目录）。
 pub const PNPM_JS_FILE: &str = "pnpm.cjs";
 pub const PNPM_CMD_FILE: &str = "pnpm.cmd";
+
+// ── 远程"项目"标签（remote/project.rs + project.html）────────────────
+/// 工作区注册表的 DSH_HOME 相对路径。上游出处：dsh-workspace 的 storage unit
+/// 落盘机制（unit.name=="workspace"，storages/<unit>.json）。schema：
+/// tables.workspaces[<id>] = { path, title, sessionIds[], createdAt, updatedAt }。
+/// 影响面：写错 = resolve 永远 404，"项目"标签空态。
+pub const WORKSPACE_STORE_SEGMENTS: &[&str] = &["storages", "workspace.json"];
+/// SPA 在 localStorage 记当前会话的键（值形 {"sessionId":"session-…"}，切会话即写）。
+/// 实测落盘：@deepseek-ai/dsh-client-runtime/lib/client.js。影响面：改名 =
+/// project.html 取不到当前会话（面板显示"未找到会话"）；契约套件 tree_find 守门。
+pub const LOCALSTORAGE_CURRENT_SESSION_KEY: &str = "dsh.sessions.current";
+/// workspace.json schema 锚点字段（dsh-workspace/lib/index.js 内必现）。
+pub const WORKSPACE_SCHEMA_NEEDLE: &str = "sessionIds";
+
+// ── 移动端注入样式锚点（remote/mobile.css）─────────────────────────
+/// 会话头部"Session log"下载按钮的 CSS Modules 本地名。实测落盘：
+/// @deepseek-ai/dsh-session-log-export/lib/client.js（按钮 CSS 文本内必现，
+/// 且 height:32px/min-width:111px 写死）。影响面：mobile.css 的
+/// [class*="_sessionLogButton"] 缩小规则——上游改名则规则静默失效
+/// （药丸回原生尺寸，功能不损）；契约套件 tree_find 守门。
+pub const SESSION_LOG_BUTTON_NEEDLE: &str = "sessionLogButton";
