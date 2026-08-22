@@ -4,7 +4,7 @@
 //! tests/upstream_contract.rs 红了就对照本文件逐条改（每条注明上游出处
 //! 与影响面）。事实清单的文档形态见 docs/design.zh-CN.md §15。
 //!
-//! 当前事实基线：@deepseek-ai/dsh 0.1.0-rc.8（子包为浮动区间，抓取时解析到
+//! 当前事实基线：@deepseek-ai/dsh 0.1.1-rc.2（子包为浮动区间，抓取时解析到
 //! 最新 rc；npm latest 标签可能滞后，fetch-runtime.ps1 须显式 -DshVersion）。
 
 use std::path::{Path, PathBuf};
