@@ -127,6 +127,12 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - 本机**没装 gh CLI**；访问 GitHub API 用环境变量 **`GH_TOKEN`**（属主 LBurny，已验证对私有仓库返回 200）：
   `curl -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/LBurny/deepseek-harness-desktop`
 - git fetch/push 走凭据管理器 `manager-core`，不受私有化影响
+- **github.com 直连可能被 TLS 拦截**（0.3.0 后实踩）：push 报 `self signed certificate in
+  certificate chain`（openssl）或 `SEC_E_UNTRUSTED_ROOT`（schannel），而 api.github.com
+  正常——是网络层拦截不是配置问题，别改 sslBackend/别关 sslVerify。系统 Clash 代理
+  127.0.0.1:7890 走 github.com 通畅，一次性绕法：
+  `git -c http.proxy=http://127.0.0.1:7890 push`（**不写入 git 配置**，拦截消失后直连仍可用；
+  先 `curl -sI -x http://127.0.0.1:7890 https://github.com` 确认代理在线）
 
 ## 关键约定与坑（细节见 docs/design.zh-CN.md）
 
