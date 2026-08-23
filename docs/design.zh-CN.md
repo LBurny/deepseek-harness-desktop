@@ -292,9 +292,9 @@ scripts/fetch-runtime.ps1
 **跟版流程（常规升级为纯流程，零代码改动）**：
 
 1. 关注上游 release 与 npm 版本流，对照 §15 事实清单评估是否触及接口契约。
-2. 改 `scripts/fetch-runtime.ps1` 的 `-DshVersion` 默认值，重新抓运行时（含冒烟与 prune 精简）；若上游新增依赖（尤其 native 模块、多平台 prebuilds），按需调整 `prune-runtime.ps1` 规则。
-3. `cd src-tauri && cargo test` 全绿 → `pnpm tauri build` → `scripts/acceptance.ps1` 全项验收。**契约核对表由 `tests/upstream_contract.rs` 自动执行**（真实运行时探测，无运行时自动 skip；CI 的 fetch-runtime 在 cargo test 之前，故 CI 一定真跑）：红了说明上游变了，按失败输出的指引改 `src-tauri/src/upstream.rs` 对应常量（全部上游事实的单一来源，每条注明出处与影响面），必要时动对应消费模块。
-4. 三处版本号同步（§11）后打 tag `v*`，CI 自动构建并发布 GitHub Release。
+2. `powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch|minor|major]`——一条命令完成：改钉版 → 清旧 dsh/（防 package-lock 锁旧 rc）→ 重抓（冒烟+prune）→ bump 三处版本号 → `cargo test`（契约套件守门）→ 文档基线同步（upstream.rs 头注释/README 双岸/§15 标题与 npm 行，每文件计数断言，不符跳过并警告）→ CHANGELOG 骨架。**契约核对表由 `tests/upstream_contract.rs` 自动执行**（真实运行时探测，无运行时自动 skip；CI 的 fetch-runtime 在 cargo test 之前，故 CI 一定真跑）：红了说明上游变了，按失败输出的指引改 `src-tauri/src/upstream.rs` 对应常量（全部上游事实的单一来源，每条注明出处与影响面），修复后**重跑同一条命令**即可续跑（每步幂等，已完成自动跳过）；必要时动对应消费模块。若上游新增依赖（尤其 native 模块、多平台 prebuilds），按需调整 `prune-runtime.ps1` 规则。
+3. 填 CHANGELOG 的 TODO 摘要、review diff、commit；`pnpm tauri build` → `scripts/acceptance.ps1` 全项验收。
+4. 打 tag `v*`，CI 自动构建并发布 GitHub Release。
 
 **接口契约核对表（上游变了才动代码；代码化身：`src-tauri/src/upstream.rs` 常量 + `tests/upstream_contract.rs` 探测）**：
 

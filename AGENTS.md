@@ -101,7 +101,8 @@ src-tauri/windows/  nsis-hooks.nsh：安装/卸载钩子；preinstall/preuninsta
                     残留进程（必须排除调用方自身父 PID——否则覆盖安装误杀原地运行的
                     旧卸载器，弹 "Unable to uninstall!"）；杀后轮询等退净；
                     postuninstall RMDir /r runtime 兜底清单外残留
-scripts/            fetch-runtime.ps1(下载 Node+dsh+cloudflared+精简)、prune-runtime.ps1、
+scripts/            follow-upstream.ps1(一键跟版)、fetch-runtime.ps1(下载
+                    Node+dsh+cloudflared+精简)、prune-runtime.ps1、
                     acceptance.ps1(端到端验收)、use-fixture-runtime.ps1、
                     check-node.ps1(查 dsh 进程/运行时目录)、gen-icon.mjs、
                     gen-sounds.mjs(程序化合成提示音 wav)、shot-window.ps1、
@@ -118,6 +119,7 @@ docs/design.zh-CN.md                            设计文档（架构/模块/打
 cd src-tauri && cargo test            # 全部测试（单元+进程集成+WS通知+控制台窗口+远程访问+上游契约）
 pnpm tauri build                      # 产出 src-tauri/target/release/bundle/nsis/DSHDesktop_*_x64-setup.exe
 powershell -File scripts/fetch-runtime.ps1   # 抓取真实运行时到 src-tauri/runtime/windows-x64/
+powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch]   # 一键跟版：钉版→清旧→重抓→bump→cargo test→文档/CHANGELOG
 powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版→安装→启动→全项校验→截图
 ```
 
