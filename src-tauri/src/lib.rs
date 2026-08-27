@@ -527,7 +527,7 @@ pub(crate) fn append_debug_line(path: &std::path::Path, line: &str) {
     }
 }
 
-/// 解析内置音效资源（如 sounds/chime.wav）的实际路径：resource_dir（剥 \\?\）
+/// 解析内置音效资源（如 sounds/bip-bop-01.wav）的实际路径：resource_dir（剥 \\?\）
 /// 或可执行文件旁；都不存在返回 None（调用侧降级）。
 pub(crate) fn resolve_custom_sound(handle: &tauri::AppHandle, rel: &str) -> Option<PathBuf> {
     let from_resource = handle

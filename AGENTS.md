@@ -105,7 +105,7 @@ scripts/            follow-upstream.ps1(一键跟版)、fetch-runtime.ps1(下载
                     Node+dsh+cloudflared+精简)、prune-runtime.ps1、
                     acceptance.ps1(端到端验收)、use-fixture-runtime.ps1、
                     check-node.ps1(查 dsh 进程/运行时目录)、gen-icon.mjs、
-                    gen-sounds.mjs(程序化合成提示音 wav)、shot-window.ps1、
+                    shot-window.ps1、
                     simulate-first-launch.ps1、hide-show-theme.ps1、get-attr20.ps1、
                     verify-*.ps1(zoom/window-state/no-size-flash/completion-notify/
                     titlebar-theme 回归)

@@ -38,49 +38,92 @@ pub enum CloseBehavior {
     Quit,
 }
 
-/// 任务完成通知的提示音。前 5 项直接透传 toast 的音频预设
-/// （tauri-winrt-notification Sound::from_str → ms-winsoundevent:Notification.*，
+/// 任务完成通知的提示音。Default 直接透传 toast 的音频预设
+/// （tauri-winrt-notification Sound::from_str → ms-winsoundevent:Notification.Default，
 /// Windows 系统内置，不依赖用户声音方案）；Silent = 不传 sound，toast 静音。
-/// Chime/Drop/Mellow 是壳内置的柔和合成音（resources/sounds/*.wav）：
+/// 其余 17 个是壳内置音效（resources/sounds/*.wav，音源 opencode）：
 /// toast 静音，由壳用 PlaySoundW 异步播放（见 platform::Platform::play_sound_file）。
+/// serde 值与 wav 文件名 stem 一致；旧具名音（≤0.1.x）经 alias 迁移——
+/// load() 对解析失败整份回退默认，没有 alias 老用户会丢其余全部设置。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
-#[serde(rename_all = "snake_case")]
 pub enum CompletionSound {
+    #[serde(rename = "silent")]
     Silent,
-    #[default]
+    #[serde(rename = "default", alias = "im", alias = "mail", alias = "reminder", alias = "sms")]
     Default,
-    Im,
-    Mail,
-    Reminder,
-    Sms,
-    Chime,
-    Drop,
-    Mellow,
+    #[serde(rename = "staplebops-01")]
+    Staplebops01,
+    #[default]
+    #[serde(rename = "staplebops-02", alias = "chime", alias = "drop", alias = "mellow")]
+    Staplebops02,
+    #[serde(rename = "staplebops-03")]
+    Staplebops03,
+    #[serde(rename = "staplebops-04")]
+    Staplebops04,
+    #[serde(rename = "staplebops-05")]
+    Staplebops05,
+    #[serde(rename = "staplebops-06")]
+    Staplebops06,
+    #[serde(rename = "staplebops-07")]
+    Staplebops07,
+    #[serde(rename = "bip-bop-01")]
+    BipBop01,
+    #[serde(rename = "bip-bop-02")]
+    BipBop02,
+    #[serde(rename = "bip-bop-03")]
+    BipBop03,
+    #[serde(rename = "bip-bop-04")]
+    BipBop04,
+    #[serde(rename = "bip-bop-05")]
+    BipBop05,
+    #[serde(rename = "bip-bop-06")]
+    BipBop06,
+    #[serde(rename = "bip-bop-07")]
+    BipBop07,
+    #[serde(rename = "bip-bop-08")]
+    BipBop08,
+    #[serde(rename = "bip-bop-09")]
+    BipBop09,
+    #[serde(rename = "bip-bop-10")]
+    BipBop10,
 }
 
 impl CompletionSound {
+    /// 内置音效清单：(变体, 相对 resource_dir 的 wav 路径)。custom_wav 与
+    /// 资源存在性测试共用这一份清单，防止两处漂移。
+    pub const CUSTOM: [(CompletionSound, &'static str); 17] = [
+        (CompletionSound::Staplebops01, "sounds/staplebops-01.wav"),
+        (CompletionSound::Staplebops02, "sounds/staplebops-02.wav"),
+        (CompletionSound::Staplebops03, "sounds/staplebops-03.wav"),
+        (CompletionSound::Staplebops04, "sounds/staplebops-04.wav"),
+        (CompletionSound::Staplebops05, "sounds/staplebops-05.wav"),
+        (CompletionSound::Staplebops06, "sounds/staplebops-06.wav"),
+        (CompletionSound::Staplebops07, "sounds/staplebops-07.wav"),
+        (CompletionSound::BipBop01, "sounds/bip-bop-01.wav"),
+        (CompletionSound::BipBop02, "sounds/bip-bop-02.wav"),
+        (CompletionSound::BipBop03, "sounds/bip-bop-03.wav"),
+        (CompletionSound::BipBop04, "sounds/bip-bop-04.wav"),
+        (CompletionSound::BipBop05, "sounds/bip-bop-05.wav"),
+        (CompletionSound::BipBop06, "sounds/bip-bop-06.wav"),
+        (CompletionSound::BipBop07, "sounds/bip-bop-07.wav"),
+        (CompletionSound::BipBop08, "sounds/bip-bop-08.wav"),
+        (CompletionSound::BipBop09, "sounds/bip-bop-09.wav"),
+        (CompletionSound::BipBop10, "sounds/bip-bop-10.wav"),
+    ];
+
     /// tauri-plugin-notification builder.sound() 的取值；None 表示静音 toast
-    /// （自定义柔和音也是静音 toast，声音由壳单独播放）
+    /// （内置音效也是静音 toast，声音由壳单独播放）
     pub fn toast_sound_name(self) -> Option<&'static str> {
         match self {
             CompletionSound::Silent => None,
             CompletionSound::Default => Some("Default"),
-            CompletionSound::Im => Some("IM"),
-            CompletionSound::Mail => Some("Mail"),
-            CompletionSound::Reminder => Some("Reminder"),
-            CompletionSound::Sms => Some("SMS"),
-            CompletionSound::Chime | CompletionSound::Drop | CompletionSound::Mellow => None,
+            _ => None,
         }
     }
 
-    /// 自定义柔和音的内置 wav 资源相对路径（相对 resource_dir）；None = 非自定义音
+    /// 内置音效的 wav 资源相对路径（相对 resource_dir）；None = 非内置音
     pub fn custom_wav(self) -> Option<&'static str> {
-        match self {
-            CompletionSound::Chime => Some("sounds/chime.wav"),
-            CompletionSound::Drop => Some("sounds/drop.wav"),
-            CompletionSound::Mellow => Some("sounds/mellow.wav"),
-            _ => None,
-        }
+        Self::CUSTOM.iter().find(|(v, _)| *v == self).map(|(_, p)| *p)
     }
 }
 
@@ -159,7 +202,7 @@ impl Default for ShellSettings {
             },
             close_behavior: CloseBehavior::Background,
             notify: NotifySettings::default(),
-            completion_sound: CompletionSound::Default,
+            completion_sound: CompletionSound::Staplebops02,
             check_update_on_launch: false,
             notify_on_completion: None,
         }
@@ -275,8 +318,8 @@ pub fn set_shell_settings(
     Ok(())
 }
 
-/// 试听任务完成提示音：内置预设走 toast 音频属性；自定义柔和音（Chime/Drop/
-/// Mellow）弹静音 toast 并由壳播放内置 wav（文件缺失降级系统默认预设）。
+/// 试听任务完成提示音：内置预设走 toast 音频属性；壳内置音效弹静音 toast
+/// 并由壳播放内置 wav（文件缺失降级系统默认预设）。
 #[tauri::command]
 pub fn preview_completion_sound(
     app: tauri::AppHandle,
@@ -391,7 +434,7 @@ mod tests {
     fn completion_notify_defaults_on_and_sound_default() {
         let s = ShellSettings::default();
         assert!(s.notify.turn_done.enabled);
-        assert_eq!(s.completion_sound, CompletionSound::Default);
+        assert_eq!(s.completion_sound, CompletionSound::Staplebops02);
     }
 
     #[test]
@@ -425,7 +468,8 @@ mod tests {
         let s = ShellSettings::load(dir.path());
         assert!(!s.notify.turn_done.enabled, "旧开关值应迁移到 turn_done");
         assert!(s.notify.approval.enabled, "其余类型取默认开");
-        assert_eq!(s.completion_sound, CompletionSound::Sms);
+        // "sms" 是已删除的旧具名音，alias 迁移到 default（同为系统预设系）
+        assert_eq!(s.completion_sound, CompletionSound::Default);
         // 保存后旧字段消失、新结构落盘
         s.save(dir.path()).unwrap();
         let text = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
@@ -456,7 +500,7 @@ mod tests {
         let s = ShellSettings::load(dir.path());
         assert!(s.notify.turn_done.enabled);
         assert_eq!(s.notify.turn_done.timing, NotifyTiming::Background);
-        assert_eq!(s.completion_sound, CompletionSound::Default);
+        assert_eq!(s.completion_sound, CompletionSound::Staplebops02);
     }
 
     #[test]
@@ -479,13 +523,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut s = ShellSettings::default();
         s.notify.turn_done.enabled = false;
-        s.completion_sound = CompletionSound::Sms;
+        s.completion_sound = CompletionSound::Staplebops02;
         s.save(dir.path()).unwrap();
         let text = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
-        assert!(text.contains(r#""completion_sound": "sms""#), "实际文件：{text}");
+        assert!(text.contains(r#""completion_sound": "staplebops-02""#), "实际文件：{text}");
         let s2 = ShellSettings::load(dir.path());
         assert!(!s2.notify.turn_done.enabled);
-        assert_eq!(s2.completion_sound, CompletionSound::Sms);
+        assert_eq!(s2.completion_sound, CompletionSound::Staplebops02);
     }
 
     #[test]
@@ -497,7 +541,7 @@ mod tests {
         )
         .unwrap();
         let s = ShellSettings::load(dir.path());
-        assert_eq!(s.completion_sound, CompletionSound::Default);
+        assert_eq!(s.completion_sound, CompletionSound::Staplebops02);
         assert!(s.notify.turn_done.enabled);
     }
 
@@ -505,20 +549,15 @@ mod tests {
     fn toast_sound_name_mapping() {
         assert_eq!(CompletionSound::Silent.toast_sound_name(), None);
         assert_eq!(CompletionSound::Default.toast_sound_name(), Some("Default"));
-        assert_eq!(CompletionSound::Im.toast_sound_name(), Some("IM"));
-        assert_eq!(CompletionSound::Mail.toast_sound_name(), Some("Mail"));
-        assert_eq!(CompletionSound::Reminder.toast_sound_name(), Some("Reminder"));
-        assert_eq!(CompletionSound::Sms.toast_sound_name(), Some("SMS"));
+        // 内置音效一律静音 toast，声音由壳播放
+        assert_eq!(CompletionSound::Staplebops02.toast_sound_name(), None);
+        assert_eq!(CompletionSound::BipBop10.toast_sound_name(), None);
     }
 
     #[test]
     fn custom_soft_sounds_use_wav_not_toast_presets() {
-        // 柔和系自定义音：toast 静音（None），由壳播放内置 wav
-        for (s, wav) in [
-            (CompletionSound::Chime, "sounds/chime.wav"),
-            (CompletionSound::Drop, "sounds/drop.wav"),
-            (CompletionSound::Mellow, "sounds/mellow.wav"),
-        ] {
+        // 内置音效：toast 静音（None），由壳播放内置 wav；路径与 CUSTOM 清单一一对应
+        for (s, wav) in CompletionSound::CUSTOM {
             assert_eq!(s.toast_sound_name(), None);
             assert_eq!(s.custom_wav(), Some(wav));
         }
@@ -539,7 +578,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!(conf["bundle"]["resources"]["resources/sounds"], "sounds");
-        for s in [CompletionSound::Chime, CompletionSound::Drop, CompletionSound::Mellow] {
+        for (s, _) in CompletionSound::CUSTOM {
             assert!(s.custom_wav().unwrap().starts_with("sounds/"));
         }
     }
@@ -548,11 +587,38 @@ mod tests {
     fn custom_soft_sounds_serde_roundtrip() {
         let dir = tempfile::tempdir().unwrap();
         let mut s = ShellSettings::default();
-        s.completion_sound = CompletionSound::Chime;
+        s.completion_sound = CompletionSound::BipBop01;
         s.save(dir.path()).unwrap();
         let text = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
-        assert!(text.contains(r#""completion_sound": "chime""#), "实际文件：{text}");
-        assert_eq!(ShellSettings::load(dir.path()).completion_sound, CompletionSound::Chime);
+        assert!(text.contains(r#""completion_sound": "bip-bop-01""#), "实际文件：{text}");
+        assert_eq!(ShellSettings::load(dir.path()).completion_sound, CompletionSound::BipBop01);
+    }
+
+    #[test]
+    fn legacy_sound_values_migrate_and_keep_other_settings() {
+        let dir = tempfile::tempdir().unwrap();
+        // 旧具名音值必须能解析（alias 迁移），否则 load() 整份回退默认丢用户其余设置
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{ "zoom_step": 0.05, "notify": { "approval": { "enabled": false, "timing": "always" } }, "completion_sound": "chime" }"#,
+        )
+        .unwrap();
+        let s = ShellSettings::load(dir.path());
+        assert_eq!(s.completion_sound, CompletionSound::Staplebops02);
+        assert_eq!(s.zoom_step, 0.05, "其余设置不得丢失");
+        assert!(!s.notify.approval.enabled, "其余设置不得丢失");
+        // 系统预设系旧值 → default
+        std::fs::write(dir.path().join("settings.json"), r#"{ "completion_sound": "mail" }"#).unwrap();
+        assert_eq!(ShellSettings::load(dir.path()).completion_sound, CompletionSound::Default);
+    }
+
+    #[test]
+    fn bundled_sound_files_exist_on_disk() {
+        // custom_wav 指向的每个 wav 必须真实存在（防加变体忘放资源文件）
+        for (_, wav) in CompletionSound::CUSTOM {
+            let p = std::path::Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/resources/")).join(wav);
+            assert!(p.is_file(), "缺少资源文件：{}", p.display());
+        }
     }
 
     #[test]

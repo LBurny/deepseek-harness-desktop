@@ -137,7 +137,8 @@ impl Platform for WindowsPlatform {
         use windows_sys::Win32::Media::Audio::PlaySoundW;
         const SND_ASYNC: u32 = 0x0001;
         const SND_FILENAME: u32 = 0x0002_0000;
-        const SND_NOSTOP: u32 = 0x0010; // 不打断正在播放的上一声音效（连播排队交给系统混音）
+        // 不带 SND_NOSTOP：该标志的语义是"上一声音效未播完则本次直接放弃"（不排队不混音），
+        // 连续试听/连续通知时表现为部分音"没声音"。默认的新调打断旧调才是想要的行为。
         if !path.is_file() {
             return Err(crate::i18n::pick(
                 format!("音效文件不存在: {}", path.display()),
@@ -150,9 +151,7 @@ impl Platform for WindowsPlatform {
             .chain(std::iter::once(0))
             .collect();
         // SAFETY: wide 以 NUL 结尾且本调用期间存活；hmod 传 NULL（文件模式不需要模块句柄）
-        let ok = unsafe {
-            PlaySoundW(wide.as_ptr(), std::ptr::null_mut(), SND_FILENAME | SND_ASYNC | SND_NOSTOP)
-        };
+        let ok = unsafe { PlaySoundW(wide.as_ptr(), std::ptr::null_mut(), SND_FILENAME | SND_ASYNC) };
         if ok == 0 {
             Err(crate::i18n::pick("PlaySoundW 播放失败", "PlaySoundW playback failed").into())
         } else {

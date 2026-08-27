@@ -4,9 +4,16 @@
   import { getVersion } from '@tauri-apps/api/app'
   import { onMount } from 'svelte'
   import { t } from '../i18n'
+  import PopupSelect from './PopupSelect.svelte'
 
   type Shortcut = { ctrl: boolean; shift: boolean; alt: boolean; code: string; key: string }
-  type CompletionSound = 'silent' | 'default' | 'im' | 'mail' | 'reminder' | 'sms' | 'chime' | 'drop' | 'mellow'
+  type CompletionSound =
+    | 'silent'
+    | 'default'
+    | 'bip-bop-01' | 'bip-bop-02' | 'bip-bop-03' | 'bip-bop-04' | 'bip-bop-05'
+    | 'bip-bop-06' | 'bip-bop-07' | 'bip-bop-08' | 'bip-bop-09' | 'bip-bop-10'
+    | 'staplebops-01' | 'staplebops-02' | 'staplebops-03' | 'staplebops-04'
+    | 'staplebops-05' | 'staplebops-06' | 'staplebops-07'
   type NotifyTiming = 'background' | 'always'
   type NotifyRule = { enabled: boolean; timing: NotifyTiming }
   // 与 Rust 端 NotifySettings 对应：approval=任务确认 question=选项选择 turn_done=任务完成
@@ -37,7 +44,7 @@
     zoom_out: { ctrl: true, shift: true, alt: false, code: 'Minus', key: '_' },
     close_behavior: 'background',
     notify: { approval: { ...DEFAULT_RULE }, question: { ...DEFAULT_RULE }, turn_done: { ...DEFAULT_RULE } },
-    completion_sound: 'default',
+    completion_sound: 'staplebops-02',
     check_update_on_launch: false,
   }
 
@@ -45,13 +52,29 @@
   const SOUND_OPTIONS: { value: CompletionSound; label: string }[] = [
     { value: 'silent', label: '无提示音' },
     { value: 'default', label: '系统默认' },
-    { value: 'im', label: '消息' },
-    { value: 'mail', label: '邮件' },
-    { value: 'reminder', label: '提醒' },
-    { value: 'sms', label: '短信' },
-    { value: 'chime', label: '轻铃' },
-    { value: 'drop', label: '水滴' },
-    { value: 'mellow', label: '和弦' },
+    { value: 'bip-bop-01', label: '哔啵 01' },
+    { value: 'bip-bop-02', label: '哔啵 02' },
+    { value: 'bip-bop-03', label: '哔啵 03' },
+    { value: 'bip-bop-04', label: '哔啵 04' },
+    { value: 'bip-bop-05', label: '哔啵 05' },
+    { value: 'bip-bop-06', label: '哔啵 06' },
+    { value: 'bip-bop-07', label: '哔啵 07' },
+    { value: 'bip-bop-08', label: '哔啵 08' },
+    { value: 'bip-bop-09', label: '哔啵 09' },
+    { value: 'bip-bop-10', label: '哔啵 10' },
+    { value: 'staplebops-01', label: '叮当 01' },
+    { value: 'staplebops-02', label: '叮当 02' },
+    { value: 'staplebops-03', label: '叮当 03' },
+    { value: 'staplebops-04', label: '叮当 04' },
+    { value: 'staplebops-05', label: '叮当 05' },
+    { value: 'staplebops-06', label: '叮当 06' },
+    { value: 'staplebops-07', label: '叮当 07' },
+  ]
+
+  // label 存中文原文，模板里经 t() 渲染——locale 切换时选项文字同步更新
+  const TIMING_OPTIONS: { value: NotifyTiming; label: string }[] = [
+    { value: 'background', label: '仅后台时提醒' },
+    { value: 'always', label: '总是提醒' },
   ]
 
   // label 存中文原文，模板里经 t() 渲染——locale 切换时选项文字同步更新
@@ -338,10 +361,7 @@
           {t(row.label)}
         </label>
         <span class="control">
-          <select bind:value={rule.timing} disabled={!rule.enabled}>
-            <option value="background">{t('仅后台时提醒')}</option>
-            <option value="always">{t('总是提醒')}</option>
-          </select>
+          <PopupSelect bind:value={rule.timing} options={TIMING_OPTIONS} disabled={!rule.enabled} />
         </span>
       </div>
     {/each}
@@ -349,11 +369,11 @@
     <div class="row">
       <span>{t('完成提示音')}</span>
       <span class="control">
-        <select bind:value={completionSound} disabled={!notify.turn_done.enabled}>
-          {#each SOUND_OPTIONS as opt (opt.value)}
-            <option value={opt.value}>{t(opt.label)}</option>
-          {/each}
-        </select>
+        <PopupSelect
+          bind:value={completionSound}
+          options={SOUND_OPTIONS}
+          disabled={!notify.turn_done.enabled}
+        />
         <button
           class="ghost small"
           onclick={previewSound}
@@ -455,19 +475,6 @@
     color: var(--text);
     padding: 6px 8px;
     font-size: 13px;
-  }
-  select {
-    height: 32px;
-    box-sizing: border-box;
-    background: var(--bg-input);
-    border: 1px solid var(--border);
-    border-radius: 6px;
-    color: var(--text);
-    padding: 6px 8px;
-    font-size: 13px;
-  }
-  select:disabled {
-    opacity: 0.5;
   }
   .ghost.small {
     height: 32px;
@@ -579,3 +586,4 @@
     color: var(--text-2);
   }
 </style>
+

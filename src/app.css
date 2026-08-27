@@ -35,6 +35,8 @@ html[data-theme='light'] {
   --text-2: #9aa3b2;
   --text-3: #6b7484;
   --text-4: #4a5265;
+  --sel-bg: #e3e5ec; /* 原生 select 弹层的选中/悬停高亮色块 */
+  --sel-fg: #16181f;
   --accent: #1565c0;
   --accent-soft: #64a3e8;
   --ok: #4ac26b;
@@ -56,6 +58,8 @@ html[data-theme='light'] {
   --text-2: #5c6472;
   --text-3: #8a919e;
   --text-4: #a8aebc;
+  --sel-bg: #d8dce4;
+  --sel-fg: #16181f;
   --accent: #1565c0;
   --accent-soft: #1e63ad;
   --ok: #1f9d55;
@@ -79,6 +83,8 @@ html[data-theme='light'] {
     --text-2: #5c6472;
     --text-3: #8a919e;
     --text-4: #a8aebc;
+    --sel-bg: #d8dce4;
+    --sel-fg: #16181f;
     --accent-soft: #1e63ad;
     --ok: #1f9d55;
     --ok-strong: #2e7d32;

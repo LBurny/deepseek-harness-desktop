@@ -7,9 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-08-27
+
 ### Added
 
+- Completion sounds overhaul: `completion_sound` now offers 17 built-in sounds (`bip-bop-01..10` / `staplebops-01..07`, sourced from opencode, shipped as `resources/sounds/*.wav`) alongside `silent` / `default`; the default is now `staplebops-02`. Legacy named sounds (`im`/`mail`/`reminder`/`sms`/`chime`/`drop`/`mellow`, ≤0.1.x) migrate through serde aliases — the first four map to `default`, the last three to `staplebops-02` — so a load() of an old settings file keeps the user's remaining settings intact. `default` still passes the toast's system audio preset; the 17 custom sounds play via PlaySoundW while the toast itself stays silent
 - `scripts/follow-upstream.ps1`: one-command dsh version-follow tooling — pin bump, stale-runtime cleanup (the old `dsh/` dir is removed first so floating sub-packages are not held at the previous rc by its package-lock), runtime re-fetch, three-carrier app version bump (package.json is now synced too; it had drifted to 0.1.12), the contract suite as gate, doc baseline sync with per-file occurrence guards (upstream.rs header / design §15 / both READMEs) and a CHANGELOG skeleton entry. Every step is idempotent: when the contract suite goes red, fix upstream.rs and re-run the same command to resume. `-SelfTest` runs 12 zero-network pure-function assertions
+
+### Changed
+
+- Settings page dropdowns: the completion-sound picker and the three notify-timing dropdowns now share a new `PopupSelect` component. The popup is width-matched to the trigger, height-capped (~7 items visible) and scrollable — the native `<select>` popup renders all options in one OS-drawn sheet whose corners/highlight cannot be styled. The trigger mirrors the native select look (border, input background, 32px height, thin chevron), hover/selected use a native-popup-style light highlight (theme-aware `--sel-bg`/`--sel-fg` tokens) with square corners, and the popup itself carries the page's rounded corners and a visible scrollbar; the current selection is scrolled into view on open. Outside-click/Escape close, disabled state follows the corresponding notify rule toggle
+- PlaySoundW no longer passes `SND_NOSTOP`: that flag means "give up if the previous sound is still playing" (no queueing, no mixing), so rapid previews or back-to-back notifications were silently dropped. The default interrupt-previous behavior is the intended one
+- dsh runtime pinned at 0.1.1-rc.2 (no drift in probed facts); test suite 198 → 200 (custom-sound resource presence probes)
 
 ## [0.3.0] - 2026-08-21
 
