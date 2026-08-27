@@ -36,7 +36,9 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       # 运行时按 dsh 版本+脚本哈希缓存：绝大多数发版不动 dsh，命中即跳过 ~20 分钟的
-      # npm install（CI 上解析 dsh 浮动依赖树是整条流水线最慢的一步）
+      # npm install（CI 上解析 dsh 浮动依赖树是整条流水线最慢的一步）。
+      # 注意：缓存由 main 分支的 build.yml 预热（Actions 缓存按 ref 隔离，本 tag run
+      # 若自己 fetch 后存下的，下一个 tag run 读不到）；dsh 版本变更的首个 release 必 miss。
       - name: Compute runtime cache key
         id: rtkey
         shell: pwsh

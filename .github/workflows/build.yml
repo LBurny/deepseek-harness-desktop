@@ -1,8 +1,19 @@
 name: build
 
-# 分支构建检查 + 手动触发。v* 标签的构建发布由 release.yml 负责（同链路重复且
-# 会与 release 撞出双红/双绿噪音），不再在 tag 上跑。
+# 分支构建检查 + 运行时缓存预热 + 手动触发。v* 标签的构建发布由 release.yml 负责
+# （同链路重复且会与 release 撞出双红/双绿噪音），不再在 tag 上跑。
+#
+# 【为什么必须在 main 上跑】Actions 缓存按 ref 隔离：tag 触发的 run 只能读「当前 tag
+# / 默认分支」的缓存，tag run 存的缓存对下一个 tag 永远不可见（0.4.0→0.4.1 实测：key
+# 相同仍 miss，~20 分钟 npm install 重跑，且 0.4.0 那次的 1h09 同因）。所以 rt 缓存
+# 必须由 main 上的本 workflow 预热进默认分支作用域，release 的 tag run 才能命中。
+# 发版前注意：dsh 版本变了（key 变）时先推 main 让本流程回填缓存，再打 tag。
 on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
   workflow_dispatch:
 
 jobs:

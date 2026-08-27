@@ -137,6 +137,12 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   构建→发 Release，资产 *_x64-setup.exe + sha256）。github 直连被拦时 push 走 §GitHub 访问的代理。
 - CI 的 release 链路有**运行时缓存**（key=`rt-<dsh版本>-<fetch/prune脚本哈希>`）：dsh 版本
   不变则跳过 ~20 分钟的 npm install；想强制重拉就换 dsh 版本或改脚本（key 自动失效）。
+  **缓存必须由 main 分支的 build.yml 预热**（Actions 缓存按 ref 隔离，tag run 存的缓存
+  下一个 tag run 读不到——0.4.0→0.4.1 实测同 key 仍 miss、release 跑满 ~70 分钟）：
+  tag 触发的 release run 只能读「当前 tag / 默认分支」的缓存，main 上的 build.yml 把
+  回填存进默认分支作用域。所以发版注意：dsh 版本变了（key 变）时**先推 main 等
+  build.yml 回填缓存，再打 tag**；dsh 版本没变的常规发版，main 的缓存是热的，一次
+  push main+tag 即可命中。
 
 ## GitHub 访问
 

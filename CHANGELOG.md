@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- CI: the bundled-runtime cache (`rt-<dsh version>-<script hash>`) never actually hit across releases — Actions caches are ref-scoped, so a cache saved by a tag-triggered run is invisible to the next tag run (observed on 0.4.0→0.4.1: same key still missed, the ~20-minute runtime fetch re-ran and the release pipeline took ~70 min). The cache steps already existed in build.yml, but its trigger was manual-only. build.yml now also runs on main pushes (docs-only changes ignored), warming the cache into the default-branch scope that tag runs can read; from now on, a release whose dsh version is unchanged hits the cache, and the first release after a dsh bump should push main first, then tag
+
 ## [0.4.1] - 2026-08-27
 
 ### Added
