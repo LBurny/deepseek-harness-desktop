@@ -12,6 +12,9 @@ permissions:
 jobs:
   release:
     runs-on: windows-latest
+    # fetch-runtime 的 npm install 解析 dsh 浮动依赖树，默认 ~2GB 堆会 OOM（2026-08-27 实踩）
+    env:
+      NODE_OPTIONS: --max-old-space-size=8192
 
     steps:
       - uses: actions/checkout@v4
