@@ -18,7 +18,7 @@ const en: Record<string, string> = {
   '错误': 'Error',
   '重启服务': 'Restart service',
   '重启中…': 'Restarting…',
-  '服务日志': 'Service log',
+  '诊断日志': 'Diagnostics log',
 
   // 其它设置
   '其它设置': 'Other settings',

@@ -37,7 +37,15 @@ pub async fn restart_dsh(state: State<'_, SharedState>) -> Result<(), String> {
 
 #[tauri::command]
 pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
-    state.log_ring.snapshot()
+    // events.log = 壳侧诊断 + dsh 进程输出的统一持久层（1MB 截断），
+    // 读尾部即得跨会话的近期历史；面板开着期间的增量走 dsh-log 实时事件
+    let log = state
+        .runtime
+        .home
+        .parent()
+        .unwrap_or(std::path::Path::new("."))
+        .join("events.log");
+    crate::diagnostics::read_log_tail(&log, 500)
 }
 
 #[tauri::command]

@@ -1,4 +1,3 @@
-use dshdesktop_lib::diagnostics::LogRing;
 use dshdesktop_lib::platform::Platform;
 use dshdesktop_lib::process::{DshProcess, DshState, ProcessEvent};
 use dshdesktop_lib::runtime::RuntimePaths;
@@ -97,7 +96,6 @@ async fn dsh_becomes_ready_and_stops() {
     let proc = DshProcess::spawn_supervised(
         Arc::new(TestPlatform),
         fixture_paths(work.path()),
-        LogRing::default(),
         emit,
     );
     let s = wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
@@ -119,7 +117,6 @@ async fn dsh_restarts_after_crash() {
     let proc = DshProcess::spawn_supervised(
         Arc::new(TestPlatform),
         fixture_paths(work.path()),
-        LogRing::default(),
         emit,
     );
     wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));

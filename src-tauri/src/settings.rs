@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use tauri::Emitter;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::Manager;
@@ -333,6 +334,11 @@ pub fn preview_completion_sound(
 ) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
     let log = platform.runtime_base_dir().join("events.log");
+    // 壳侧诊断：落盘 events.log（面板打开即回填文件尾，跨会话可见）；实时推 dsh-log
+    let diag = |line: String| {
+        crate::append_debug_line(&log, &line);
+        let _ = app.emit("dsh-log", &line);
+    };
     let mut builder = app
         .notification()
         .builder()
@@ -345,22 +351,21 @@ pub fn preview_completion_sound(
                 let r = platform.play_sound_file(&p);
                 let ms = t0.elapsed().as_secs_f64() * 1000.0;
                 match &r {
-                    Ok(()) => crate::append_debug_line(
-                        &log,
-                        &format!("[{}] preview: {} ok ({ms:.0}ms)", crate::local_stamp(), p.display()),
-                    ),
-                    Err(e) => crate::append_debug_line(
-                        &log,
-                        &format!("[{}] preview: {} failed: {e} ({ms:.0}ms)", crate::local_stamp(), p.display()),
-                    ),
+                    Ok(()) => diag(format!("[{}] preview: {} ok ({ms:.0}ms)", crate::local_stamp(), p.display())),
+                    Err(e) => diag(format!(
+                        "[{}] preview: {} failed: {e} ({ms:.0}ms)",
+                        crate::local_stamp(),
+                        p.display()
+                    )),
                 }
                 r?;
             }
             None => {
-                crate::append_debug_line(
-                    &log,
-                    &format!("[{}] preview: {} not found -> toast Default", crate::local_stamp(), rel),
-                );
+                diag(format!(
+                    "[{}] preview: {} not found -> toast Default",
+                    crate::local_stamp(),
+                    rel
+                ));
                 builder = builder.sound("Default");
             }
         }

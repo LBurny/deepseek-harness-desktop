@@ -174,7 +174,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **脚本里别用 Process.MainWindowHandle**：debug exe 还持有可见控制台与 Tao/托盘辅助窗口，句柄会指错；按 class "Tauri Window" 枚举进程顶层窗口（verify-no-size-flash.ps1 / verify-window-state.ps1 的 FindByClass 模式）
 - **Tauri setup 无 tokio 上下文**：spawn_supervised 必须经 `tauri::async_runtime::block_on`
 - **Tauri `resource_dir()` 返回 `\\?\` 扩展路径**：Node 加载器不认（EISDIR 崩溃），`runtime::strip_verbatim` 已处理，别绕过 ensure_runtime 自己拼路径
-- **外部诊断手段**：`%LOCALAPPDATA%\DSHDesktop\events.log` 记录每个进程事件（1MB 截断），应用卡启动时先看它
+- **外部诊断手段**：`%LOCALAPPDATA%\DSHDesktop\events.log` 是壳侧诊断 + dsh 进程事件的统一持久层（1MB 截断），诊断面板回填读它的尾部（跨会话），应用卡启动时先看它
 - **fixture 用 .cjs**（根 package.json 是 type:module）；`#[tokio::test]` 涉及 std::thread::sleep 时须 `flavor="multi_thread"`。use-fixture-runtime.ps1 会在 @deepseek-ai/dsh 下铺 CJS 桩 package.json——fetch-runtime 抓过的树带真实 `"type":"module"`，不铺桩 mock bin.js 会按 ESM 加载崩溃
 - **dev 模式 tauri 不拷贝 bundle.resources**：内置音效在 dev 下要手动复制到 `src-tauri/target/debug/sounds/`，否则静默降级系统默认；另外真实运行时放 src-tauri/runtime 下跑 dev 会被 dsh 自更新触发 watcher 重建循环——复制到 src-tauri 外用 DSHDESKTOP_RUNTIME_DIR 指向
 - **NSIS 离线**：github 直连不稳时用 ghproxy.net 预置 `%LOCALAPPDATA%\tauri\NSIS`（含 nsis_tauri_utils.dll，SHA1 须匹配 bundler 常量）

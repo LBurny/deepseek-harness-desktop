@@ -97,7 +97,7 @@
     </button>
   </section>
 
-  <h2>{t('服务日志')}</h2>
+  <h2>{t('诊断日志')}</h2>
   <pre class="logs" bind:this={logEl}>{#each logs as line}{line + '\n'}{/each}</pre>
 </main>
 

@@ -1,4 +1,3 @@
-use crate::diagnostics::LogRing;
 use crate::platform::Platform;
 use crate::port::{free_port, wait_ready};
 use crate::runtime::RuntimePaths;
@@ -35,7 +34,6 @@ struct Inner {
     paths: RuntimePaths,
     state: Mutex<DshState>,
     pid: AtomicU32,
-    log_ring: LogRing,
     on_event: Arc<dyn Fn(ProcessEvent) + Send + Sync>,
     shutdown: AtomicBool,
     stop: Notify,
@@ -51,7 +49,6 @@ impl DshProcess {
     pub fn spawn_supervised(
         platform: Arc<dyn Platform>,
         paths: RuntimePaths,
-        log_ring: LogRing,
         events: impl Fn(ProcessEvent) + Send + Sync + 'static,
     ) -> Self {
         let this = Self {
@@ -60,7 +57,6 @@ impl DshProcess {
                 paths,
                 state: Mutex::new(DshState::Starting),
                 pid: AtomicU32::new(0),
-                log_ring,
                 on_event: Arc::new(events),
                 shutdown: AtomicBool::new(false),
                 stop: Notify::new(),
@@ -244,12 +240,10 @@ impl DshProcess {
     }
 
     fn spawn_pump<R: AsyncRead + Unpin + Send + 'static>(&self, reader: R) {
-        let ring = self.inner.log_ring.clone();
         let emit = self.inner.on_event.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                ring.push_line(line.clone());
                 emit(ProcessEvent::Log(line));
             }
         });
@@ -261,9 +255,7 @@ impl DshProcess {
     }
 
     fn log(&self, line: impl Into<String>) {
-        let line = line.into();
-        self.inner.log_ring.push_line(line.clone());
-        (self.inner.on_event)(ProcessEvent::Log(line));
+        (self.inner.on_event)(ProcessEvent::Log(line.into()));
     }
 }
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Diagnostics panel (托盘 → 诊断) now shows the unified log stream: shell-side diagnostics (notify dispatch/suppression, sound playback with path+elapsed, theme/tray/remote lifecycle) and dsh process output used to live only in `%LOCALAPPDATA%\DSHDesktop\events.log` — the panel backfill now reads the tail of that file directly (last 500 lines, crossing session restarts), so "which notification had no sound" is visible in-app instead of requiring a manual log export. Live lines keep streaming through the `dsh-log` event (notify/play/preview lines included). The in-memory LogRing is removed — events.log is the single persistent store (1MB self-truncating), the section is renamed 服务日志 → 诊断日志
+
 ### Fixed
 
 - MCP servers configured as `npx ...` crashed on machines whose system node is old (observed on a second machine: global node v16.14.2 resolved `npx`, engine-incompatible packages died with "Class extends value undefined"). The bundled runtime shipped only `node.exe` — fetch-runtime.ps1 now also copies npm/npx from the node distribution, and the dsh child PATH prepends the runtime's node directory ahead of the profile `.bin` (both npx/npm/node then bind to the bundled node 24, independent of what the machine has on PATH); a guard test pins the runtime's npx presence

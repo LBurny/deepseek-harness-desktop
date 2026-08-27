@@ -207,6 +207,11 @@ pub fn run() {
                     .try_state::<settings::SettingsState>()
                     .map(|s| s.get())
                     .unwrap_or_default();
+                // 壳侧通知诊断：落盘 + 全局日志环（面板回填可见）；面板开着时实时推
+                let diag = |line: String| {
+                    append_debug_line(&notify_log, &line);
+                    let _ = sink_handle.emit("dsh-log", &line);
+                };
                 // 各类型按自己的规则门控；被抑制的也记一行（现场诊断"没提醒"的抓手：
                 // 之前静默 return，日志里完全看不到）
                 let allowed = match n.kind {
@@ -216,10 +221,7 @@ pub fn run() {
                     notify::NotifyKind::AnswerCompleted => settings.notify.answer_done.allows(foreground),
                 };
                 if !allowed {
-                    append_debug_line(
-                        &notify_log,
-                        &format!("Notify suppressed: {:?} foreground={foreground}", n.kind),
-                    );
+                    diag(format!("Notify suppressed: {:?} foreground={foreground}", n.kind));
                     return;
                 }
                 let mut builder = sink_handle
@@ -238,15 +240,17 @@ pub fn run() {
                             let r = sink_platform.play_sound_file(&p);
                             let ms = t0.elapsed().as_secs_f64() * 1000.0;
                             match &r {
-                                Ok(()) => append_debug_line(
-                                    &notify_log,
-                                    &format!("[{}] play sound: {} ok ({ms:.0}ms)", local_stamp(), p.display()),
-                                ),
+                                Ok(()) => diag(format!(
+                                    "[{}] play sound: {} ok ({ms:.0}ms)",
+                                    local_stamp(),
+                                    p.display()
+                                )),
                                 Err(e) => {
-                                    append_debug_line(
-                                        &notify_log,
-                                        &format!("[{}] play sound: {} failed: {e} ({ms:.0}ms)", local_stamp(), p.display()),
-                                    );
+                                    diag(format!(
+                                        "[{}] play sound: {} failed: {e} ({ms:.0}ms)",
+                                        local_stamp(),
+                                        p.display()
+                                    ));
                                     // winmm 播放失败的机器（如 N 版缺媒体组件）：退回
                                     // toast 系统默认提示音，宁可系统音也不静音
                                     builder = builder.sound("Default");
@@ -254,20 +258,21 @@ pub fn run() {
                             }
                         }
                         None => {
-                            append_debug_line(
-                                &notify_log,
-                                &format!("[{}] play sound: {} not found -> toast Default", local_stamp(), rel),
-                            );
+                            diag(format!(
+                                "[{}] play sound: {} not found -> toast Default",
+                                local_stamp(),
+                                rel
+                            ));
                             builder = builder.sound("Default");
                         }
                     }
                 } else if let Some(name) = settings.completion_sound.toast_sound_name() {
                     builder = builder.sound(name);
                 }
-                append_debug_line(&notify_log, &format!("Notify: {:?} {}", n.kind, n.body));
+                diag(format!("Notify: {:?} {}", n.kind, n.body));
                 // show 失败不再静默吞（WinRT 通知被系统策略拦下时至少留痕可查）
                 if let Err(e) = builder.show() {
-                    append_debug_line(&notify_log, &format!("toast show failed: {e}"));
+                    diag(format!("toast show failed: {e}"));
                 }
             });
             // mux（会话事件 → 通知/标题）+ host（子代理标记）双下行流，共享 SessionBook
@@ -367,8 +372,7 @@ pub fn run() {
                 paths.home.clone(),
             ));
 
-            let log_ring = diagnostics::LogRing::default();
-            // 首启播种主题：settings.yaml 不存在时按系统深浅色预写 ui-theme.preference，
+                        // 首启播种主题：settings.yaml 不存在时按系统深浅色预写 ui-theme.preference，
             // 否则 dsh 缺省渲染浅色而壳标题栏跟随系统（深色时不一致）。
             // 必须在 spawn_supervised 之前，dsh 首次启动即读到。
             theme::seed_theme_preference(&paths.home, platform.system_dark_mode());
@@ -428,7 +432,6 @@ pub fn run() {
                 process::DshProcess::spawn_supervised(
                     platform.clone(),
                     paths.clone(),
-                    log_ring.clone(),
                     move |event| {
                         append_debug_log(&debug_log, &event);
                         bridge_event(&emit_handle, &nav_home, &port_tx, deployed, event);
@@ -440,7 +443,6 @@ pub fn run() {
             let dsh_home = paths.home.clone();
             handle.manage(diagnostics::SharedState {
                 process: proc,
-                log_ring,
                 runtime: paths,
                 version,
                 home_url,
@@ -546,6 +548,7 @@ pub(crate) fn append_debug_line(path: &std::path::Path, line: &str) {
         let _ = writeln!(f, "{line}");
     }
 }
+
 
 /// 本地时间戳 HH:MM:SS.mmm：声音链路诊断用——用户在界面上"点第几下没声音"
 /// 需要与日志行逐条对齐，无时间戳无法对应（Windows GetLocalTime，其它平台退
