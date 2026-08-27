@@ -229,15 +229,37 @@ pub fn run() {
                     .body(n.body.clone());
                 // 全部通知统一挂提示音（含任务确认/选项选择——dsh 卡住等用户输入时
                 // 静音提醒等于没提醒）。柔和自定义音：静音 toast + 播放内置 wav；
-                // 文件缺失（如 dev 未拷贝资源）降级为系统默认预设
+                // 文件缺失（如 dev 未拷贝资源）降级为系统默认预设。每次播放落一行
+                // events.log（时间戳+路径+耗时）：现场对"哪条没声音"定位用。
                 if let Some(rel) = settings.completion_sound.custom_wav() {
                     match resolve_custom_sound(&sink_handle, rel) {
                         Some(p) => {
-                            if let Err(e) = sink_platform.play_sound_file(&p) {
-                                append_debug_line(&notify_log, &format!("play sound failed: {e}"));
+                            let t0 = std::time::Instant::now();
+                            let r = sink_platform.play_sound_file(&p);
+                            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                            match &r {
+                                Ok(()) => append_debug_line(
+                                    &notify_log,
+                                    &format!("[{}] play sound: {} ok ({ms:.0}ms)", local_stamp(), p.display()),
+                                ),
+                                Err(e) => {
+                                    append_debug_line(
+                                        &notify_log,
+                                        &format!("[{}] play sound: {} failed: {e} ({ms:.0}ms)", local_stamp(), p.display()),
+                                    );
+                                    // winmm 播放失败的机器（如 N 版缺媒体组件）：退回
+                                    // toast 系统默认提示音，宁可系统音也不静音
+                                    builder = builder.sound("Default");
+                                }
                             }
                         }
-                        None => builder = builder.sound("Default"),
+                        None => {
+                            append_debug_line(
+                                &notify_log,
+                                &format!("[{}] play sound: {} not found -> toast Default", local_stamp(), rel),
+                            );
+                            builder = builder.sound("Default");
+                        }
                     }
                 } else if let Some(name) = settings.completion_sound.toast_sound_name() {
                     builder = builder.sound(name);
@@ -522,6 +544,40 @@ pub(crate) fn append_debug_line(path: &std::path::Path, line: &str) {
     }
     if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
         let _ = writeln!(f, "{line}");
+    }
+}
+
+/// 本地时间戳 HH:MM:SS.mmm：声音链路诊断用——用户在界面上"点第几下没声音"
+/// 需要与日志行逐条对齐，无时间戳无法对应（Windows GetLocalTime，其它平台退
+/// 化为 UNIX 秒）。
+pub(crate) fn local_stamp() -> String {
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::Foundation::SYSTEMTIME;
+        use windows_sys::Win32::System::SystemInformation::GetLocalTime;
+        let mut st = SYSTEMTIME {
+            wYear: 0,
+            wMonth: 0,
+            wDayOfWeek: 0,
+            wDay: 0,
+            wHour: 0,
+            wMinute: 0,
+            wSecond: 0,
+            wMilliseconds: 0,
+        };
+        unsafe { GetLocalTime(&mut st) };
+        format!(
+            "{:02}:{:02}:{:02}.{:03}",
+            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
+        )
+    }
+    #[cfg(not(windows))]
+    {
+        let s = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        format!("unix:{s}")
     }
 }
 

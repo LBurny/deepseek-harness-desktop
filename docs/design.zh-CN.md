@@ -127,7 +127,7 @@ Starting ──wait_ready 60s 内拿到 HTTP 响应──▶ Ready{port}
 Failed（不再自动重启，前端/托盘可手动 restart）
 ```
 
-- **spawn 参数**：`node bin.js web --port <port>`，`env DSH_HOME=<home>`，PATH 前置 `<home>/profiles/web/node_modules/.bin`（插件自带 CLI 不在用户 PATH 上，前置后会话终端/工具子进程才能按名解析——否则装完 modlens 这类插件在 dsh 终端敲不到它的命令），`cwd=%LOCALAPPDATA%\DSHDesktop`，stdout/stderr 管道泵入 `LogRing` + 事件流，`kill_on_drop(true)`，再经 `Platform::configure_child_command` 加 `CREATE_NO_WINDOW`（不弹控制台窗口）。
+- **spawn 参数**：`node bin.js web --port <port>`，`env DSH_HOME=<home>`，PATH 前置内嵌 node 目录 + `<home>/profiles/web/node_modules/.bin`（node 目录在前：npx/npm/node 绑定运行时自带版本，dsh 派生的 MCP 命令常以 `npx` 配置，运行时不带 npx.cmd 会落到系统 PATH 任意 node 版本、引擎不兼容即崩——机器 B 全局 node v16 实测；.bin 在后：插件自带 CLI 不在用户 PATH 上，前置后会话终端/工具子进程才能按名解析——否则装完 modlens 这类插件在 dsh 终端敲不到它的命令），`cwd=%LOCALAPPDATA%\DSHDesktop`，stdout/stderr 管道泵入 `LogRing` + 事件流，`kill_on_drop(true)`，再经 `Platform::configure_child_command` 加 `CREATE_NO_WINDOW`（不弹控制台窗口）。
 - **端口**：`free_port()` 让 OS 分配空闲端口——返回到使用之间存在竞态窗口，靠"就绪超时即杀、换端口重试"兜底；`wait_ready` 轮询 `http://127.0.0.1:<port>/` 直到拿到**任意** HTTP 响应（不要求 200）。
 - **stop/restart**：两个 `tokio::sync::Notify`。stop 置 shutdown 标志并通知，循环杀掉进程树（`taskkill /T /F`，dsh 可能派生 python 等子孙）后进入 `Stopped`；restart 在循环存活时通知其立即重来，循环已退出（Failed/Stopped）时重新 spawn 一个监督循环。
 - **Job Object 防孤儿**：spawn 成功后立即 `Platform::register_child(pid)` 把子进程挂进全局 `KILL_ON_JOB_CLOSE` Job（`platform/windows.rs` 的 `job` 模块，句柄刻意永不关闭）。本进程以任何方式退出——包括被 NSIS 安装器/任务管理器强杀——内核都在最后句柄回收时连带终止全部成员及其子孙。0.1.8 之前没有这层保护：安装器只杀主程序，孤儿 node.exe/cloudflared.exe 锁住 runtime 目录导致重装中止（"Can't write: ...\cloudflared.exe"）。cloudflared 监督循环（remote/tunnel.rs）同样注册。

@@ -9,6 +9,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- MCP servers configured as `npx ...` crashed on machines whose system node is old (observed on a second machine: global node v16.14.2 resolved `npx`, engine-incompatible packages died with "Class extends value undefined"). The bundled runtime shipped only `node.exe` — fetch-runtime.ps1 now also copies npm/npx from the node distribution, and the dsh child PATH prepends the runtime's node directory ahead of the profile `.bin` (both npx/npm/node then bind to the bundled node 24, independent of what the machine has on PATH); a guard test pins the runtime's npx presence
+- Sound played silently on the first attempt (preview or notification): `play_sound_file` kept the PlaySoundW filename buffer in a local variable and dropped it right after the call returned, but `SND_ASYNC` means winmm's internal playback thread opens the file by name slightly LATER — when it loses that race (cold thread, slower machine), the sound silently never plays while the toast still shows. Observed on a second machine as "first preview click silent, subsequent clicks audible". The filename buffer now lives in a process-lifetime table (candidates are a fixed ~19-entry enum, so the table stays under 4KB), removing the race entirely
+- Sound-link diagnostics: every sound play attempt (preview clicks and real notifications) now logs a timestamped line to events.log with the resolved wav path, PlaySound result and elapsed ms, so "which click had no sound" can be reconciled against the log. A failed PlaySound additionally falls back to the toast's system-default sound instead of leaving the toast silent (machines with broken winmm, e.g. Windows N editions)
+
+### Added
+
+
 - CI: the bundled-runtime cache (`rt-<dsh version>-<script hash>`) never actually hit across releases — Actions caches are ref-scoped, so a cache saved by a tag-triggered run is invisible to the next tag run (observed on 0.4.0→0.4.1: same key still missed, the ~20-minute runtime fetch re-ran and the release pipeline took ~70 min). The cache steps already existed in build.yml, but its trigger was manual-only. build.yml now also runs on main pushes (docs-only changes ignored), warming the cache into the default-branch scope that tag runs can read; from now on, a release whose dsh version is unchanged hits the cache, and the first release after a dsh bump should push main first, then tag
 
 ## [0.4.1] - 2026-08-27

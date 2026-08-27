@@ -1,6 +1,6 @@
 [package]
 name = "dshdesktop"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "Desktop shell for deepseek-harness (dsh)"
 repository = "https://github.com/LBurny/deepseek-harness-desktop"
@@ -46,6 +46,7 @@ windows-sys = { version = "0.61", features = [
     "Win32_Graphics_Dwm",
     "Win32_Media_Audio",
     "Win32_System_JobObjects",
+    "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_WindowsAndMessaging",
 ] }

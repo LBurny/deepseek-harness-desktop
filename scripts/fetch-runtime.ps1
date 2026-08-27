@@ -16,17 +16,32 @@ New-Item -ItemType Directory -Force $dest | Out-Null
 $dest = (Resolve-Path $dest).Path
 Write-Host "目标目录：$dest"
 
-# 1. Node.js 便携版（zip 里只取 node.exe）
-$nodeExe = Join-Path $dest 'node.exe'
-if (-not (Test-Path $nodeExe)) {
+# 1. Node.js 便携版（zip 里取 node.exe + 自带 npm/npx）。npm/npx 必须随运行时
+#    分发：dsh 派生的 MCP server 常以 `npx ...` 配置，壳把内嵌 node 目录前置进
+#    子进程 PATH，运行时若没有 npx.cmd 就会落到系统 PATH 的任意 node 版本上，
+#    引擎不兼容直接崩（机器 B 系统全局 node v16 实测）；npm.cmd/npx.cmd 内部按
+#    %~dp0 解析同目录 node.exe 与 node_modules\npm，拷进运行时即绑定内嵌版本。
+#    只取 npm（corepack 用不到，省 ~5MB）。
+$npxCmd = Join-Path $dest 'npx.cmd'
+if (-not (Test-Path $npxCmd)) {
   $zip = Join-Path $env:TEMP "node-v$NodeVersion-win-x64.zip"
-  Write-Host "下载 Node.js v$NodeVersion ..."
-  Invoke-WebRequest -Uri "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip" -OutFile $zip
-  Expand-Archive $zip -DestinationPath $env:TEMP -Force
-  Copy-Item (Join-Path $env:TEMP "node-v$NodeVersion-win-x64\node.exe") $nodeExe -Force
+  if (-not (Test-Path $zip)) {
+    Write-Host "下载 Node.js v$NodeVersion ..."
+    Invoke-WebRequest -Uri "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip" -OutFile $zip
+  }
+  $tar = Join-Path $env:WINDIR 'system32\tar.exe'
+  & $tar -xf $zip -C $env:TEMP "node-v$NodeVersion-win-x64/npm.cmd" "node-v$NodeVersion-win-x64/npx.cmd" "node-v$NodeVersion-win-x64/node_modules/npm"
+  if ($LASTEXITCODE -ne 0) { throw "node zip 解包 npm/npx 失败" }
+  $dist = Join-Path $env:TEMP "node-v$NodeVersion-win-x64"
+  Copy-Item (Join-Path $dist 'node.exe') (Join-Path $dest 'node.exe') -Force
+  New-Item -ItemType Directory -Force (Join-Path $dest 'node_modules') | Out-Null
+  Copy-Item (Join-Path $dist 'npm.cmd') $dest -Force
+  Copy-Item (Join-Path $dist 'npx.cmd') $dest -Force
+  Copy-Item (Join-Path $dist 'node_modules\npm') (Join-Path $dest 'node_modules\npm') -Recurse -Force
 } else {
-  Write-Host 'node.exe 已存在，跳过下载'
+  Write-Host 'npx.cmd 已存在，跳过 node 下载'
 }
+$nodeExe = Join-Path $dest 'node.exe'
 
 # 2. cloudflared（远程访问隧道；GitHub 直连失败时回退 ghproxy）
 $cfExe = Join-Path $dest 'cloudflared.exe'

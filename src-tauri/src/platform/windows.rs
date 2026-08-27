@@ -72,6 +72,14 @@ pub(crate) mod job {
 
 pub struct WindowsPlatform;
 
+/// SND_ASYNC 的文件名缓冲必须存活到播放结束：PlaySoundW 立即返回后，winmm 的
+/// 内部播放线程稍后才按名打开文件——把路径缓冲挂在进程级常驻表里避免悬垂。
+/// 此前的实现把 Vec<u16> 放在局部变量、PlaySoundW 返回即 drop，竞速输了就是
+/// "第一次播放无声、多按几次才响"（内部线程冷启动越慢越容易输，机器 B 实测）。
+/// 候选音共 19 个枚举值，全量驻留 <4KB，永不回收即无任何竞态窗口。
+static LIVE_SOUND_PATHS: std::sync::LazyLock<std::sync::Mutex<Vec<Box<[u16]>>>> =
+    std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
 impl Platform for WindowsPlatform {
     fn node_exe_name(&self) -> &'static str {
         "node.exe"
@@ -145,13 +153,19 @@ impl Platform for WindowsPlatform {
                 format!("Sound file not found: {}", path.display()),
             ));
         }
+        // 把文件名缓冲挂进常驻表再取指针：表项的 Box<[u16]> 堆数据永不移位，
+        // 传入 PlaySoundW 的指针在整个播放期都有效
         let wide: Vec<u16> = path
             .as_os_str()
             .encode_wide()
             .chain(std::iter::once(0))
             .collect();
-        // SAFETY: wide 以 NUL 结尾且本调用期间存活；hmod 传 NULL（文件模式不需要模块句柄）
-        let ok = unsafe { PlaySoundW(wide.as_ptr(), std::ptr::null_mut(), SND_FILENAME | SND_ASYNC) };
+        LIVE_SOUND_PATHS.lock().unwrap().push(wide.into_boxed_slice());
+        let parked = LIVE_SOUND_PATHS.lock().unwrap();
+        let ptr = parked.last().unwrap().as_ptr();
+        // SAFETY: ptr 指向常驻表中的 NUL 结尾宽字符串，进程内永久存活；hmod 传
+        // NULL（文件模式不需要模块句柄）
+        let ok = unsafe { PlaySoundW(ptr, std::ptr::null_mut(), SND_FILENAME | SND_ASYNC) };
         if ok == 0 {
             Err(crate::i18n::pick("PlaySoundW 播放失败", "PlaySoundW playback failed").into())
         } else {

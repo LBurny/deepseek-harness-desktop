@@ -30,8 +30,9 @@ src-tauri/src/
                     父进程被强杀时内核连带回收整树，防孤儿锁 runtime）
   process.rs        DshProcess 监督循环：spawn node bin.js web --port N --no-open
                     （rc.8 起 openBrowser 默认 true，不带则额外弹系统浏览器）；
-                    PATH 前置 profile 的 node_modules/.bin（插件自带 CLI 按名可解析）；
-                    指数退避、stop/restart
+                    子进程 PATH 前置内嵌 node 目录（npx/npm/node 绑定运行时版本，
+                    MCP `npx` 命令不落系统旧 node——机器 B 实踩）+ profile 的
+                    node_modules/.bin（插件自带 CLI 按名可解析）；指数退避、stop/restart
   runtime.rs        ensure_runtime：安装目录可写则原地运行内嵌运行时，只读则回退部署
                     副本（.version 比对）；原地模式清理旧版 %LOCALAPPDATA% 部署副本
   port.rs           free_port（OS 分配空闲端口，有竞态窗口需重试）+ wait_ready

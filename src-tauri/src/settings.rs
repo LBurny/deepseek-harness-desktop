@@ -323,7 +323,8 @@ pub fn set_shell_settings(
 }
 
 /// 试听提示音：内置预设走 toast 音频属性；壳内置音效弹静音 toast
-/// 并由壳播放内置 wav（文件缺失降级系统默认预设）。
+/// 并由壳播放内置 wav（文件缺失降级系统默认预设）。每次点击落一行
+/// events.log（时间戳+路径+耗时+结果），与真实通知共用同一条播放路径。
 #[tauri::command]
 pub fn preview_completion_sound(
     app: tauri::AppHandle,
@@ -331,6 +332,7 @@ pub fn preview_completion_sound(
     sound: CompletionSound,
 ) -> Result<(), String> {
     use tauri_plugin_notification::NotificationExt;
+    let log = platform.runtime_base_dir().join("events.log");
     let mut builder = app
         .notification()
         .builder()
@@ -338,8 +340,29 @@ pub fn preview_completion_sound(
         .body(crate::i18n::pick("提示音试听", "Notification sound preview"));
     if let Some(rel) = sound.custom_wav() {
         match crate::resolve_custom_sound(&app, rel) {
-            Some(p) => platform.play_sound_file(&p)?,
-            None => builder = builder.sound("Default"),
+            Some(p) => {
+                let t0 = std::time::Instant::now();
+                let r = platform.play_sound_file(&p);
+                let ms = t0.elapsed().as_secs_f64() * 1000.0;
+                match &r {
+                    Ok(()) => crate::append_debug_line(
+                        &log,
+                        &format!("[{}] preview: {} ok ({ms:.0}ms)", crate::local_stamp(), p.display()),
+                    ),
+                    Err(e) => crate::append_debug_line(
+                        &log,
+                        &format!("[{}] preview: {} failed: {e} ({ms:.0}ms)", crate::local_stamp(), p.display()),
+                    ),
+                }
+                r?;
+            }
+            None => {
+                crate::append_debug_line(
+                    &log,
+                    &format!("[{}] preview: {} not found -> toast Default", crate::local_stamp(), rel),
+                );
+                builder = builder.sound("Default");
+            }
         }
     } else if let Some(name) = sound.toast_sound_name() {
         builder = builder.sound(name);

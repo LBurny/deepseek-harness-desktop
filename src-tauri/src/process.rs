@@ -137,12 +137,18 @@ impl DshProcess {
                 // 就是浏览器，必须抑制（否则每次启动额外弹浏览器标签页）
                 .arg(crate::upstream::DSH_NO_OPEN_FLAG)
                 .env("DSH_HOME", &self.inner.paths.home)
-                // 插件自带 CLI 装在 profile 的 node_modules/.bin（不在用户 PATH
-                // 上），前置进子进程 PATH 后会话终端/工具子进程才能按名解析——
-                // 否则装完 modlens 这类插件后在 dsh 终端敲不到它的命令。
+                // 子进程 PATH 前置两层：内嵌 node 目录（npx/npm/node 绑定运行时
+                // 自带版本——dsh 派生的 MCP 命令常以 `npx` 配置，运行时若不带
+                // npx.cmd 会落到系统 PATH 上的任意 node 版本，引擎不兼容即崩，
+                // 机器 B 系统全局 node v16 实测）+ profile 的 node_modules/.bin
+                //（插件自带 CLI 按名解析，否则装完 modlens 后终端敲不到）。
                 .env(
                     "PATH",
-                    dsh_child_path(&self.inner.paths.home, std::env::var_os("PATH")),
+                    dsh_child_path(
+                        self.inner.paths.node_exe.parent().unwrap_or(Path::new(".")),
+                        &self.inner.paths.home,
+                        std::env::var_os("PATH"),
+                    ),
                 )
                 .current_dir(&self.inner.paths.work_dir)
                 .stdout(Stdio::piped())
@@ -261,12 +267,13 @@ impl DshProcess {
     }
 }
 
-/// dsh 子进程的 PATH：把 profile 插件依赖的 .bin 目录前置为首项，其余项
-/// 原样保留。base 为父进程 PATH（None 表示未设置，结果只含 .bin 一项）。
-fn dsh_child_path(home: &Path, base: Option<OsString>) -> OsString {
+/// dsh 子进程的 PATH：内嵌 node 目录与 profile 插件的 .bin 目录前置为前两项
+/// （node 目录在前——npx/node 必须赢过系统 PATH 上的旧版本），其余项原样保留。
+/// base 为父进程 PATH（None 表示未设置，结果只含前两项）。
+fn dsh_child_path(node_dir: &Path, home: &Path, base: Option<OsString>) -> OsString {
     let profile = crate::upstream::join_segments(home, crate::upstream::PROFILE_DIR_SEGMENTS);
     let bin = crate::upstream::join_segments(&profile, crate::upstream::PROFILE_BIN_DIR_SEGMENTS);
-    let mut entries = vec![bin];
+    let mut entries = vec![node_dir.to_path_buf(), bin];
     if let Some(ref b) = base {
         entries.extend(std::env::split_paths(b));
     }
@@ -281,30 +288,49 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn child_path_prepends_profile_bin_and_preserves_base() {
-        // 插件自带 CLI（如 modlens）装在 <home>/profiles/web/node_modules/.bin，
-        // 不在用户 PATH 上；不前置则 dsh 会话终端里按名解析不到插件命令
-        // （实踩：装完 modlens 后在会话里敲 modlens 报"不是 cmdlet"，只能满路径调）。
+    fn child_path_prepends_node_dir_and_profile_bin_and_preserves_base() {
+        // 内嵌 node 目录必须最前：dsh 派生的 MCP 命令常以 `npx` 配置，若系统 PATH
+        // 上的旧 node 抢先解析（机器 B 全局 node v16 实测），引擎不兼容直接崩；
+        // profile .bin 次之：插件自带 CLI（如 modlens）按名解析依赖它
+        let node_dir = PathBuf::from(r"C:\app\runtime\windows-x64");
         let home = PathBuf::from(r"C:\dsh-home");
         let base = Some(OsString::from(r"C:\Windows;C:\Users\x\AppData\Roaming\npm"));
-        let out = dsh_child_path(&home, base);
+        let out = dsh_child_path(&node_dir, &home, base);
         let entries: Vec<PathBuf> = std::env::split_paths(&out).collect();
+        assert_eq!(entries[0], node_dir, "内嵌 node 目录必须是 PATH 首项，实际：{entries:?}");
         assert_eq!(
-            entries[0],
+            entries[1],
             home.join("profiles").join("web").join("node_modules").join(".bin"),
-            "profile 的 .bin 必须是 PATH 首项，实际：{entries:?}"
+            "profile 的 .bin 必须是 PATH 第二项，实际：{entries:?}"
         );
-        assert_eq!(entries[1], PathBuf::from(r"C:\Windows"), "原有 PATH 项须保留且顺序不变");
-        assert_eq!(entries[2], PathBuf::from(r"C:\Users\x\AppData\Roaming\npm"));
-        assert_eq!(entries.len(), 3);
+        assert_eq!(entries[2], PathBuf::from(r"C:\Windows"), "原有 PATH 项须保留且顺序不变");
+        assert_eq!(entries[3], PathBuf::from(r"C:\Users\x\AppData\Roaming\npm"));
+        assert_eq!(entries.len(), 4);
     }
 
     #[test]
-    fn child_path_without_base_is_just_profile_bin() {
+    fn child_path_without_base_is_node_dir_and_profile_bin() {
+        let node_dir = PathBuf::from(r"C:\app\runtime\windows-x64");
         let home = PathBuf::from(r"C:\dsh-home");
-        let out = dsh_child_path(&home, None);
+        let out = dsh_child_path(&node_dir, &home, None);
         let entries: Vec<PathBuf> = std::env::split_paths(&out).collect();
-        assert_eq!(entries.len(), 1);
-        assert!(entries[0].ends_with(".bin"), "实际：{entries:?}");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0], node_dir, "实际：{entries:?}");
+        assert!(entries[1].ends_with(".bin"), "实际：{entries:?}");
+    }
+
+    #[test]
+    fn runtime_ships_npx_and_npm_for_mcp_servers() {
+        // 运行时必须自带 npm/npx（fetch-runtime 从 node 发行包拷出）：dsh 派生的
+        // MCP server 常以 `npx ...` 配置，子进程 PATH 前置了内嵌 node 目录，缺
+        // npx.cmd 就会退回系统 PATH 的任意 node 版本，引擎不兼容即崩（机器 B
+        // 全局 node v16 实测）。fixture/dev 流程可能没有暂存运行时，缺席即跳过。
+        let rt = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/runtime/windows-x64"));
+        if !rt.is_dir() {
+            return;
+        }
+        assert!(rt.join("npx.cmd").is_file(), "运行时缺 npx.cmd，MCP `npx` 会落到系统旧 node（实际：{rt:?}）");
+        assert!(rt.join("npm.cmd").is_file());
+        assert!(rt.join("node_modules/npm/bin/npx-cli.js").is_file());
     }
 }
