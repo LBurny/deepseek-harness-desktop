@@ -30,7 +30,7 @@ if (-not (Test-Path $npxCmd)) {
     Invoke-WebRequest -Uri "https://nodejs.org/dist/v$NodeVersion/node-v$NodeVersion-win-x64.zip" -OutFile $zip
   }
   $tar = Join-Path $env:WINDIR 'system32\tar.exe'
-  & $tar -xf $zip -C $env:TEMP "node-v$NodeVersion-win-x64/npm.cmd" "node-v$NodeVersion-win-x64/npx.cmd" "node-v$NodeVersion-win-x64/node_modules/npm"
+  & $tar -xf $zip -C $env:TEMP "node-v$NodeVersion-win-x64/node.exe" "node-v$NodeVersion-win-x64/npm.cmd" "node-v$NodeVersion-win-x64/npx.cmd" "node-v$NodeVersion-win-x64/node_modules/npm"
   if ($LASTEXITCODE -ne 0) { throw "node zip 解包 npm/npx 失败" }
   $dist = Join-Path $env:TEMP "node-v$NodeVersion-win-x64"
   Copy-Item (Join-Path $dist 'node.exe') (Join-Path $dest 'node.exe') -Force
