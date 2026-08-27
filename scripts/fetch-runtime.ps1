@@ -52,7 +52,7 @@ if ($LASTEXITCODE -ne 0) { throw 'cloudflared.exe --version 冒烟失败' }
 # 3. dsh npm 包（预装生产依赖）
 $dshDir = Join-Path $dest 'dsh'
 Write-Host "安装 @deepseek-ai/dsh@$DshVersion ..."
-npm install --prefix $dshDir --omit=dev "@deepseek-ai/dsh@$DshVersion"
+npm install --prefix $dshDir --omit=dev --no-audit --no-fund "@deepseek-ai/dsh@$DshVersion"
 if ($LASTEXITCODE -ne 0) { throw 'npm install 失败' }
 
 # 4. 冒烟：--help 可执行

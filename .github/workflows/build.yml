@@ -1,8 +1,8 @@
 name: build
 
+# 分支构建检查 + 手动触发。v* 标签的构建发布由 release.yml 负责（同链路重复且
+# 会与 release 撞出双红/双绿噪音），不再在 tag 上跑。
 on:
-  push:
-    tags: ["v*"]
   workflow_dispatch:
 
 jobs:
@@ -42,7 +42,24 @@ jobs:
       - name: Install frontend deps
         run: pnpm install --frozen-lockfile
 
+      # 运行时按 dsh 版本+脚本哈希缓存（与 release.yml 同 key），命中跳过 npm install
+      - name: Compute runtime cache key
+        id: rtkey
+        shell: pwsh
+        run: |
+          $dsh = (Select-String -Path scripts/fetch-runtime.ps1 -Pattern "DshVersion\s*=\s*'([^']+)'").Matches[0].Groups[1].Value
+          $hash = (Get-FileHash scripts/fetch-runtime.ps1, scripts/prune-runtime.ps1 -Algorithm SHA256 | ForEach-Object { $_.Hash.Substring(0, 8) }) -join '-'
+          "key=rt-$dsh-$hash" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding ascii
+
+      - name: Restore bundled runtime cache
+        id: rtcache
+        uses: actions/cache@v4
+        with:
+          path: src-tauri/runtime/windows-x64
+          key: ${{ steps.rtkey.outputs.key }}
+
       - name: Fetch bundled runtime (node + dsh)
+        if: steps.rtcache.outputs.cache-hit != 'true'
         shell: pwsh
         run: ./scripts/fetch-runtime.ps1
 
