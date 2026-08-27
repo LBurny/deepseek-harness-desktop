@@ -123,6 +123,18 @@ powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch] 
 powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版→安装→启动→全项校验→截图
 ```
 
+## 版本与发布
+
+- **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
+  `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.4.0，下一版 0.4.1。
+- **发版步骤**：bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）
+  → CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` +
+  `acceptance.ps1` 全过 → commit → `git tag v0.y.z` 推送 → `release.yml`（CI 跑测试门禁→
+  构建→发 Release，资产 *_x64-setup.exe + sha256）。github 直连被拦时 push 走 §GitHub 访问的代理。
+- CI 的 release 链路有**运行时缓存**（key=`rt-<dsh版本>-<fetch/prune脚本哈希>`）：dsh 版本
+  不变则跳过 ~20 分钟的 npm install；想强制重拉就换 dsh 版本或改脚本（key 自动失效）。
+
 ## GitHub 访问
 
 - 仓库 **已转私有**：`LBurny/deepseek-harness-desktop`（origin 指向它）
