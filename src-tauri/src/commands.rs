@@ -45,7 +45,7 @@ pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
         .parent()
         .unwrap_or(std::path::Path::new("."))
         .join("events.log");
-    crate::diagnostics::read_log_tail(&log, 500)
+    crate::diagnostics::read_log_tail(&log, crate::diagnostics::LOG_TAIL_LINES)
 }
 
 #[tauri::command]
