@@ -5,7 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.1] - 2026-08-27
+
+### Added
+
+- Fourth notification rule "回答完成" (Reply completed): turn completions now split by whether the turn did real work — a turn with tool calls (`tool/call` between `turn/start` and `turn/end`) reports 任务完成 under the existing `notify.turn_done` rule (toast body 「title」任务完成), while a pure text-only reply reports 回答完成 under the new `notify.answer_done` rule (toast body 「title」回答完成). Each rule has its own enabled/timing, so e.g. per-reply reminders can be set to "always" while work-task completions stay background-only. Existing settings files without the `answer_done` key fall back to the default (on + background) via serde default; the `turn_done` key name is unchanged so user tweaks survive
+
+### Fixed
+
+- Notifications were often soundless or missing entirely. Soundless: approval/question toasts were deliberately silent by design, yet those are exactly the moments dsh sits blocked waiting for the user — all four notification kinds now play the configured sound (the sound row's disable condition is now "all four rules off" instead of tied to 任务完成). Missing toasts had three stacked causes, all addressed: (1) suppressed notifications and `builder.show()` failures were swallowed silently — both now leave a line in events.log (`Notify suppressed: … foreground=…` / `toast show failed: …`); (2) a half-open loopback WebSocket left `stream.next()` hanging forever with no reconnect — WsSource now sends an idle Ping after 60s of silence and force-reconnects if nothing (including Pong) arrives within 30s; (3) the foreground gating itself is unchanged (a focused shell window still suppresses background-timed notifications — set the rule's timing to 总是提醒 to override)
+- WS source previously treated any inbound non-text frame (server Ping, Pong) as a dead connection and needlessly reconnected; such frames now just reset the idle watchdog
 
 ## [0.4.0] - 2026-08-27
 

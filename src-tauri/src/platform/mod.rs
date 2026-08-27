@@ -24,7 +24,7 @@ pub trait Platform: Send + Sync {
     fn system_dark_mode(&self) -> bool;
     /// 系统 UI 语言是否中文（dsh locale.preference 缺省时用来解析，对齐 dsh 的"跟随浏览器"）
     fn system_prefers_chinese(&self) -> bool;
-    /// 异步播放一个 wav 文件（柔和完成提示音）；文件不存在/播放失败返回 Err
+    /// 异步播放一个 wav 文件（柔和通知提示音，全部通知类型共用）；文件不存在/播放失败返回 Err
     fn play_sound_file(&self, path: &Path) -> Result<(), String>;
 }
 

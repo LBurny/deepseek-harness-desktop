@@ -139,22 +139,24 @@ Failed（不再自动重启，前端/托盘可手动 restart）
 dsh WS /api/events.mux ──▶ WsSource(mux) ──▶ handle_mux_frame ──┐
 dsh WS /api/events.host ─▶ WsSource(host) ─▶ handle_host_frame ─▶ SessionBook
 （两端点共用 WsSource：断线 5s 重连、端口经 watch 跟随重启换端口；   │（子代理集合
- host 重连先 clear_subagents——基线不可知，fail-open）              │ + 会话标题）
+ host 重连先 clear_subagents——基线不可知，fail-open；              │ + 会话标题
+ 空闲 Ping + Pong 超时看门狗：回环半开连接假死时强制重连，          │ + 当前回合
+ 否则 stream.next() 永久挂起=从此再无通知）                         │   是否干过活）
                                                                 ▼
-                                              NotifySink：窗口聚焦态 + 壳设置三类规则 → toast
+                                              NotifySink：窗口聚焦态 + 壳设置四类规则 → toast
 ```
 
 - dsh 的事件帧：`{"type":"server-request","method":<payload.type>,"payload":{...}}`，mux/host 两端点同构（仅 WS；GET 返回 426）。
-- mux 流三类放行：
-  - `approval/requested` / `question/requested`（待批准/待回答，regex 粗筛）→ **Approval** / **Question** 通知（静音 toast，分别按 `notify.approval` / `notify.question` 规则门控）。
-  - `session/event` 且 `event.type=="turn/end"` 且 `data.reason.kind=="completed"` → **TurnCompleted** 通知（可带提示音）；aborted/error/blocked/max-tokens 一律忽略。
-  - `session/event` 且 `event.type=="session/title"` → 记入 SessionBook，完成通知正文带「会话标题」（无标题回退"dsh 回答完成"）。
+- mux 流放行：
+  - `approval/requested` / `question/requested`（待批准/待回答，regex 粗筛）→ **Approval** / **Question** 通知（分别按 `notify.approval` / `notify.question` 规则门控）。
+  - `session/event` 且 `event.type=="turn/end"` 且 `data.reason.kind=="completed"` → 按"回合内是否干过活"（SessionBook 的 worked 痕迹：`turn/start` 清零、`tool/call` 置位）拆成 **TaskCompleted**（干过活，正文「标题」任务完成）与 **AnswerCompleted**（纯文字回答，正文「标题」回答完成），分别按 `notify.turn_done` / `notify.answer_done` 规则门控；aborted/error/blocked/max-tokens 一律忽略（任务出错暂不提醒）。
+  - `session/event` 且 `event.type=="session/title"` → 记入 SessionBook，完成通知正文带「会话标题」（无标题回退"dsh 任务完成"/"dsh 回答完成"）。
 - **两段式过滤**：先字符串 contains 粗筛、命中才 JSON 解析——流式期间每个 token chunk 都是一帧 `session/event`，不能逢帧解析。
 - **子代理过滤**：mux 帧不含 origin；host 流的 `host/session-added`（`origin=="subagent"`）/ `host/session-removed` 维护子代理集合，命中的 turn/end 直接丢弃。子代理必然创建于 WS 连接之后（先创建再跑回合），时序天然安全；host 流不推基线，重连后集合清空（宁多弹一条，不漏弹）。
 - dsh 的浏览器信任栅栏允许 loopback + 无 Origin 的请求，Rust 客户端天然满足。
 - **适配层是有意为之**：`NotifySource` trait 隔离上游不稳定的接口，将来可加 `FileWatchSource`（解析 session jsonl）等替代实现。
-- sink 弹通知前按类型查 `NotifyRule::allows(foreground)` 门控：**前台 = 本应用任一窗口（main/settings/diagnostics/skills/mcp/remote）处于聚焦态**（主窗口可见但失焦 = 用户已切走，算后台）；正在前台操作时不打扰，后台运行才弹（timing=always 的类型除外）。弹前写一行 `Notify: {kind} {body}` 到 events.log（通知链路的现场诊断抓手）。
-- **通知提醒设置**（settings.json）：`notify.{approval,question,turn_done}` 三条规则，各为 `{enabled, timing}`——timing ∈ `background`（默认，仅无聚焦窗口时提醒）/ `always`（前台也提醒），三类默认均开。旧版 `notify_on_completion` 布尔在 load 时迁移进 `notify.turn_done.enabled`（读后即弃，保存时不再写出）。`completion_sound`（`silent`/`default` + 17 个壳内置音效 `bip-bop-01..10`/`staplebops-01..07`（音源 opencode，wav 落 resources/sounds/），默认 `staplebops-02`）只作用于 TurnCompleted。`default` 透传 toast 音频预设（`ms-winsoundevent:Notification.Default`，系统内置、不受用户声音方案影响；不传 sound 则 toast 静音——Approval/Question 类即如此），其余 17 音由壳用 PlaySoundW 播内置 wav（toast 静音）。旧具名音（im/mail/reminder/sms/chime/drop/mellow，≤0.1.x）经 serde alias 迁移：前四→`default`，后三→`staplebops-02`——load() 对解析失败整份回退默认，alias 保住老用户其余设置。试听走 `preview_completion_sound` 命令，弹一条带所选音效的 toast（音效是 toast 的属性，只能连通知一起听）。
+- sink 弹通知前按类型查 `NotifyRule::allows(foreground)` 门控：**前台 = 本应用任一窗口（main/settings/diagnostics/skills/mcp/remote）处于聚焦态**（主窗口可见但失焦 = 用户已切走，算后台）；正在前台操作时不打扰，后台运行才弹（timing=always 的类型除外）。**被抑制的也写一行 `Notify suppressed: {kind} foreground={bool}` 到 events.log**（否则"没提醒"无从排查）；弹出的写 `Notify: {kind} {body}`；`builder.show()` 失败（WinRT 被系统策略拦截等）写 `toast show failed: {e}`——三个都是通知链路的现场诊断抓手。
+- **通知提醒设置**（settings.json）：`notify.{approval,question,turn_done,answer_done}` 四条规则，各为 `{enabled, timing}`——timing ∈ `background`（默认，仅无聚焦窗口时提醒）/ `always`（前台也提醒），四类默认均开。旧版 `notify_on_completion` 布尔在 load 时迁移进 `notify.turn_done.enabled`（读后即弃，保存时不再写出）；0.4.x 及以前的配置文件没有 `answer_done` 键，serde default 补齐为默认开+仅后台。`completion_sound`（`silent`/`default` + 17 个壳内置音效 `bip-bop-01..10`/`staplebops-01..07`（音源 opencode，wav 落 resources/sounds/），默认 `staplebops-02`）作用于**全部四类**（dsh 卡住等用户输入时静音提醒等于没提醒，自本版起 Approval/Question 也带声）。`default` 透传 toast 音频预设（`ms-winsoundevent:Notification.Default`，系统内置、不受用户声音方案影响），其余 17 音由壳用 PlaySoundW 播内置 wav（toast 静音）。旧具名音（im/mail/reminder/sms/chime/drop/mellow，≤0.1.x）经 serde alias 迁移：前四→`default`，后三→`staplebops-02`——load() 对解析失败整份回退默认，alias 保住老用户其余设置。试听走 `preview_completion_sound` 命令，弹一条带所选音效的 toast（音效是 toast 的属性，只能连通知一起听）。
 
 ## 8. 主题与语言跟随
 
@@ -178,7 +180,7 @@ dsh WS /api/events.host ─▶ WsSource(host) ─▶ handle_host_frame ─▶ Se
 
 - `#/`（默认）**Splash.svelte**：启动画面。onMount 先 `invoke('get_bootstrap_error')` 主动查引导错误、`invoke('is_first_launch')` 查首启标记，再 listen 结构化的 `dsh-progress`。**首启时**显示分阶段进度条（百分比数字 + 阶段清单 ✓/●/○）与"首次启动需要部署运行时，可能要花几分钟"提示（仅此分支渲染，后续启动不出现）：runtime/starting 阶段百分比由后端给下限，`starting` 期间前端向 95% 渐近缓动（dsh 无细分进度信号，缓动只是呈现层，永不触顶），`ready` 到 100%。**非首启**维持纯文字 + 不确定滚动条。dsh 就绪后由 **Rust 侧**把主窗口 navigate 到 dsh UI——前端不自己跳。
 - `#/diagnostics` **Diagnostics.svelte**：诊断面板（状态/端口/PID/版本、500 行实时日志回填 + `dsh-log` 事件流、重启按钮、开机自启开关）。
-- `#/settings` **Settings.svelte**：其它设置（开机自启、关窗行为单选、三类通知提醒——任务确认/选项选择/回答完毕，各带启用勾选 + 仅后台时/总是时机下拉，回答完毕行关联完成提示音与试听、缩放步进 1%–25%、放大/缩小快捷键录制器）。保存时前端先校验（至少一个修饰键、in/out 不冲突），再 `invoke('set_shell_settings', { next })` 由 Rust 端复验并落盘。
+- `#/settings` **Settings.svelte**：其它设置（开机自启、关窗行为单选、四类通知提醒——任务确认/选项选择/任务完成/回答完成，各带启用勾选 + 仅后台时/总是时机下拉，提示音选择与试听独立成行、四类全关才禁用、缩放步进 1%–25%、放大/缩小快捷键录制器）。保存时前端先校验（至少一个修饰键、in/out 不冲突），再 `invoke('set_shell_settings', { next })` 由 Rust 端复验并落盘。
 - `#/skills` **Skills.svelte**：技能管理。数据源是**壳注入给 dsh 的 DSH_HOME**（`<runtime_base>/dsh-home`，不是 `~/.dsh`）：`skills/` 为启用、旁路 `skills-disabled/` 为停用（dsh 的技能发现只认根目录直属条目、无原生禁用概念；移出根目录即停用，watcher 观察到变化后热刷新 catalog，无需重启）。导入从三个外部 agent 的用户级源复制目录：Codex `~/.codex/skills`、Claude Code `~/.claude/skills`、OpenCode `~/.config/opencode/skills`；同名冲突逐个选覆盖/跳过（覆盖会同时清掉禁用目录里的旧副本）。**独立 dsh 的默认目录 `~/.dsh/skills` 不作为导入源**——壳就是 dsh，启动时自动扫描它并补入新技能（`skills::seed_from_default_dsh_home`；`.skills-seeded` marker 记录已见名字，壳里删掉的不会复活）。删除只删 home 内副本，不动源目录。还可本地导入 ZIP 压缩包（`inspect_zip_skills`/`import_zip_skills`）：自动识别两种布局——包根直接含 SKILL.md（名字取 frontmatter name，缺失回退 zip 文件名）或顶层若干技能文件夹各含 SKILL.md；解包剥掉顶层前缀，条目路径经 enclosed_name 过滤防 zip-slip，另有 1 万条目/256MB 上限防 zip 炸弹；冲突语义与目录导入一致（跳过/覆盖，覆盖清两侧）。Rust 侧 `skills.rs` 的 frontmatter 解析只取单行键，行上操作均以目录名为准。
 - `#/plugins` **Plugins.svelte**：插件管理（npm/cordis 插件的图形化装/卸/更新，详见 §18）。
 - `#/mcp` **Mcp.svelte**：MCP server 管理（列表/启停/删除/新增/编辑 + 导入）。dsh 没有独立的 mcp.json——MCP server 是 Cordis 插件补丁，壳读写 `<dsh-home>/profiles/web/cordis.patch.yml` 中 `name == '@deepseek-ai/dsh-mcp-client'` 的 insert 条目（只动这些条目，其余 Value 级保留；tmp+rename 原子写；读前剥 BOM）。dsh 的 HMR（`watchUserPatches` + chokidar）监听该文件，改后自动 disconnect+reconnect，**无需重启**。启停 = entry 上加/去 `disabled: true`（cordis-plugin-loader 原生语义，disabled 的 entry 不起 fiber）。编辑以旧 config 为底、只覆盖表单字段，`toolCallTimeoutMs`/`reconnect.*` 等高级键保留；transport 只有 `stdio`（command/args/env/cwd）与 `streamable-http`（url/headers）两种，sse 不支持。启动时种子同步 `~/.dsh` 两层 patch 里的 MCP 条目（`mcp::seed_from_default_dsh_home`，`.mcp-seeded` marker 防复活；源里 disabled 的不同步也不记 marker，日后在 ~/.dsh 启用时仍能进来）。手动导入三源：Claude Code `~/.claude.json` 的 `mcpServers`（stdio/http 映射，sse 标记"不支持"跳过）、Codex `~/.codex/config.toml` 的 `[mcp_servers.*]`（`enabled=false` 不列出）、OpenCode `~/.config/opencode/opencode.json` 的 `mcp` 段（local/remote 映射）；冲突逐个覆盖/跳过。patch 文件解析失败（如含无法处理的语法）时页面降级为只读并提示手工编辑。
@@ -197,7 +199,7 @@ IPC 命令：commands.rs 8 个——`get_shell_ui_state` / `get_status` / `resta
 
 壳设置（settings.rs）：
 
-- **模型**：`settings.json` 存 `zoom_step`（0.01–0.25，越界 clamp）、`zoom_in`/`zoom_out` 快捷键（`{ctrl, shift, alt, code, key}`）、`close_behavior`（`background`/`quit`）、`notify`（`{approval, question, turn_done}` 三条 `{enabled, timing}` 规则，默认全开、仅后台时提醒；旧版 `notify_on_completion` 布尔读取时迁移进 `notify.turn_done.enabled`，保存时不再写出）、`completion_sound`（`silent`/`default` + 17 个内置音效 `bip-bop-01..10`/`staplebops-01..07`，默认 `staplebops-02`；旧具名音 im/mail/reminder/sms→`default`、chime/drop/mellow→`staplebops-02` 经 serde alias 迁移）。缺失/损坏 → 全默认；部分字段缺失 → 逐字段回退默认（serde default）；校验失败（无修饰键/in-out 冲突）→ 全默认，不带坏状态跑。
+- **模型**：`settings.json` 存 `zoom_step`（0.01–0.25，越界 clamp）、`zoom_in`/`zoom_out` 快捷键（`{ctrl, shift, alt, code, key}`）、`close_behavior`（`background`/`quit`）、`notify`（`{approval, question, turn_done, answer_done}` 四条 `{enabled, timing}` 规则，默认全开、仅后台时提醒（0.4.x 配置无 answer_done 键，serde default 补齐）；旧版 `notify_on_completion` 布尔读取时迁移进 `notify.turn_done.enabled`，保存时不再写出）、`completion_sound`（`silent`/`default` + 17 个内置音效 `bip-bop-01..10`/`staplebops-01..07`，默认 `staplebops-02`；旧具名音 im/mail/reminder/sms→`default`、chime/drop/mellow→`staplebops-02` 经 serde alias 迁移）。缺失/损坏 → 全默认；部分字段缺失 → 逐字段回退默认（serde default）；校验失败（无修饰键/in-out 冲突）→ 全默认，不带坏状态跑。
 - **SettingsState**：托管内存值 + 持久化目录；`set` 先 clamp/校验再落盘再替换内存，校验或落盘失败则内存磁盘都保持旧值（落盘失败显式报"设置写入失败： …"——静默吞掉会让用户看到保存成功/无关报错而重启后回退，无法定位环境阻断）。
 - **set_autostart 的幂等防御**：每次保存设置都会调 `set_autostart`，而 auto-launch 0.5 的 `disable()` 无条件 `RegDeleteValueW`——Run 值不存在时返回 `ERROR_FILE_NOT_FOUND`，从未开过自启动的用户每次保存都弹"系统找不到指定的文件。 (os error 2)"。命令先 `is_enabled()` 比对目标态，已达成即 Ok（顺带避免每次保存重写注册表）；commands.rs 有锚定测试钉住上游行为，上游改幂等后可简化。
 - **保存即生效**：`set_shell_settings` 成功后对主窗口重注入缩放钩子（快捷键定义内嵌在脚本里必须重注入）；步进不写死在脚本里，`zoom_ui` 调用时从设置读，改步进本来就无需重注入。
@@ -277,7 +279,7 @@ scripts/fetch-runtime.ps1
 ## 13. 已知限制与后续路线
 
 - **Win10 深色标题栏聚焦纯黑**：系统行为，见 §8。路线：无边框 + 自绘标题栏（需处理 Win10 贴边分屏），暂缓。
-- **通知覆盖**：approval/question + 回合正常完成（turn/end/completed，可带提示音）；任务出错（kind==error）暂不提醒。子代理过滤依赖 events.host 增量帧，host 重连窗口期内可能多弹一条（fail-open）。其余事件类型待 dsh 上游接口稳定后再扩。
+- **通知覆盖**：approval/question + 回合正常完成拆两路（turn/end/completed，回合内有 tool/call→任务完成/turn_done，纯文字→回答完成/answer_done，全部带提示音）；任务出错（kind==error）暂不提醒。子代理过滤依赖 events.host 增量帧，host 重连窗口期内可能多弹一条（fail-open）；mux 重连后 dsh 会重推仍未决的 approval/question，极小概率同一条提醒弹两次。其余事件类型待 dsh 上游接口稳定后再扩。
 - **dsh 版本固定**：随应用版本钉死（fetch-runtime 的 `-DshVersion`），dsh 升级 = 发新版应用（跟版流程见 §14）。将来可考虑应用内自选 dsh 通道。
 - **UI 缩放只作用于主窗口**：诊断/设置窗口不注入钩子、不应用缩放值；快捷键与步进均可在"其它设置"中自定义。
 - **fs-local 列目录遇 ACL 拒绝项即整列失败**：上游行为——列举目录时逐个子项解析，任一子项权限被拒（如 `C:\\` 根目录的 `DumpStack.log`、`C:\\Users` 下他人配置目录）整个列表报 `cannot list ...: permission denied`。Windows 上列系统盘根目录必现。壳侧不修它，缓解是让模型知道并待在自己的 workspace（极简模式的 persona 已补工作目录事实）。
@@ -326,7 +328,7 @@ scripts/fetch-runtime.ps1
 | Web 命令 | `bin.js web --port <N> --no-open`，仅绑 127.0.0.1；`--no-open` 抑制系统浏览器弹出（dsh-web-app rc.8 起 openBrowser 默认 true） |
 | 内测声明 | `dsh-client-ui-settings-models/lib/client.js` 的 welcome notice：`settings.yaml` 的 `ui-onboarding.welcomeNoticeVersion` ≠ 文案版本（如 `2026-08-13.1`，从 client.js 提取）时每次启动弹窗 → 壳 welcome.rs 启动期预写豁免 |
 | 事件通道 | WebSocket `/api/events.mux` + `/api/events.host`（GET → 426，仅 WS） |
-| 事件帧 | `{"type":"server-request","method":<payload.type>,"payload":{...}}`；完成判定用 `session/event` 里的 `turn/end`（`data.reason.kind`），子代理标记用 `host/session-added` 的 `origin` |
+| 事件帧 | `{"type":"server-request","method":<payload.type>,"payload":{...}}`；完成判定用 `session/event` 里的 `turn/end`（`data.reason.kind`，实测 kind ∈ completed/error/aborted），回合结构 `turn/start`→(`tool/call` 每次工具调用一帧)→`turn/end`（壳据此拆任务完成/回答完成），子代理标记用 `host/session-added` 的 `origin` |
 | 设置文件 | `$DSH_HOME/settings.yaml` → `ui-theme.preference: light\|dark\|system` |
 | 信任栅栏 | 允许 loopback + 无 Origin 的 WS 连接 |
 | Agent 预设 | `config/agent-presets/{minimal,standard,code,cordis}`；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵） |

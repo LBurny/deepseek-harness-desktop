@@ -43,8 +43,9 @@ pub enum CloseBehavior {
 /// Windows 系统内置，不依赖用户声音方案）；Silent = 不传 sound，toast 静音。
 /// 其余 17 个是壳内置音效（resources/sounds/*.wav，音源 opencode）：
 /// toast 静音，由壳用 PlaySoundW 异步播放（见 platform::Platform::play_sound_file）。
-/// serde 值与 wav 文件名 stem 一致；旧具名音（≤0.1.x）经 alias 迁移——
-/// load() 对解析失败整份回退默认，没有 alias 老用户会丢其余全部设置。
+/// 该音效作用于全部四类通知（含任务确认/选项选择——dsh 卡住等用户输入，
+/// 静音提醒等于没提醒）；serde 值与 wav 文件名 stem 一致；旧具名音（≤0.1.x）
+/// 经 alias 迁移——load() 对解析失败整份回退默认，没有 alias 老用户会丢其余全部设置。
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default)]
 pub enum CompletionSound {
     #[serde(rename = "silent")]
@@ -157,13 +158,16 @@ impl NotifyRule {
     }
 }
 
-/// 三类通知的独立规则：待批准 / 待回答 / 回答完毕（任务完成）
+/// 四类通知的独立规则：待批准 / 待回答 / 任务完成 / 回答完成
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq)]
 #[serde(default)]
 pub struct NotifySettings {
     pub approval: NotifyRule,
     pub question: NotifyRule,
+    /// 干活回合完成（回合内有过 tool/call）；键名沿用历史 turn_done
     pub turn_done: NotifyRule,
+    /// 纯回答回合完成（无工具调用）
+    pub answer_done: NotifyRule,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -318,7 +322,7 @@ pub fn set_shell_settings(
     Ok(())
 }
 
-/// 试听任务完成提示音：内置预设走 toast 音频属性；壳内置音效弹静音 toast
+/// 试听提示音：内置预设走 toast 音频属性；壳内置音效弹静音 toast
 /// 并由壳播放内置 wav（文件缺失降级系统默认预设）。
 #[tauri::command]
 pub fn preview_completion_sound(
@@ -331,7 +335,7 @@ pub fn preview_completion_sound(
         .notification()
         .builder()
         .title("DSHDesktop")
-        .body(crate::i18n::pick("任务完成提示音试听", "Completion sound preview"));
+        .body(crate::i18n::pick("提示音试听", "Notification sound preview"));
     if let Some(rel) = sound.custom_wav() {
         match crate::resolve_custom_sound(&app, rel) {
             Some(p) => platform.play_sound_file(&p)?,
@@ -450,10 +454,31 @@ mod tests {
     #[test]
     fn notify_settings_defaults() {
         let s = ShellSettings::default();
-        for rule in [s.notify.approval, s.notify.question, s.notify.turn_done] {
+        for rule in [s.notify.approval, s.notify.question, s.notify.turn_done, s.notify.answer_done] {
             assert!(rule.enabled);
             assert_eq!(rule.timing, NotifyTiming::Background);
         }
+    }
+
+    #[test]
+    fn old_settings_without_answer_done_field_loads_default_rule() {
+        // 旧版文件没有 answer_done（≤0.4.x）：serde default 补齐为默认开 + 仅后台，
+        // 其余已有规则（用户改过的开关/时机）不受影响
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("settings.json"),
+            r#"{ "notify": { "turn_done": { "enabled": false, "timing": "always" } } }"#,
+        )
+        .unwrap();
+        let s = ShellSettings::load(dir.path());
+        assert!(!s.notify.turn_done.enabled);
+        assert_eq!(s.notify.turn_done.timing, NotifyTiming::Always);
+        assert!(s.notify.answer_done.enabled, "新规则回退默认开");
+        assert_eq!(s.notify.answer_done.timing, NotifyTiming::Background);
+        // 保存后新键落盘
+        s.save(dir.path()).unwrap();
+        let text = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
+        assert!(text.contains(r#""answer_done""#), "实际文件：{text}");
     }
 
     #[test]

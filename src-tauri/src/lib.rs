@@ -207,48 +207,46 @@ pub fn run() {
                     .try_state::<settings::SettingsState>()
                     .map(|s| s.get())
                     .unwrap_or_default();
+                // 各类型按自己的规则门控；被抑制的也记一行（现场诊断"没提醒"的抓手：
+                // 之前静默 return，日志里完全看不到）
+                let allowed = match n.kind {
+                    notify::NotifyKind::Approval => settings.notify.approval.allows(foreground),
+                    notify::NotifyKind::Question => settings.notify.question.allows(foreground),
+                    notify::NotifyKind::TaskCompleted => settings.notify.turn_done.allows(foreground),
+                    notify::NotifyKind::AnswerCompleted => settings.notify.answer_done.allows(foreground),
+                };
+                if !allowed {
+                    append_debug_line(
+                        &notify_log,
+                        &format!("Notify suppressed: {:?} foreground={foreground}", n.kind),
+                    );
+                    return;
+                }
                 let mut builder = sink_handle
                     .notification()
                     .builder()
                     .title(n.title)
                     .body(n.body.clone());
-                match n.kind {
-                    // 待批准/待回答：静音 toast，各自的开关与时机
-                    notify::NotifyKind::Approval => {
-                        if !settings.notify.approval.allows(foreground) {
-                            return;
-                        }
-                    }
-                    notify::NotifyKind::Question => {
-                        if !settings.notify.question.allows(foreground) {
-                            return;
-                        }
-                    }
-                    notify::NotifyKind::TurnCompleted => {
-                        if !settings.notify.turn_done.allows(foreground) {
-                            return;
-                        }
-                        if let Some(rel) = settings.completion_sound.custom_wav() {
-                            // 柔和自定义音：静音 toast + 播放内置 wav；
-                            // 文件缺失（如 dev 未拷贝资源）降级为系统默认预设
-                            match resolve_custom_sound(&sink_handle, rel) {
-                                Some(p) => {
-                                    if let Err(e) = sink_platform.play_sound_file(&p) {
-                                        append_debug_line(
-                                            &notify_log,
-                                            &format!("play sound failed: {e}"),
-                                        );
-                                    }
-                                }
-                                None => builder = builder.sound("Default"),
+                // 全部通知统一挂提示音（含任务确认/选项选择——dsh 卡住等用户输入时
+                // 静音提醒等于没提醒）。柔和自定义音：静音 toast + 播放内置 wav；
+                // 文件缺失（如 dev 未拷贝资源）降级为系统默认预设
+                if let Some(rel) = settings.completion_sound.custom_wav() {
+                    match resolve_custom_sound(&sink_handle, rel) {
+                        Some(p) => {
+                            if let Err(e) = sink_platform.play_sound_file(&p) {
+                                append_debug_line(&notify_log, &format!("play sound failed: {e}"));
                             }
-                        } else if let Some(name) = settings.completion_sound.toast_sound_name() {
-                            builder = builder.sound(name);
                         }
+                        None => builder = builder.sound("Default"),
                     }
+                } else if let Some(name) = settings.completion_sound.toast_sound_name() {
+                    builder = builder.sound(name);
                 }
                 append_debug_line(&notify_log, &format!("Notify: {:?} {}", n.kind, n.body));
-                let _ = builder.show();
+                // show 失败不再静默吞（WinRT 通知被系统策略拦下时至少留痕可查）
+                if let Err(e) = builder.show() {
+                    append_debug_line(&notify_log, &format!("toast show failed: {e}"));
+                }
             });
             // mux（会话事件 → 通知/标题）+ host（子代理标记）双下行流，共享 SessionBook
             let book = Arc::new(std::sync::Mutex::new(notify::SessionBook::default()));

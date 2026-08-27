@@ -108,16 +108,18 @@ async fn ws_source_receives_filtered_events() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn turn_completed_notifies_and_filters_subagent() {
+async fn turn_completion_notifies_and_filters_subagent() {
     let port = free_port().unwrap();
     let work = tempfile::tempdir().unwrap();
     let mut child = spawn_fixture(port, work.path());
     let (_tx, collected) = spawn_sources(port);
 
-    // fixture 每 2s 一轮：fx-main 完成 + fx-main aborted + fx-sub(子代理) 完成
+    // fixture 每 2s 一轮：主会话干活回合(tool/call→completed)=任务完成
+    // + 主会话纯回答回合(completed)=回答完成 + 主会话 aborted(静默)
+    // + 子代理完成(过滤)
     let got = wait_for(&collected, Duration::from_secs(15), |list| {
         list.iter()
-            .any(|n| matches!(n.kind, NotifyKind::TurnCompleted))
+            .any(|n| matches!(n.kind, NotifyKind::TaskCompleted | NotifyKind::AnswerCompleted))
     })
     .await;
     // 再等两轮多，收集足够样本检查漏判/误判
@@ -125,15 +127,24 @@ async fn turn_completed_notifies_and_filters_subagent() {
 
     let _ = child.kill();
     let list = collected.lock().unwrap();
-    assert!(got, "15s 内未收到任务完成通知，实际：{:?}", *list);
-    let completed: Vec<_> = list
+    assert!(got, "15s 内未收到回合完成通知，实际：{:?}", *list);
+    let tasks: Vec<_> = list
         .iter()
-        .filter(|n| matches!(n.kind, NotifyKind::TurnCompleted))
+        .filter(|n| matches!(n.kind, NotifyKind::TaskCompleted))
+        .collect();
+    let answers: Vec<_> = list
+        .iter()
+        .filter(|n| matches!(n.kind, NotifyKind::AnswerCompleted))
         .collect();
     assert!(
-        completed.iter().all(|n| n.body == "「fx 主会话」回答完成"),
-        "完成通知应全部来自主会话且带标题，实际：{:?}",
-        completed
+        !tasks.is_empty() && tasks.iter().all(|n| n.body == "「fx 主会话」任务完成"),
+        "干活回合应全部报任务完成且带标题，实际：{:?}",
+        tasks
+    );
+    assert!(
+        !answers.is_empty() && answers.iter().all(|n| n.body == "「fx 主会话」回答完成"),
+        "纯回答回合应全部报回答完成且带标题，实际：{:?}",
+        answers
     );
     assert!(
         !list.iter().any(|n| n.body.contains("子代理")),

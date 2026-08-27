@@ -60,7 +60,13 @@ pub const METHOD_SESSION_EVENT: &str = "session/event";
 pub const METHOD_HOST_SESSION_ADDED: &str = "host/session-added";
 pub const METHOD_HOST_SESSION_REMOVED: &str = "host/session-removed";
 /// session/event 的 payload.event.type 值
+/// 上游出处：dsh-agent-loop/lib/index.js 的 session.append（turn/start 带
+/// {turn}，turn/end 带 {turn, reason}）；tool/call 由工具执行时追加
+/// （带 callId/name/arguments），每轮 LLM 调用产出的工具调用都发一帧。
+/// 影响：notify/mod.rs 区分"干活回合"与"纯回答回合"（回答完成/任务完成拆分）。
+pub const EVENT_TURN_START: &str = "turn/start";
 pub const EVENT_TURN_END: &str = "turn/end";
+pub const EVENT_TOOL_CALL: &str = "tool/call";
 pub const EVENT_SESSION_TITLE: &str = "session/title";
 /// turn/end 的 data.reason.kind 完成值
 pub const REASON_COMPLETED: &str = "completed";

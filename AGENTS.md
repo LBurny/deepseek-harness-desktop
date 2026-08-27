@@ -40,9 +40,12 @@ src-tauri/src/
                     文案经 pick(zh,en) 二选一；theme 关注循环写全局原子值，
                     深层辅助函数免层层透传 locale
   notify/           WS 事件源（ws.rs 泛化 {path, handler, on_connect}，连 events.mux +
-                    events.host 双下行）+ 帧分类（approval/question、turn/end 完成、
-                    session/title 台账、子代理经 origin 过滤）；sink 在 lib.rs：
-                    前台=任一窗口聚焦，按 settings.notify 三类规则门控
+                    events.host 双下行；空闲 Ping+Pong 超时看门狗防半开连接假死）
+                    + 帧分类（approval/question、turn/start 清痕、tool/call 置痕、
+                    turn/end 按"回合内是否干过活"拆任务完成/回答完成、session/title
+                    台账、子代理经 origin 过滤）；sink 在 lib.rs：前台=任一窗口聚焦，
+                    按 settings.notify 四类规则门控，全部通知统一挂提示音，
+                    被抑制/弹失败都写 events.log
   theme.rs          标题栏主题跟随 settings.yaml 的 ui-theme.preference；首启播种；
                     主题变化时 SWP_FRAMECHANGED+RedrawWindow 强制非客户区重绘
                     （DwmSetWindowAttribute 只改属性不重绘，否则标题栏要等激活才换色）；
@@ -55,7 +58,7 @@ src-tauri/src/
                     diagnostics.rs 状态/日志环形缓冲；commands.rs 8 个 invoke 命令
   zoom.rs           UI 缩放：hook_js 动态内嵌快捷键（on_page_load eval，只注入 main）、
                     direction 命令按设置读步进、ui-zoom.txt 持久化
-  settings.rs       壳设置 settings.json 模型（步进 1-25%/快捷键/关窗行为/notify 三类
+  settings.rs       壳设置 settings.json 模型（步进 1-25%/快捷键/关窗行为/notify 四类
                     规则 {enabled,timing}（旧 notify_on_completion 读取时迁移）/提示音/
                     check_update_on_launch 默认关）、校验、落盘失败显式报错（不静默吞）
   skills.rs         skills/(启用) ↔ skills-disabled/(停用) 目录移动即开关（dsh watcher
@@ -188,7 +191,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 198 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 201 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 

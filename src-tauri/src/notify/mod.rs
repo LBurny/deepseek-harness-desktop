@@ -10,12 +10,14 @@ pub mod ws;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyKind {
-    /// 待批准（approval/requested）：静音 toast，按 settings.notify.approval 规则
+    /// 待批准（approval/requested）：按 settings.notify.approval 规则
     Approval,
-    /// 待回答（question/requested）：静音 toast，按 settings.notify.question 规则
+    /// 待回答（question/requested）：按 settings.notify.question 规则
     Question,
-    /// 回合正常完成（可带提示音，按 settings.notify.turn_done 规则）
-    TurnCompleted,
+    /// 干活回合正常完成（回合内有过 tool/call）：按 settings.notify.turn_done 规则
+    TaskCompleted,
+    /// 纯回答回合正常完成（回合内无任何工具调用）：按 settings.notify.answer_done 规则
+    AnswerCompleted,
 }
 
 #[derive(Debug, Clone)]
@@ -47,11 +49,15 @@ static ATTENTION_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 /// 会话台账：子代理集合（来自 events.host 的 origin=subagent）+
-/// 会话标题（来自 mux 的 session/title 事件）。
+/// 会话标题（来自 mux 的 session/title 事件）+
+/// 当前回合是否干过活（mux 的 turn/start 清零、tool/call 置位）。
 #[derive(Default)]
 pub struct SessionBook {
     subagents: HashSet<String>,
     titles: HashMap<String, String>,
+    /// 当前回合内出现过 tool/call 的会话：turn/end 时据此拆分
+    /// 任务完成（干过活）/ 回答完成（纯文字回答）
+    worked: HashSet<String>,
 }
 
 impl SessionBook {
@@ -61,6 +67,7 @@ impl SessionBook {
     pub fn remove(&mut self, id: &str) {
         self.subagents.remove(id);
         self.titles.remove(id);
+        self.worked.remove(id);
     }
     pub fn set_title(&mut self, id: &str, title: &str) {
         self.titles.insert(id.into(), title.into());
@@ -71,14 +78,28 @@ impl SessionBook {
     pub fn title(&self, id: &str) -> Option<String> {
         self.titles.get(id).cloned()
     }
-    /// host 流（重）连后基线不可知：清空子代理集合，fail-open（宁多弹不漏弹）
+    /// 回合开始：清上一轮的干活痕迹（mux 帧按序到达，turn/start 先于本轮全部事件）
+    pub fn clear_worked(&mut self, id: &str) {
+        self.worked.remove(id);
+    }
+    /// 本回合出现过工具调用
+    pub fn mark_worked(&mut self, id: &str) {
+        self.worked.insert(id.into());
+    }
+    pub fn has_worked(&self, id: &str) -> bool {
+        self.worked.contains(id)
+    }
+    /// host 流（重）连后基线不可知：清空子代理集合，fail-open（宁多弹不漏弹）。
+    /// worked 不随 host 重连清空——它由 mux 流维护，与 host 基线无关。
     pub fn clear_subagents(&mut self) {
         self.subagents.clear();
     }
 }
 
-/// mux 帧处理：approval/question → Attention 通知；session/event 里只关心
-/// turn/end(reason.kind=="completed") 与 session/title。
+/// mux 帧处理：approval/question → Attention 通知；session/event 里关心
+/// turn/start（清干活痕迹）、tool/call（置干活痕迹）、turn/end
+/// (reason.kind=="completed" 时按是否干过活拆分任务完成/回答完成) 与
+/// session/title。
 /// 先 contains 粗筛、命中才 JSON 解析——流式期间每 token 一帧，不能逢帧解析。
 pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook>) {
     if ATTENTION_RE.is_match(frame) {
@@ -109,6 +130,12 @@ pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook
     };
     let Some(event) = payload.get("event") else { return };
     match event.get("type").and_then(|t| t.as_str()) {
+        Some(upstream::EVENT_TURN_START) => {
+            book.lock().unwrap().clear_worked(session_id);
+        }
+        Some(upstream::EVENT_TOOL_CALL) => {
+            book.lock().unwrap().mark_worked(session_id);
+        }
         Some(upstream::EVENT_TURN_END) => {
             let completed = event
                 .get("data")
@@ -123,14 +150,35 @@ pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook
             if book.is_subagent(session_id) {
                 return;
             }
+            // 干活回合（回合内有 tool/call）= 任务完成；纯文字回答 = 回答完成。
+            // WS（重）连窗口期内 turn/start 可能缺失：工具帧若都在断连前发出，
+            // 会被误判成回答完成——两规则默认均开，fail-open 只是分类可能偏，不漏弹。
+            let worked = book.has_worked(session_id);
             let body = match book.title(session_id) {
-                Some(t) => crate::i18n::pick(format!("「{t}」回答完成"), format!("“{t}” completed")),
-                None => crate::i18n::pick("dsh 回答完成", "dsh completed its reply"),
+                Some(t) => {
+                    if worked {
+                        crate::i18n::pick(format!("「{t}」任务完成"), format!("“{t}” task completed"))
+                    } else {
+                        crate::i18n::pick(format!("「{t}」回答完成"), format!("“{t}” reply completed"))
+                    }
+                }
+                None => {
+                    if worked {
+                        crate::i18n::pick("dsh 任务完成", "dsh finished the task")
+                    } else {
+                        crate::i18n::pick("dsh 回答完成", "dsh completed its reply")
+                    }
+                }
+            };
+            let kind = if worked {
+                NotifyKind::TaskCompleted
+            } else {
+                NotifyKind::AnswerCompleted
             };
             sink(Notification {
                 title: "DSHDesktop".into(),
                 body,
-                kind: NotifyKind::TurnCompleted,
+                kind,
             });
         }
         Some(upstream::EVENT_SESSION_TITLE) => {
@@ -219,6 +267,16 @@ mod tests {
         )
     }
 
+    fn turn_start(seq: u32) -> String {
+        format!(r#"{{"type":"turn/start","seq":{seq},"time":0,"data":{{"turn":1}}}}"#)
+    }
+
+    fn tool_call(seq: u32) -> String {
+        format!(
+            r#"{{"type":"tool/call","seq":{seq},"time":0,"data":{{"callId":"c{seq}","name":"bash","arguments":"{{}}"}}}}"#
+        )
+    }
+
     #[test]
     fn mux_attention_events_notify() {
         let (sink, store) = collecting_sink();
@@ -234,7 +292,31 @@ mod tests {
     }
 
     #[test]
-    fn mux_turn_completed_notifies_with_title() {
+    fn mux_worked_turn_notifies_as_task_completed() {
+        // 回合内有过 tool/call → 任务完成（走 turn_done 规则）
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        handle_mux_frame(
+            &session_event(
+                "s1",
+                r#"{"type":"session/title","seq":1,"time":0,"data":{"title":"修 bug"}}"#,
+            ),
+            &sink,
+            &book,
+        );
+        handle_mux_frame(&session_event("s1", &turn_start(2)), &sink, &book);
+        handle_mux_frame(&session_event("s1", &tool_call(3)), &sink, &book);
+        handle_mux_frame(&session_event("s1", &turn_end(4, "completed")), &sink, &book);
+        let got = store.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(matches!(got[0].kind, NotifyKind::TaskCompleted));
+        assert_eq!(got[0].body, "「修 bug」任务完成");
+        assert_eq!(got[0].title, "DSHDesktop");
+    }
+
+    #[test]
+    fn mux_pure_reply_notifies_as_answer_completed() {
+        // 无 tool/call 的回合 → 回答完成（走 answer_done 规则）
         let (sink, store) = collecting_sink();
         let book = Mutex::new(SessionBook::default());
         handle_mux_frame(
@@ -248,19 +330,38 @@ mod tests {
         handle_mux_frame(&session_event("s1", &turn_end(2, "completed")), &sink, &book);
         let got = store.lock().unwrap();
         assert_eq!(got.len(), 1);
-        assert!(matches!(got[0].kind, NotifyKind::TurnCompleted));
+        assert!(matches!(got[0].kind, NotifyKind::AnswerCompleted));
         assert_eq!(got[0].body, "「修 bug」回答完成");
         assert_eq!(got[0].title, "DSHDesktop");
     }
 
     #[test]
-    fn mux_turn_completed_without_title_uses_fallback() {
+    fn mux_turn_start_clears_worked_between_turns() {
+        // 上一轮干过活、新一轮 turn/start 后纯回答 → 应算回答完成而不是任务完成
         let (sink, store) = collecting_sink();
         let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(&session_event("s1", &turn_end(1, "completed")), &sink, &book);
+        handle_mux_frame(&session_event("s1", &turn_start(1)), &sink, &book);
+        handle_mux_frame(&session_event("s1", &tool_call(2)), &sink, &book);
+        handle_mux_frame(&session_event("s1", &turn_end(3, "completed")), &sink, &book);
+        handle_mux_frame(&session_event("s1", &turn_start(4)), &sink, &book);
+        handle_mux_frame(&session_event("s1", &turn_end(5, "completed")), &sink, &book);
+        let got = store.lock().unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(matches!(got[0].kind, NotifyKind::TaskCompleted));
+        assert_eq!(got[0].body, "dsh 任务完成");
+        assert!(matches!(got[1].kind, NotifyKind::AnswerCompleted));
+        assert_eq!(got[1].body, "dsh 回答完成");
+    }
+
+    #[test]
+    fn mux_task_completed_without_title_uses_fallback() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        handle_mux_frame(&session_event("s1", &tool_call(1)), &sink, &book);
+        handle_mux_frame(&session_event("s1", &turn_end(2, "completed")), &sink, &book);
         let got = store.lock().unwrap();
         assert_eq!(got.len(), 1);
-        assert_eq!(got[0].body, "dsh 回答完成");
+        assert_eq!(got[0].body, "dsh 任务完成");
     }
 
     #[test]

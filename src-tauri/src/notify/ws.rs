@@ -1,12 +1,17 @@
 use super::{FrameHandler, NotifySink, NotifySource};
 use futures::future::BoxFuture;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::watch;
 use tokio_tungstenite::tungstenite::Message;
 
 const RECONNECT_DELAY: Duration = Duration::from_secs(5);
+/// 看门狗：静默超过 PING_IDLE 发一帧 Ping 探活；发出后 PONG_TIMEOUT 内仍无任何
+/// 下行帧（含 Pong/心跳）即判定连接已死，强制重连。回环 TCP 半开（对端假死不断
+/// FIN）时 `stream.next()` 会永久挂起，没有看门狗就是"从此再无通知直到重启应用"。
+const PING_IDLE: Duration = Duration::from_secs(60);
+const PONG_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// 订阅 dsh 的事件下行流（dsh 的浏览器信任栅栏允许 loopback + 无 Origin 的请求，
 /// Rust 客户端天然满足）。mux 与 host 两个端点共用本实现，区别只在 path 与帧处理：
@@ -50,16 +55,32 @@ impl NotifySource for WsSource {
                     on_connect();
                 }
                 let mut stream = ws;
+                // 任何下行帧都会复位探活计时；发过 Ping 后就等 Pong（或任意帧）
+                let mut awaiting_pong = false;
                 loop {
                     tokio::select! {
                         msg = stream.next() => {
                             match msg {
                                 Some(Ok(Message::Text(text))) => {
+                                    awaiting_pong = false;
                                     (self.handler)(&text, &sink);
+                                }
+                                // Pong/Ping/Binary 等非文本帧：连接活着，只复位探活计时
+                                Some(Ok(_)) => {
+                                    awaiting_pong = false;
                                 }
                                 // 连接关闭/出错/结束：重连
                                 _ => break,
                             }
+                        }
+                        _ = tokio::time::sleep(if awaiting_pong { PONG_TIMEOUT } else { PING_IDLE }) => {
+                            if awaiting_pong {
+                                break; // Ping 后仍无响应：连接已死，重连
+                            }
+                            if stream.send(Message::Ping(Vec::new().into())).await.is_err() {
+                                break;
+                            }
+                            awaiting_pong = true;
                         }
                         changed = port.changed() => {
                             if changed.is_err() {

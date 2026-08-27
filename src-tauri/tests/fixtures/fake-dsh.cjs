@@ -115,6 +115,13 @@ server.on('upgrade', (req, socket) => {
     time: 0,
     data: { turn: 1, reason: { kind } },
   })
+  const turnStart = (seq) => ({ type: 'turn/start', seq, time: 0, data: { turn: 1 } })
+  const toolCall = (seq) => ({
+    type: 'tool/call',
+    seq,
+    time: 0,
+    data: { callId: `c${seq}`, name: 'bash', arguments: '{}' },
+  })
   const title = (seq, text) => ({ type: 'session/title', seq, time: 0, data: { title: text } })
 
   const timers = []
@@ -122,14 +129,23 @@ server.on('upgrade', (req, socket) => {
     timers.push(setInterval(() => send({ method: 'heartbeat', payload: {} }), 2000))
     // 每 3s 发一个待批准事件，供通知桥接验收
     timers.push(setInterval(() => send({ method: 'approval/requested', payload: {} }), 3000))
-    // 每 2s 一轮回合事件（首轮延迟 1s，让 host 流的子代理标记先到位）：
-    // 主会话完成 + 主会话中止 + 子代理完成——只有主会话完成应触发通知
+    // 每 2s 一轮事件（首轮延迟 1s，让 host 流的子代理标记先到位）：
+    //   主会话干活回合（turn/start → tool/call → completed）→ 任务完成
+    //   主会话纯回答回合（无 tool/call 的 completed）        → 回答完成
+    //   主会话中止回合                                       → 静默
+    //   子代理完成                                           → 过滤
     const cycle = () => {
       send(sessionEvent('fx-main', title(1, 'fx 主会话')))
-      send(sessionEvent('fx-main', turnEnd(2, 'completed')))
-      send(sessionEvent('fx-main', turnEnd(3, 'aborted')))
+      send(sessionEvent('fx-main', turnStart(2)))
+      send(sessionEvent('fx-main', toolCall(3)))
+      send(sessionEvent('fx-main', turnEnd(4, 'completed')))
+      send(sessionEvent('fx-main', turnStart(5)))
+      send(sessionEvent('fx-main', turnEnd(6, 'completed')))
+      send(sessionEvent('fx-main', turnEnd(7, 'aborted')))
       send(sessionEvent('fx-sub', title(1, 'fx 子代理')))
-      send(sessionEvent('fx-sub', turnEnd(2, 'completed')))
+      send(sessionEvent('fx-sub', turnStart(2)))
+      send(sessionEvent('fx-sub', toolCall(3)))
+      send(sessionEvent('fx-sub', turnEnd(4, 'completed')))
     }
     timers.push(setTimeout(() => {
       cycle()

@@ -16,8 +16,9 @@
     | 'staplebops-05' | 'staplebops-06' | 'staplebops-07'
   type NotifyTiming = 'background' | 'always'
   type NotifyRule = { enabled: boolean; timing: NotifyTiming }
-  // 与 Rust 端 NotifySettings 对应：approval=任务确认 question=选项选择 turn_done=任务完成
-  type NotifySettings = { approval: NotifyRule; question: NotifyRule; turn_done: NotifyRule }
+  // 与 Rust 端 NotifySettings 对应：approval=任务确认 question=选项选择
+  // turn_done=任务完成（干活回合） answer_done=回答完成（纯文字回答）
+  type NotifySettings = { approval: NotifyRule; question: NotifyRule; turn_done: NotifyRule; answer_done: NotifyRule }
   type ShellSettings = {
     zoom_step: number
     zoom_in: Shortcut
@@ -36,14 +37,14 @@
     asset_size: number | null
   }
 
-  // 与 Rust 端 ShellSettings::default 保持一致（三类通知默认均开、仅后台时提醒）
+  // 与 Rust 端 ShellSettings::default 保持一致（四类通知默认均开、仅后台时提醒）
   const DEFAULT_RULE: NotifyRule = { enabled: true, timing: 'background' }
   const DEFAULTS: ShellSettings = {
     zoom_step: 0.02,
     zoom_in: { ctrl: true, shift: true, alt: false, code: 'Equal', key: '+' },
     zoom_out: { ctrl: true, shift: true, alt: false, code: 'Minus', key: '_' },
     close_behavior: 'background',
-    notify: { approval: { ...DEFAULT_RULE }, question: { ...DEFAULT_RULE }, turn_done: { ...DEFAULT_RULE } },
+    notify: { approval: { ...DEFAULT_RULE }, question: { ...DEFAULT_RULE }, turn_done: { ...DEFAULT_RULE }, answer_done: { ...DEFAULT_RULE } },
     completion_sound: 'staplebops-02',
     check_update_on_launch: false,
   }
@@ -82,6 +83,7 @@
     { key: 'approval', label: '任务确认' },
     { key: 'question', label: '选项选择' },
     { key: 'turn_done', label: '任务完成' },
+    { key: 'answer_done', label: '回答完成' },
   ]
 
   let zoomIn = $state<Shortcut>({ ...DEFAULTS.zoom_in })
@@ -89,6 +91,14 @@
   let stepPct = $state(2)
   let closeBehavior = $state<'background' | 'quit'>('background')
   let notify = $state<NotifySettings>(structuredClone(DEFAULTS.notify))
+  // 提示音作用于全部通知（任务确认/选项选择/任务完成/回答完成统一用这一个音效）；
+  // 四类全关时才禁用音效选择与试听
+  const anyNotifyEnabled = $derived(
+    notify.approval.enabled ||
+      notify.question.enabled ||
+      notify.turn_done.enabled ||
+      notify.answer_done.enabled,
+  )
   let completionSound = $state<CompletionSound>('default')
   let autostart = $state(false)
   let checkOnLaunch = $state(false)
@@ -367,17 +377,17 @@
     {/each}
     <div class="divider"></div>
     <div class="row">
-      <span>{t('完成提示音')}</span>
+      <span>{t('提示音')}</span>
       <span class="control">
         <PopupSelect
           bind:value={completionSound}
           options={SOUND_OPTIONS}
-          disabled={!notify.turn_done.enabled}
+          disabled={!anyNotifyEnabled}
         />
         <button
           class="ghost small"
           onclick={previewSound}
-          disabled={!notify.turn_done.enabled || completionSound === 'silent'}
+          disabled={!anyNotifyEnabled || completionSound === 'silent'}
         >
           {t('试听')}
         </button>
