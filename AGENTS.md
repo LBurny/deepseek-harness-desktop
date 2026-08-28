@@ -215,3 +215,4 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 ## 已知限制
 
 - Win10 深色标题栏聚焦时纯黑（系统行为，`DWMWA_CAPTION_COLOR` 仅 Win11）；要做成恒为 dsh 深灰需无边框自绘标题栏——方案要点见 docs/design.zh-CN.md §8，暂缓。
+- **检查更新在仓库私有期间必 404（已决定暂不修，2026-08-28）**：`update.rs` 匿名查 `api.github.com/repos/LBurny/deepseek-harness-desktop/releases/latest`，仓库转私有后匿名访问一律 404——启动检查和"其它设置"页手动检查都失效，只在 events.log 落一行 `Update: check on launch failed`，不打断启动、不弹窗，属预期噪音。候选方案已评估未实施：①settings.json 加可选 `github_token`（fine-grained PAT 仅本仓库 Contents:Read，检查时带 Bearer 头，token 只落本地）——推荐；②另建 public 发布仓库专发 Release、release.yml 同步资产；③私有化期间停用启动检查/降级日志。要恢复此功能时从这三条里选。
