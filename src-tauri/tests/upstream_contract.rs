@@ -456,6 +456,29 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         format!("hit={hit:?}"),
         "上游改了类名：mobile.css 的 [class*=\"_sessionLogButton\"] 规则静默失效（药丸回原生尺寸），改 upstream::SESSION_LOG_BUTTON_NEEDLE 与 mobile.css 的选择器",
     );
+    // mobile.css 模型选择器图标化的三个锚点：data-slot 语义钩子
+    // （dsh-client-ui-conversation/lib/client.js）+ 触发器两段文案的
+    // CSS Modules 本地名（dsh-client-ui-model-selection/lib/client.js）
+    for (needle, desc, advice) in [
+        (
+            upstream::MODEL_SLOT_HOOK,
+            "插件 client.js 仍含 conversation.input.model 槽位钩子",
+            "上游改了槽位钩子：mobile.css 模型选择器图标化/菜单定位两组规则静默失效，改 upstream::MODEL_SLOT_HOOK 与 mobile.css 的选择器",
+        ),
+        (
+            upstream::MODEL_TRIGGER_LABEL_NEEDLE,
+            "插件 client.js 仍含 triggerLabel 本地名",
+            "上游改了类名：图标化后模型名露出，改 upstream::MODEL_TRIGGER_LABEL_NEEDLE 与 mobile.css 的选择器",
+        ),
+        (
+            upstream::MODEL_TRIGGER_EFFORT_NEEDLE,
+            "插件 client.js 仍含 triggerEffort 本地名",
+            "上游改了类名：图标化后推理等级文案露出（无 key 机器显示 \"Default\" 裸文本药丸挤换行），改 upstream::MODEL_TRIGGER_EFFORT_NEEDLE 与 mobile.css 的选择器",
+        ),
+    ] {
+        let hit = tree_find(&nm, needle.as_bytes(), Some("client.js"), 4 << 20, 4);
+        c.check(desc, hit.is_some(), format!("hit={hit:?}"), advice);
+    }
 }
 
 /// dsh plugin 子命令（plugins.rs 的装/卸/更新依赖它；上游改版即红）

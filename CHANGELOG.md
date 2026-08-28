@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.8] - 2026-08-28
+
+### Fixed
+
+- 手机远程界面：未配置 API key 的机器上模型选择器显示 "✦ Default ⌄" 裸文本药丸，把输入区底栏的 trailing 组挤换行（模型药丸与发送键掉到第二行，实机截图）。根因：0.4.6 的图标化只隐藏了模型名段（`_triggerLabel`），触发器还有第二段"推理等级"文案（`_triggerEffort`）——无 key 时该段显示 providerDefault 文案 "Default"，有 key 时显示 "High" 等等级名，有 key 机器若当前模型无推理等级元数据则恰好整段不渲染，解释了"同版本两台机器表现不同"。≤700px 下两段文案一并隐藏，药丸回归 45px 纯图标单行布局（无 key 复刻环境实测：临时空 DSH_HOME + 摘除 DEEPSEEK_API_KEY 环境变量起 dsh，Playwright 390px 注入验证）
+- 上游契约套件新增三条探针：模型槽位钩子 `conversation.input.model`、触发器两段文案的 CSS Modules 本地名 `triggerLabel`/`triggerEffort`（upstream.rs 新增 MODEL_SLOT_HOOK / MODEL_TRIGGER_LABEL_NEEDLE / MODEL_TRIGGER_EFFORT_NEEDLE 常量，上游改名即红）；另加锚定测试 `model_trigger_iconified_rule` 钉死 mobile.css 两段隐藏规则都在 700px 断点内
+
 ## [0.4.7] - 2026-08-28
 
 ### Fixed

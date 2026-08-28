@@ -232,3 +232,21 @@ pub const WORKSPACE_SCHEMA_NEEDLE: &str = "sessionIds";
 /// [class*="_sessionLogButton"] 缩小规则——上游改名则规则静默失效
 /// （药丸回原生尺寸，功能不损）；契约套件 tree_find 守门。
 pub const SESSION_LOG_BUTTON_NEEDLE: &str = "sessionLogButton";
+
+/// 输入栏模型槽位的 data-slot 语义钩子。实测落盘：
+/// @deepseek-ai/dsh-client-ui-conversation/lib/client.js（InputBar 以
+/// renderSlot("conversation.input.model") 渲染，槽位注册同文件）。影响面：
+/// mobile.css 的模型选择器图标化/菜单包含块上移两组规则——上游改钩子名则
+/// 静默失效（回到未适配态：全名药丸窄屏截断、菜单左缘越界）。
+pub const MODEL_SLOT_HOOK: &str = "conversation.input.model";
+/// 模型触发器"模型名"文案段的 CSS Modules 本地名。实测落盘：
+/// @deepseek-ai/dsh-client-ui-model-selection/lib/client.js（trigger 内
+/// span.triggerLabel，文案 = 模型名或 trigger.fallback）。影响面：同
+/// MODEL_SLOT_HOOK 的图标化规则——改名则模型名露出。
+pub const MODEL_TRIGGER_LABEL_NEEDLE: &str = "triggerLabel";
+/// 模型触发器"推理等级"文案段的 CSS Modules 本地名（同包同 trigger 内
+/// span.triggerEffort，无显式等级时显示 effort.providerDefault 文案
+/// "Default"——无 API key 机器上模型选择器露出 "Default" 文本的根源）。
+/// 影响面：图标化规则须把两段文案一起隐藏，漏掉此段则裸文本药丸把
+/// trailing 组挤换行（0.4.7 实踩）。
+pub const MODEL_TRIGGER_EFFORT_NEEDLE: &str = "triggerEffort";

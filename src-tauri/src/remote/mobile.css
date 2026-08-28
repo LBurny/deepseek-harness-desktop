@@ -138,8 +138,14 @@
      "_triggerEffort 段" 上游已删（0.4.5 后实测），整组规则曾静默失效：
      全名药丸在窄屏溢出截断、与发送键挤行——上游改标记时这里的表现就是
      "回到未适配态"，改版后须手机视口回归一遍。权限触发器的文案上游在
-     窄屏已自行隐藏，无需处理 */
-  [data-slot="conversation.input.model"] [class*="_triggerLabel"] {
+     窄屏已自行隐藏，无需处理。
+     触发器有两段文案：模型名（_triggerLabel）与推理等级（_triggerEffort），
+     两段都要隐藏。无 API key 时等级段显示 providerDefault 文案 "Default"
+     （有 key 时显示 "High" 等等级名）——只藏模型名会留下裸文本药丸，
+     宽度把 trailing 组挤换行（实踩：无 key 机器上 "✦ Default ⌄" 与发送键
+     被挤到第二行）。 */
+  [data-slot="conversation.input.model"] [class*="_triggerLabel"],
+  [data-slot="conversation.input.model"] [class*="_triggerEffort"] {
     display: none;
   }
   /* 模型触发器原生只有文案 + chevron，文案隐藏后补一枚火花图标；

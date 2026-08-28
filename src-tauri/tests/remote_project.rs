@@ -164,6 +164,39 @@ fn session_log_pill_shrink_rule() {
     assert!(pos > media, "Session log 规则须落在 700px 断点内");
 }
 
+/// 模型选择器图标化规则锚定：触发器两段文案（模型名 + 推理等级）都必须
+/// 隐藏在 data-slot 钩子下。漏掉推理等级段的表现：无 API key 机器上段内
+/// 显示 providerDefault 文案 "Default"（有 key 显示 "High" 等等级名），
+/// 裸文本药丸把 trailing 组挤换行（0.4.7 实踩，见 mobile.css 注释）。
+#[test]
+fn model_trigger_iconified_rule() {
+    let css = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("remote")
+            .join("mobile.css"),
+    )
+    .unwrap();
+    let slot = format!("[data-slot=\"{}\"]", dshdesktop_lib::upstream::MODEL_SLOT_HOOK);
+    let media = css.find("@media (max-width: 700px)").unwrap();
+    for needle in [
+        dshdesktop_lib::upstream::MODEL_TRIGGER_LABEL_NEEDLE,
+        dshdesktop_lib::upstream::MODEL_TRIGGER_EFFORT_NEEDLE,
+    ] {
+        let sel = format!("{slot} [class*=\"_{needle}\"]");
+        let pos = css
+            .find(&sel)
+            .unwrap_or_else(|| panic!("mobile.css 缺选择器 {sel}（该文案段会在图标化后露出）"));
+        let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+        let block = &css[pos..end];
+        assert!(
+            block.contains("display: none"),
+            "{sel} 规则块缺 display: none"
+        );
+        assert!(pos > media, "{sel} 规则须落在 700px 断点内");
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn project_endpoints_end_to_end() {
     let home = make_home();
