@@ -283,7 +283,13 @@ pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
+        // 置顶抖动（短暂 always_on_top 再取消）：点击 toast 激活时前台在 Shell，
+        // 运行中实例的 SetForegroundWindow 被前台锁拒绝——窗口会弹出但被压在
+        // 当前前台应用下面（机器 B 实测"老是覆盖在下面"）。强制置顶一次把窗口
+        // 顶到 Z 序顶端，焦点若仍被拒窗口也可见可点。
+        let _ = w.set_always_on_top(true);
         let _ = w.set_focus();
+        let _ = w.set_always_on_top(false);
     }
 }
 

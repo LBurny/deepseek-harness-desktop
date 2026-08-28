@@ -8,6 +8,11 @@
 //! 掉、进了通知中心、回调不触发）；协议激活是 Win10 原生支持的路由，且应用未
 //! 运行时点击还能顺带拉起应用，行为更完整。
 //!
+//! 图标：ToastGeneric 的 `<image>` **必须带 placement="appLogoOverride"** 才是
+//! 左上角应用 logo（实测缺该属性会被渲染成正文下方的整幅大图）；图标文件随包
+//! 分发（resources 映射 icons/128x128.png），dev 找不到文件时省略（无图标但
+//! 不影响弹出）。
+//!
 //! 声音与 AUMID 映射逐项对齐 tauri-plugin-notification 的 Windows 后端
 //! （notify-rust），保证弹出的 toast 外观与替换前完全一致：
 //! - 未设声音的 toast 一律 `<audio silent="true"/>`（静音）——自定义 wav 由壳
@@ -33,6 +38,10 @@ pub(crate) const PROTOCOL_ARG: &str = "--dshdesktop-protocol";
 /// 协议 scheme（HKCU 注册的 URL Protocol 名）
 const PROTOCOL_SCHEME: &str = "dshdesktop";
 
+/// 随包分发的 toast 图标（相对 resource_dir / exe 目录；tauri.conf resources
+/// 把 src-tauri/icons/128x128.png 映射到 <install>/icons/128x128.png）
+const ICON_REL: &str = r"icons\128x128.png";
+
 /// XML 文本转义（title/body 来自通知内容/会话标题，可能含 & < > " '）
 fn xml_escape(s: &str) -> String {
     s.replace('&', "&amp;")
@@ -42,22 +51,37 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn toast_xml(title: &str, body: &str, sound: &ToastSound) -> String {
+fn toast_xml(title: &str, body: &str, sound: &ToastSound, icon: Option<&str>) -> String {
     let audio = match sound {
         ToastSound::Silent => r#"<audio silent="true"/>"#,
         ToastSound::Default => "",
     };
+    // placement="appLogoOverride"：缺了该属性 <image> 会被渲染成正文下方的
+    // 整幅大图（实测），带上才是标准的左侧应用小图标
+    let image = icon
+        .map(|uri| format!(r#"<image id="1" placement="appLogoOverride" src="{}" alt="DSHDesktop"/>"#, xml_escape(uri)))
+        .unwrap_or_default();
     format!(
         r#"<toast activationType="protocol" launch="{PROTOCOL_SCHEME}://open">
     <visual><binding template="ToastGeneric">
+        {}
         <text>{}</text>
         <text>{}</text>
     </binding></visual>
     {}
 </toast>"#,
+        image,
         xml_escape(title),
         xml_escape(body),
         audio
+    )
+}
+
+/// 本地路径 → file:/// URI（toast <image src> 只认 URI 形态）
+fn file_uri(path: &std::path::Path) -> String {
+    format!(
+        "file:///{}",
+        path.display().to_string().replace('\\', "/")
     )
 }
 
@@ -98,6 +122,20 @@ mod imp {
         if dev { None } else { Some(exe) }
     }
 
+    /// toast 图标文件：resource_dir 优先（剥 \\?\），退可执行文件旁；都没有
+    /// 返回 None（toast 无图标但不影响弹出，dev 下 resources 不落盘即此态）
+    fn toast_icon_path(app: &tauri::AppHandle) -> Option<std::path::PathBuf> {
+        let from_resource = app
+            .path()
+            .resource_dir()
+            .ok()
+            .map(|d| crate::runtime::strip_verbatim(&d).join(ICON_REL));
+        let from_exe = std::env::current_exe()
+            .ok()
+            .and_then(|e| e.parent().map(|p| p.join(ICON_REL)));
+        [from_resource, from_exe].into_iter().flatten().find(|p| p.is_file())
+    }
+
     /// 弹一条系统 toast；点击通知 = 协议激活 → 主窗口弹出并聚焦。激活过程由
     /// 系统完成（无需进程内回调）；show 失败返回 Err 由调用侧落日志。
     pub(crate) fn show(
@@ -107,8 +145,9 @@ mod imp {
         sound: ToastSound,
         _diag: Option<SoundDiag>,
     ) -> Result<(), String> {
+        let icon = toast_icon_path(app).map(|p| file_uri(&p));
         let doc = XmlDocument::new().map_err(|e| e.to_string())?;
-        doc.LoadXml(&HSTRING::from(toast_xml(title, body, &sound)))
+        doc.LoadXml(&HSTRING::from(toast_xml(title, body, &sound, icon.as_deref())))
             .map_err(|e| e.to_string())?;
         let toast = ToastNotification::CreateToastNotification(&doc).map_err(|e| e.to_string())?;
         let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
@@ -122,8 +161,8 @@ mod imp {
     /// - `dshdesktop://` URL Protocol → 本 exe：toast 点击拉起协议，二次实例
     ///   经 single-instance 把激活递给运行中实例；exe 路径变化（重装/换目录）
     ///   后下次启动自动纠正
-    /// - AUMID 显示名键：toast 源显示名在机器间的启发式回退不一致，注册后
-    ///   恒为应用名
+    /// - AUMID 显示名 + IconUri 键：toast 源显示名在机器间的启发式回退不一致，
+    ///   注册后恒为应用名；IconUri 指向随包的 png（exe 路径不渲染图标，实测）
     /// dev（target 目录）不写——避免覆盖已安装版的注册指向。
     /// 失败只落 events.log（toast 仍会弹，仅点击不激活），不打断启动。
     pub(crate) fn ensure_activation_registered(app: &tauri::AppHandle) {
@@ -133,6 +172,7 @@ mod imp {
         };
         let name = app.package_info().name.clone();
         let identifier = app.config().identifier.clone();
+        let icon = toast_icon_path(app);
         let result = (|| -> std::io::Result<()> {
             let hkcu = winreg::RegKey::predef(HKEY_CURRENT_USER);
             let proto = hkcu.create_subkey(r"Software\Classes\dshdesktop")?.0;
@@ -149,7 +189,9 @@ mod imp {
                 .create_subkey(format!(r"Software\Classes\AppUserModelId\{identifier}"))?
                 .0;
             aumid.set_value("DisplayName", &name)?;
-            aumid.set_value("IconUri", &exe.display().to_string())?;
+            if let Some(icon) = &icon {
+                aumid.set_value("IconUri", &icon.display().to_string())?;
+            }
             Ok(())
         })();
         if let Err(e) = result {
@@ -191,16 +233,24 @@ mod tests {
     use super::*;
 
     #[test]
-    fn toast_xml_has_protocol_activation_and_silence() {
-        let xml = toast_xml("标题<b>&特殊", "正文", &ToastSound::Silent);
+    fn toast_xml_has_protocol_activation_silence_and_logo() {
+        let xml = toast_xml(
+            "标题<b>&特殊",
+            "正文",
+            &ToastSound::Silent,
+            Some("file:///F:/DSHDesktop/icons/128x128.png"),
+        );
         assert!(xml.contains(r#"activationType="protocol""#));
         assert!(xml.contains(r#"launch="dshdesktop://open""#));
         assert!(xml.contains(r#"<audio silent="true"/>"#));
+        // 图标必须是 appLogoOverride（缺 placement 会被渲染成正文下方的整幅大图）
+        assert!(xml.contains(r#"placement="appLogoOverride""#));
         // XML 转义：标题里的特殊字符必须不破坏结构
         assert!(xml.contains("标题&lt;b&gt;&amp;特殊"));
         assert!(!xml.contains("标题<b>"));
         // default 档 = 省略 audio 元素（系统默认提示音）
-        let xml = toast_xml("t", "b", &ToastSound::Default);
+        let xml = toast_xml("t", "b", &ToastSound::Default, None);
         assert!(!xml.contains("<audio"));
+        assert!(!xml.contains("<image"));
     }
 }

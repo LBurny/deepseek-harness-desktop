@@ -46,8 +46,9 @@ src-tauri/src/
                     turn/end 按"回合内是否干过活"拆任务完成/回答完成、session/title
                     台账、子代理经 origin 过滤）；sink 在 lib.rs：前台=任一窗口聚焦，
                     按 settings.notify 四类规则门控，全部通知统一挂提示音，
-                    被抑制/弹失败都写 events.log；toast.rs=WinRT 直连 toast，点击
-                    走协议激活回主窗口（启动时注册 dshdesktop:// + AUMID 显示名）
+                    被抑制/弹失败都写 events.log；toast.rs=WinRT 直连 toast（带 appLogoOverride
+                    应用图标，resources 映射 icons/128x128.png），点击走协议激活回
+                    主窗口（启动时注册 dshdesktop:// + AUMID 显示名/IconUri）
   theme.rs          标题栏主题跟随 settings.yaml 的 ui-theme.preference；首启播种；
                     主题变化时 SWP_FRAMECHANGED+RedrawWindow 强制非客户区重绘
                     （DwmSetWindowAttribute 只改属性不重绘，否则标题栏要等激活才换色）；
@@ -196,7 +197,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **主窗口由 setup 代码创建（tauri.conf windows 为空）**：on_download 只能挂 WebviewWindowBuilder，conf 声明的窗口无法附加。建窗参数须与原 conf 一致（visible(false)+center()+min 900x600），window-state 对代码创建窗口同样在创建事件排队 restore（托盘按需窗口同款），回归靠 verify-no-size-flash/verify-window-state 两脚本
 - **dsh 预设不能经 profile patch 影子覆盖**：composeProfile 会把 agent-presets 行的 roots 无条件重写为 shipped root（用户层 roots 被丢弃），且 shipped root 先于 $DSH_HOME/.agent-presets（同名 id shipped 优先）——若需重引入补丁，仍旧不能走 patch 影子覆盖，只能原地改写 shipped 预设文件
 - **fs-local 列目录遇 ACL 拒绝项即整列失败**（如 C:\ 根目录撞上 DumpStack.log）：上游 dsh 行为，Windows 上列举系统盘根目录必现；壳侧缓解是让模型知道 cwd 并待在 workspace，别试图在壳里修列目录
-- **PlaySoundW 禁用 SND_ASYNC**：异步模式失败时 winmm 内部线程静默吞错——PlaySoundW 返回 ok、日志全 ok 却无声（同一症状三次复发：SND_NOSTOP、缓冲悬垂、机器 B 首播静默），属不可诊断盲区。现 `play_sound_file` 在专用线程上 SND_SYNC 直放 + 失败 500ms 重试一次 + SND_NODEFAULT（防静默落系统声音方案），真实结果经 SoundDiag 回调落 events.log；改回异步等于把盲区请回来
+- **提示音播放禁用 PlaySoundW，改自管 waveOut**：PlaySoundW 四轮翻车史——SND_NOSTOP 忙时放弃（0.3.x）、SND_ASYNC 缓冲悬垂（0.4.2）、SND_ASYNC 工作线程首播静默吞错（0.4.2 修后仍复现）、SND_SYNC 下 winmm 缓存设备句柄失效（0.4.5 机器 B：首次有声后续全静默，日志全 ok 播满时长）。现 `play_sound_file` 在专用线程自管 waveOut：每次播放 waveOutOpen 新开设备句柄（WAVE_MAPPER 取当前默认）、播完即关，打开/写入/收尾每步都有真实 MMSYSERR 错误码，日志带实际设备名；打断语义自管（新播放 reset 旧会话）。改回 PlaySound 等于把盲区请回来
 - **toast 点击激活只能走协议激活**：未打包 Win32 应用的 in-process `ToastNotification.Activated` 回调在 Win10 不可靠——AUMID 无注册、补 HKCU AppUserModelId 键两种条件下点击均不触发（机器 A 实测，toast 被点掉但不回调）；现 toast XML 带 `activationType="protocol" launch="dshdesktop://open"`，点击由系统拉起协议 → 二次实例被 single-instance 拦截 → 回调 show 主窗口。链路依赖启动时的 `ensure_activation_registered`（HKCU 写协议+AUMID，仅安装形态写入，dev 跳过防覆盖已安装版指向）
 
 ## 测试基线
