@@ -55,12 +55,14 @@ pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
     )
 }
 
-/// 用系统默认程序打开 events.log（记事本等），便于复制完整日志上报
+/// 用系统默认程序打开 events.log（记事本等），便于复制完整日志上报。
+/// 文件不存在（刚装好/从未写过日志）时创建空文件——"打开日志"永远可用
+/// （append_debug_line 首次写入也会自建，这里只是让按钮不依赖先发生点什么）
 #[tauri::command]
 pub fn open_log_file(state: State<SharedState>) -> Result<(), String> {
     let log = events_log_path(&state);
     if !log.exists() {
-        return Err(crate::i18n::pick("日志文件尚未生成", "Log file does not exist yet").into());
+        std::fs::File::create(&log).map_err(|e| e.to_string())?;
     }
     crate::update::open_url(&log.to_string_lossy())
 }

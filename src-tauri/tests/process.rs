@@ -34,7 +34,11 @@ impl Platform for TestPlatform {
     fn system_prefers_chinese(&self) -> bool {
         true
     }
-    fn play_sound_file(&self, _path: &Path) -> Result<(), String> {
+    fn play_sound_file(
+        &self,
+        _path: &Path,
+        _diag: Option<dshdesktop_lib::platform::SoundDiag>,
+    ) -> Result<(), String> {
         Ok(())
     }
 }

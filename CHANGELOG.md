@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.5] - 2026-08-28
+
+### Added
+
+- Clicking a shell toast notification now returns you to the main dsh window (same effect as left-clicking the tray icon), so a background/remote user can jump back into the UI straight from the notification. All shell toasts go through a new WinRT-direct toast module (`notify/toast.rs`): sound and AUMID mapping replicate tauri-plugin-notification's Windows backend exactly (silent toast for the 17 built-in wavs which the shell plays itself via PlaySoundW, system-default toast audio for `default`, app identifier as AUMID for installed builds with the PowerShell AUMID fallback in dev), so appearance and sound are unchanged — only the click behavior is new. Click activation uses a **protocol activation** toast (`activationType="protocol" launch="dshdesktop://open"`): the OS opens the registered URL protocol on click, the second instance is intercepted by the single-instance plugin, and the running instance shows+focuses the main window (the same handler as double-launch). In-process `ToastNotification.Activated` handlers were tested and abandoned: for unpackaged Win32 apps on Win10 they silently never fire (verified with and without an AUMID registry key on a real machine) — protocol activation is the reliable route and additionally launches the app when it isn't running. Setup registers the `dshdesktop://` URL protocol and the AUMID display-name key under HKCU on installed builds (idempotent, self-healing across install paths; skipped for dev builds so they don't hijack the installed app's registration); a protocol-activated toast logs `toast activated (protocol) -> show main` to events.log. An `examples/toast_click.rs` manual harness remains for verifying the raw mechanism
+
+### Fixed
+
+- 诊断面板的「打开日志」在 events.log 尚未生成时改为创建空文件再打开，不再报「日志文件尚未生成」——按钮永远可用
+- Sound played silently on some machines despite every diagnostic line reading `ok` — the third recurrence of the "notification/preview has no sound" family (0.3.x: `SND_NOSTOP` giving up while busy; 0.4.2: `SND_ASYNC` filename-buffer dangle). Machine B logs on 0.4.4 showed `play sound: … ok (0-2ms)` for clicks that produced no audio: `PlaySoundW` with `SND_ASYNC` accepts the request and reports success, then its hidden winmm worker thread fails internally (cold thread / first file access / device wake-up) with **no error surfaced anywhere** — an undiagnosable blind spot. The playback engine is reworked to stop trusting it: `play_sound_file` now plays with `SND_SYNC` on a dedicated thread (dispatches instantly, preview/notify paths never block), retries once after 500 ms to self-heal cold device/first-access failures, and passes `SND_NODEFAULT` so an unplayable file returns a real failure instead of silently falling back to the (possibly muted) system sound scheme. The real result — success with actual elapsed ms, or a failure line after the retry — lands in events.log / the diagnostics live stream, so a future "no sound" report comes with a cause instead of `ok`. The 0.4.2 process-lifetime path table (`LIVE_SOUND_PATHS`) is removed: with `SND_SYNC` the filename buffer only needs to outlive the call. A new anchoring test pins the "dispatch returns immediately" contract
+
 ## [0.4.4] - 2026-08-28
 
 ### Changed

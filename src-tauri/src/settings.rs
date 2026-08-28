@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 pub const STEP_MIN: f64 = 0.01;
@@ -323,7 +323,7 @@ pub fn set_shell_settings(
     Ok(())
 }
 
-/// 试听提示音：内置预设走 toast 音频属性；壳内置音效弹静音 toast
+/// 试听提示音：内置预设走系统默认 toast 音；壳内置音效弹静音 toast
 /// 并由壳播放内置 wav（文件缺失降级系统默认预设）。每次点击落一行
 /// events.log（时间戳+路径+耗时+结果），与真实通知共用同一条播放路径。
 #[tauri::command]
@@ -332,33 +332,29 @@ pub fn preview_completion_sound(
     platform: tauri::State<std::sync::Arc<dyn crate::platform::Platform>>,
     sound: CompletionSound,
 ) -> Result<(), String> {
-    use tauri_plugin_notification::NotificationExt;
     let log = platform.runtime_base_dir().join("events.log");
-    // 壳侧诊断：落盘 events.log（面板打开即回填文件尾，跨会话可见）；实时推 dsh-log
-    let diag = |line: String| {
-        crate::append_debug_line(&log, &line);
-        let _ = app.emit("dsh-log", &line);
+    // 壳侧诊断：落盘 events.log（面板打开即回填文件尾，跨会话可见）；实时推 dsh-log。
+    // Arc 化是为了随播放调用下沉进 platform 后台线程（真实播放结果上报用）
+    let diag: crate::platform::SoundDiag = {
+        let log = log.clone();
+        let app = app.clone();
+        Arc::new(move |line: String| {
+            crate::append_debug_line(&log, &line);
+            let _ = app.emit("dsh-log", &line);
+        })
     };
-    let mut builder = app
-        .notification()
-        .builder()
-        .title("DSHDesktop")
-        .body(crate::i18n::pick("提示音试听", "Notification sound preview"));
-    if let Some(rel) = sound.custom_wav() {
+    let toast_sound = if let Some(rel) = sound.custom_wav() {
         match crate::resolve_custom_sound(&app, rel) {
             Some(p) => {
-                let t0 = std::time::Instant::now();
-                let r = platform.play_sound_file(&p);
-                let ms = t0.elapsed().as_secs_f64() * 1000.0;
-                match &r {
-                    Ok(()) => diag(format!("[{}] preview: {} ok ({ms:.0}ms)", crate::local_stamp(), p.display())),
-                    Err(e) => diag(format!(
-                        "[{}] preview: {} failed: {e} ({ms:.0}ms)",
-                        crate::local_stamp(),
-                        p.display()
-                    )),
-                }
-                r?;
+                // 派发行；真实播放结果（成功耗时/失败重试）由 platform 后台线程经
+                // 同一 diag 落日志——试听与真实通知共用同一播放与上报路径
+                diag(format!(
+                    "[{}] preview: {}",
+                    crate::local_stamp(),
+                    p.display()
+                ));
+                platform.play_sound_file(&p, Some(diag.clone()))?;
+                crate::notify::toast::ToastSound::Silent
             }
             None => {
                 diag(format!(
@@ -366,13 +362,21 @@ pub fn preview_completion_sound(
                     crate::local_stamp(),
                     rel
                 ));
-                builder = builder.sound("Default");
+                crate::notify::toast::ToastSound::Default
             }
         }
-    } else if let Some(name) = sound.toast_sound_name() {
-        builder = builder.sound(name);
-    }
-    builder.show().map_err(|e| e.to_string())
+    } else if sound.toast_sound_name().is_some() {
+        crate::notify::toast::ToastSound::Default
+    } else {
+        crate::notify::toast::ToastSound::Silent
+    };
+    crate::notify::toast::show(
+        &app,
+        "DSHDesktop",
+        &crate::i18n::pick("提示音试听", "Notification sound preview"),
+        toast_sound,
+        Some(diag),
+    )
 }
 
 #[cfg(test)]

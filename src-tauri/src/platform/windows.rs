@@ -72,14 +72,6 @@ pub(crate) mod job {
 
 pub struct WindowsPlatform;
 
-/// SND_ASYNC 的文件名缓冲必须存活到播放结束：PlaySoundW 立即返回后，winmm 的
-/// 内部播放线程稍后才按名打开文件——把路径缓冲挂在进程级常驻表里避免悬垂。
-/// 此前的实现把 Vec<u16> 放在局部变量、PlaySoundW 返回即 drop，竞速输了就是
-/// "第一次播放无声、多按几次才响"（内部线程冷启动越慢越容易输，机器 B 实测）。
-/// 候选音共 19 个枚举值，全量驻留 <4KB，永不回收即无任何竞态窗口。
-static LIVE_SOUND_PATHS: std::sync::LazyLock<std::sync::Mutex<Vec<Box<[u16]>>>> =
-    std::sync::LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
-
 impl Platform for WindowsPlatform {
     fn node_exe_name(&self) -> &'static str {
         "node.exe"
@@ -140,37 +132,67 @@ impl Platform for WindowsPlatform {
         lang & 0x3FF == LANG_CHINESE
     }
 
-    fn play_sound_file(&self, path: &Path) -> Result<(), String> {
+    fn play_sound_file(&self, path: &Path, diag: Option<super::SoundDiag>) -> Result<(), String> {
         use std::os::windows::ffi::OsStrExt;
         use windows_sys::Win32::Media::Audio::PlaySoundW;
-        const SND_ASYNC: u32 = 0x0001;
+        const SND_NODEFAULT: u32 = 0x0002;
         const SND_FILENAME: u32 = 0x0002_0000;
-        // 不带 SND_NOSTOP：该标志的语义是"上一声音效未播完则本次直接放弃"（不排队不混音），
-        // 连续试听/连续通知时表现为部分音"没声音"。默认的新调打断旧调才是想要的行为。
+        // 同步前置校验：文件缺失立即 Err，调用侧可立刻降级（toast 系统默认音）
         if !path.is_file() {
             return Err(crate::i18n::pick(
                 format!("音效文件不存在: {}", path.display()),
                 format!("Sound file not found: {}", path.display()),
             ));
         }
-        // 把文件名缓冲挂进常驻表再取指针：表项的 Box<[u16]> 堆数据永不移位，
-        // 传入 PlaySoundW 的指针在整个播放期都有效
-        let wide: Vec<u16> = path
-            .as_os_str()
-            .encode_wide()
-            .chain(std::iter::once(0))
-            .collect();
-        LIVE_SOUND_PATHS.lock().unwrap().push(wide.into_boxed_slice());
-        let parked = LIVE_SOUND_PATHS.lock().unwrap();
-        let ptr = parked.last().unwrap().as_ptr();
-        // SAFETY: ptr 指向常驻表中的 NUL 结尾宽字符串，进程内永久存活；hmod 传
-        // NULL（文件模式不需要模块句柄）
-        let ok = unsafe { PlaySoundW(ptr, std::ptr::null_mut(), SND_FILENAME | SND_ASYNC) };
-        if ok == 0 {
-            Err(crate::i18n::pick("PlaySoundW 播放失败", "PlaySoundW playback failed").into())
-        } else {
-            Ok(())
-        }
+        // 播放放到专用线程上用 SND_SYNC 直放（不带 SND_ASYNC，即同步模式；调用侧
+        // 立即返回，不阻塞预览/通知）。背景：SND_ASYNC 的隐藏工作线程在部分机器上
+        // 首播会静默失败——PlaySoundW 返回 ok、events.log 全 ok 却无声（机器 B 三次
+        // 复发），且异步失败无任何错误可查，属于不可诊断的盲区。SND_SYNC 在当前
+        // 线程直接打开文件并播放，失败有真实返回值；失败 500ms 后重试一次自愈设备
+        // 冷启动/首次访问被拦，仍失败经 diag 落 events.log，现场可定位。
+        // SND_NODEFAULT：文件放不出来时直接判失败，不让 winmm 静默回落"系统默认
+        // 提示音"（声音方案=无 的机器等于无声，把失败重新藏回盲区）。
+        // SND_SYNC 下缓冲只需存活到本调用返回，局部 Vec 即可，无需常驻表
+        // （0.4.2 的 LIVE_SOUND_PATHS 是为 SND_ASYNC 悬垂打的补丁，随之拆除）。
+        let path = path.to_path_buf();
+        std::thread::spawn(move || {
+            let wide: Vec<u16> = path
+                .as_os_str()
+                .encode_wide()
+                .chain(std::iter::once(0))
+                .collect();
+            let play = || unsafe {
+                PlaySoundW(
+                    wide.as_ptr(),
+                    std::ptr::null_mut(),
+                    SND_FILENAME | SND_NODEFAULT,
+                )
+            };
+            let t0 = std::time::Instant::now();
+            let mut ok = play();
+            if ok == 0 {
+                std::thread::sleep(std::time::Duration::from_millis(500));
+                ok = play();
+            }
+            let ms = t0.elapsed().as_secs_f64() * 1000.0;
+            let line = if ok != 0 {
+                format!(
+                    "[{}] play sound: {} ok ({ms:.0}ms)",
+                    crate::local_stamp(),
+                    path.display()
+                )
+            } else {
+                format!(
+                    "[{}] play sound: {} failed ({ms:.0}ms，重试 1 次仍失败)",
+                    crate::local_stamp(),
+                    path.display()
+                )
+            };
+            if let Some(diag) = &diag {
+                diag(line);
+            }
+        });
+        Ok(())
     }
 }
 

@@ -329,16 +329,16 @@ pub async fn check_on_launch(app: AppHandle, log: PathBuf) {
                     &log,
                     &format!("Update: new version {latest} available (current {current})"),
                 );
-                use tauri_plugin_notification::NotificationExt;
-                let _ = app
-                    .notification()
-                    .builder()
-                    .title(crate::i18n::pick("DSHDesktop 有新版本", "DSHDesktop update available"))
-                    .body(crate::i18n::pick(
+                let _ = crate::notify::toast::show(
+                    &app,
+                    &crate::i18n::pick("DSHDesktop 有新版本", "DSHDesktop update available"),
+                    &crate::i18n::pick(
                         format!("v{latest} 已发布，请在其它设置的检查更新中下载"),
                         format!("v{latest} is available, download it from Check for updates in Other settings"),
-                    ))
-                    .show();
+                    ),
+                    crate::notify::toast::ToastSound::Silent,
+                    None,
+                );
             } else {
                 crate::append_debug_line(&log, &format!("Update: up to date ({current})"));
             }

@@ -10,7 +10,6 @@ use crate::{append_debug_line, i18n};
 use std::path::{Path, PathBuf};
 use tauri::webview::DownloadEvent;
 use tauri::{Manager, Webview};
-use tauri_plugin_notification::NotificationExt;
 
 /// 生成挂到主窗口 WebviewWindowBuilder 的下载处理器；log_path 为 events.log。
 pub fn handler(
@@ -62,13 +61,13 @@ pub fn handler(
                         ),
                     )
                 };
-                let _ = webview
-                    .app_handle()
-                    .notification()
-                    .builder()
-                    .title(title)
-                    .body(body)
-                    .show();
+                let _ = crate::notify::toast::show(
+                    webview.app_handle(),
+                    &title,
+                    &body,
+                    crate::notify::toast::ToastSound::Silent,
+                    None,
+                );
                 true
             }
             _ => true,

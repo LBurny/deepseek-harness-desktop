@@ -1,6 +1,6 @@
 [package]
 name = "dshdesktop"
-version = "0.4.4"
+version = "0.4.5"
 edition = "2021"
 description = "Desktop shell for deepseek-harness (dsh)"
 repository = "https://github.com/LBurny/deepseek-harness-desktop"
@@ -40,6 +40,13 @@ arboard = "3"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56"
+# WinRT toast 原生互操作（协议激活 toast 需要 activationType/launch 属性，
+# tauri-winrt-notification 不暴露）——版本与树内一致，不新增编译单元
+windows = { version = "0.61", features = [
+    "Foundation_Collections",
+    "Data_Xml_Dom",
+    "UI_Notifications",
+] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Globalization",

@@ -5,7 +5,6 @@ use std::sync::Mutex;
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_notification::NotificationExt;
 
 pub const MENU_OPEN: &str = "open";
 pub const MENU_DIAGNOSTICS: &str = "diagnostics";
@@ -67,12 +66,13 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             MENU_REMOTE_COPY => {
                 if let Some(rm) = app.try_state::<RemoteManager>() {
                     if crate::remote::copy_link_to_clipboard(&rm).is_ok() {
-                        let _ = app
-                            .notification()
-                            .builder()
-                            .title(i18n::pick("远程访问", "Remote access"))
-                            .body(i18n::pick("链接已复制到剪贴板", "Link copied to clipboard"))
-                            .show();
+                        let _ = crate::notify::toast::show(
+                            app,
+                            &i18n::pick("远程访问", "Remote access"),
+                            &i18n::pick("链接已复制到剪贴板", "Link copied to clipboard"),
+                            crate::notify::toast::ToastSound::Silent,
+                            None,
+                        );
                     }
                 }
             }
@@ -80,15 +80,16 @@ pub fn setup_tray(app: &AppHandle) -> tauri::Result<()> {
             MENU_REMOTE_RESET => {
                 if let Some(rm) = app.try_state::<RemoteManager>() {
                     if rm.reset_link().is_ok() {
-                        let _ = app
-                            .notification()
-                            .builder()
-                            .title(i18n::pick("远程访问", "Remote access"))
-                            .body(i18n::pick(
+                        let _ = crate::notify::toast::show(
+                            app,
+                            &i18n::pick("远程访问", "Remote access"),
+                            &i18n::pick(
                                 "链接已重置，旧链接与已连接的设备即刻失效",
                                 "Link reset — the old link and connected devices are revoked",
-                            ))
-                            .show();
+                            ),
+                            crate::notify::toast::ToastSound::Silent,
+                            None,
+                        );
                     }
                 }
             }
@@ -276,7 +277,9 @@ fn window_title(zh: &str, en: &str) -> String {
     i18n::pick(zh, en)
 }
 
-fn show_main(app: &AppHandle) {
+/// 打开主界面并聚焦：托盘左键/菜单"打开主界面"/点击系统通知共用
+/// （toast 的 Activated 回调从 WinRT 线程经 run_on_main_thread 调进来）
+pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();

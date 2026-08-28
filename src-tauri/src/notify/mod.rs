@@ -6,6 +6,7 @@ use tokio::sync::watch;
 
 use crate::upstream;
 
+pub mod toast;
 pub mod ws;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

@@ -2,7 +2,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
 use tauri::{Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
-use tauri_plugin_notification::NotificationExt;
 use tokio::sync::watch;
 
 pub mod commands;
@@ -36,8 +35,20 @@ use progress::ProgressPayload;
 
 pub fn run() {
     tauri::Builder::default()
-        // 单实例必须最先注册；第二次启动时聚焦已有主窗口
-        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+        // 单实例必须最先注册；第二次启动时聚焦已有主窗口（用户双开，或点击系统
+        // 通知 toast 的协议激活——后者带 --dshdesktop-protocol 标记，落一行日志）
+        .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
+            if args.iter().any(|a| a == notify::toast::PROTOCOL_ARG) {
+                if let Some(p) = app.try_state::<std::sync::Arc<dyn platform::Platform>>() {
+                    append_debug_line(
+                        &p.runtime_base_dir().join("events.log"),
+                        &format!(
+                            "[{}] toast activated (protocol) -> show main",
+                            local_stamp()
+                        ),
+                    );
+                }
+            }
             if let Some(w) = app.get_webview_window("main") {
                 let _ = w.show();
                 let _ = w.unminimize();
@@ -193,6 +204,9 @@ pub fn run() {
 
             // dsh 就绪端口通道：Ready（含重启后）时更新，通知 WS 订阅器
             let (port_tx, port_rx) = watch::channel::<Option<u16>>(None);
+            // toast 点击激活链路（URL Protocol + AUMID 显示名）开机自检，失败落
+            // events.log；幂等且 exe 换路径后自动纠正
+            notify::toast::ensure_activation_registered(&handle);
             // 事件调试日志路径（与 diagnostics 用的同一份：runtime_base_dir/events.log）
             let notify_log = platform.runtime_base_dir().join("events.log");
             let sink_handle = handle.clone();
@@ -208,10 +222,15 @@ pub fn run() {
                     .try_state::<settings::SettingsState>()
                     .map(|s| s.get())
                     .unwrap_or_default();
-                // 壳侧通知诊断：落盘 + 全局日志环（面板回填可见）；面板开着时实时推
-                let diag = |line: String| {
-                    append_debug_line(&notify_log, &line);
-                    let _ = sink_handle.emit("dsh-log", &line);
+                // 壳侧通知诊断：落盘 + 全局日志环（面板回填可见）；面板开着时实时推。
+                // Arc 化是为了随播放调用下沉进 platform 后台线程（真实播放结果上报用）
+                let diag: crate::platform::SoundDiag = {
+                    let log = notify_log.clone();
+                    let handle = sink_handle.clone();
+                    Arc::new(move |line: String| {
+                        append_debug_line(&log, &line);
+                        let _ = handle.emit("dsh-log", &line);
+                    })
                 };
                 // 各类型按自己的规则门控；被抑制的也记一行（现场诊断"没提醒"的抓手：
                 // 之前静默 return，日志里完全看不到）
@@ -225,37 +244,23 @@ pub fn run() {
                     diag(format!("Notify suppressed: {:?} foreground={foreground}", n.kind));
                     return;
                 }
-                let mut builder = sink_handle
-                    .notification()
-                    .builder()
-                    .title(n.title)
-                    .body(n.body.clone());
                 // 全部通知统一挂提示音（含任务确认/选项选择——dsh 卡住等用户输入时
                 // 静音提醒等于没提醒）。柔和自定义音：静音 toast + 播放内置 wav；
                 // 文件缺失（如 dev 未拷贝资源）降级为系统默认预设。每次播放落一行
                 // events.log（时间戳+路径+耗时）：现场对"哪条没声音"定位用。
-                if let Some(rel) = settings.completion_sound.custom_wav() {
+                let toast_sound = if let Some(rel) = settings.completion_sound.custom_wav() {
                     match resolve_custom_sound(&sink_handle, rel) {
                         Some(p) => {
-                            let t0 = std::time::Instant::now();
-                            let r = sink_platform.play_sound_file(&p);
-                            let ms = t0.elapsed().as_secs_f64() * 1000.0;
-                            match &r {
-                                Ok(()) => diag(format!(
-                                    "[{}] play sound: {} ok ({ms:.0}ms)",
-                                    local_stamp(),
-                                    p.display()
-                                )),
-                                Err(e) => {
-                                    diag(format!(
-                                        "[{}] play sound: {} failed: {e} ({ms:.0}ms)",
-                                        local_stamp(),
-                                        p.display()
-                                    ));
-                                    // winmm 播放失败的机器（如 N 版缺媒体组件）：退回
-                                    // toast 系统默认提示音，宁可系统音也不静音
-                                    builder = builder.sound("Default");
-                                }
+                            // 真实播放结果（成功耗时/失败重试）由 platform 后台线程经
+                            // diag 落 events.log；这里的 Err 只剩"文件缺失"（同步前置
+                            // 检查），降级系统默认提示音，宁可系统音也不静音
+                            if sink_platform
+                                .play_sound_file(&p, Some(diag.clone()))
+                                .is_err()
+                            {
+                                notify::toast::ToastSound::Default
+                            } else {
+                                notify::toast::ToastSound::Silent
                             }
                         }
                         None => {
@@ -264,15 +269,20 @@ pub fn run() {
                                 local_stamp(),
                                 rel
                             ));
-                            builder = builder.sound("Default");
+                            notify::toast::ToastSound::Default
                         }
                     }
-                } else if let Some(name) = settings.completion_sound.toast_sound_name() {
-                    builder = builder.sound(name);
-                }
+                } else if settings.completion_sound.toast_sound_name().is_some() {
+                    notify::toast::ToastSound::Default
+                } else {
+                    notify::toast::ToastSound::Silent
+                };
                 diag(format!("Notify: {:?} {}", n.kind, n.body));
+                // toast::show 内置 Activated 处理：点击通知弹出并聚焦主窗口。
                 // show 失败不再静默吞（WinRT 通知被系统策略拦下时至少留痕可查）
-                if let Err(e) = builder.show() {
+                if let Err(e) =
+                    notify::toast::show(&sink_handle, &n.title, &n.body, toast_sound, Some(diag.clone()))
+                {
                     diag(format!("toast show failed: {e}"));
                 }
             });
@@ -475,23 +485,25 @@ pub fn run() {
                         // toast 会留在系统通知中心，正文不带链接，只提示去托盘复制
                         match st.phase.as_str() {
                             "up" => {
-                                let _ = remote_handle
-                                    .notification()
-                                    .builder()
-                                    .title(i18n::pick("远程访问已开启", "Remote access is on"))
-                                    .body(i18n::pick(
+                                let _ = notify::toast::show(
+                                    &remote_handle,
+                                    &i18n::pick("远程访问已开启", "Remote access is on"),
+                                    &i18n::pick(
                                         "链接已就绪，请从托盘菜单复制",
                                         "Link ready — copy it from the tray menu",
-                                    ))
-                                    .show();
+                                    ),
+                                    notify::toast::ToastSound::Silent,
+                                    None,
+                                );
                             }
                             "error" => {
-                                let _ = remote_handle
-                                    .notification()
-                                    .builder()
-                                    .title(i18n::pick("远程访问开启失败", "Remote access failed"))
-                                    .body(st.error.clone().unwrap_or_default())
-                                    .show();
+                                let _ = notify::toast::show(
+                                    &remote_handle,
+                                    &i18n::pick("远程访问开启失败", "Remote access failed"),
+                                    &st.error.clone().unwrap_or_default(),
+                                    notify::toast::ToastSound::Silent,
+                                    None,
+                                );
                             }
                             _ => {}
                         }
