@@ -8,11 +8,13 @@
 //! 掉、进了通知中心、回调不触发）；协议激活是 Win10 原生支持的路由，且应用未
 //! 运行时点击还能顺带拉起应用，行为更完整。
 //!
-//! 图标：ToastGeneric 的 `<image>` **必须带 placement="appLogoOverride"** 才是
-//! 左上角应用 logo（实测缺该属性会被渲染成正文下方的整幅大图）；图标文件随包
-//! 分发（resources 映射 icons/128x128@2x.png = 256×256——toast src 只能给一个
-//! URI 不能按 DPI 分套，给 256px 源让系统自缩放，覆盖到 ~500% 屏幕缩放不糊），
-//! dev 找不到文件时省略（无图标但不影响弹出）。
+//! 图标：只保留 toast 顶部行的小图标（应用名左侧），由 AUMID 注册键的 IconUri
+//! 提供（ensure_activation_registered 写入，指向随包的 256px PNG——图标位只收
+//! 单文件无法按 DPI 分套，256px 源由系统自缩放，高缩放屏不糊）。**不放**
+//! `<image placement="appLogoOverride">`——它渲染成正文区左侧大图标，与顶部行
+//! 小图标同时出现，双图标且正文排版被挤压（机器 B 实测，期望是顶部行单小图标
+//! + 文字定格排版）。图标文件仍须随包（resources 映射 icons/128x128@2x.png；
+//! dev 下 resource_dir 指源码树恰好有文件会掩盖映射缺失，锚定测试钉死）。
 //!
 //! 声音与 AUMID 映射逐项对齐 tauri-plugin-notification 的 Windows 后端
 //! （notify-rust），保证弹出的 toast 外观与替换前完全一致：
@@ -39,11 +41,11 @@ pub(crate) const PROTOCOL_ARG: &str = "--dshdesktop-protocol";
 /// 协议 scheme（HKCU 注册的 URL Protocol 名）
 const PROTOCOL_SCHEME: &str = "dshdesktop";
 
-/// 随包分发的 toast 图标（相对 resource_dir / exe 目录）：用 128x128@2x.png
-/// （256×256）而非 128x128.png——toast <image> 只收单个 URI，无法按屏幕 DPI
-/// 分套，高缩放（200%+）下 128px 会被拉伸发糊；256px 源由系统向下缩放，
-/// 100%~500% 缩放全程清晰。tauri.conf resources 映射到
-/// <install>/icons/128x128@2x.png（锚定测试 bundled_icon_is_shipped_hi_dpi）
+/// 随包分发的 toast 图标（相对 resource_dir / exe 目录），供 AUMID IconUri
+/// （toast 顶部行小图标）：用 128x128@2x.png（256×256）而非 128x128.png——
+/// 图标位只收单文件，无法按屏幕 DPI 分套，高缩放（200%+）下 128px 会被拉伸
+/// 发糊；256px 源由系统向下缩放，100%~500% 缩放全程清晰。tauri.conf resources
+/// 映射到 <install>/icons/128x128@2x.png（锚定测试 bundled_icon_is_shipped_hi_dpi）
 const ICON_REL: &str = r"icons\128x128@2x.png";
 
 /// XML 文本转义（title/body 来自通知内容/会话标题，可能含 & < > " '）
@@ -55,37 +57,25 @@ fn xml_escape(s: &str) -> String {
         .replace('\'', "&apos;")
 }
 
-fn toast_xml(title: &str, body: &str, sound: &ToastSound, icon: Option<&str>) -> String {
+fn toast_xml(title: &str, body: &str, sound: &ToastSound) -> String {
     let audio = match sound {
         ToastSound::Silent => r#"<audio silent="true"/>"#,
         ToastSound::Default => "",
     };
-    // placement="appLogoOverride"：缺了该属性 <image> 会被渲染成正文下方的
-    // 整幅大图（实测），带上才是标准的左侧应用小图标
-    let image = icon
-        .map(|uri| format!(r#"<image id="1" placement="appLogoOverride" src="{}" alt="DSHDesktop"/>"#, xml_escape(uri)))
-        .unwrap_or_default();
+    // 无 <image> 元素：正文区纯文字定格排版；图标只有顶部行小图标（AUMID
+    // IconUri 提供）。appLogoOverride 会再渲染一个正文区大图标——双图标且
+    // 挤压正文（机器 B 实测），勿加回
     format!(
         r#"<toast activationType="protocol" launch="{PROTOCOL_SCHEME}://open">
     <visual><binding template="ToastGeneric">
-        {}
         <text>{}</text>
         <text>{}</text>
     </binding></visual>
     {}
 </toast>"#,
-        image,
         xml_escape(title),
         xml_escape(body),
         audio
-    )
-}
-
-/// 本地路径 → file:/// URI（toast <image src> 只认 URI 形态）
-fn file_uri(path: &std::path::Path) -> String {
-    format!(
-        "file:///{}",
-        path.display().to_string().replace('\\', "/")
     )
 }
 
@@ -149,9 +139,8 @@ mod imp {
         sound: ToastSound,
         _diag: Option<SoundDiag>,
     ) -> Result<(), String> {
-        let icon = toast_icon_path(app).map(|p| file_uri(&p));
         let doc = XmlDocument::new().map_err(|e| e.to_string())?;
-        doc.LoadXml(&HSTRING::from(toast_xml(title, body, &sound, icon.as_deref())))
+        doc.LoadXml(&HSTRING::from(toast_xml(title, body, &sound)))
             .map_err(|e| e.to_string())?;
         let toast = ToastNotification::CreateToastNotification(&doc).map_err(|e| e.to_string())?;
         let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(
@@ -237,33 +226,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn toast_xml_has_protocol_activation_silence_and_logo() {
-        let xml = toast_xml(
-            "标题<b>&特殊",
-            "正文",
-            &ToastSound::Silent,
-            Some("file:///F:/DSHDesktop/icons/128x128.png"),
-        );
+    fn toast_xml_protocol_activation_silent_no_body_image() {
+        let xml = toast_xml("标题<b>&特殊", "正文", &ToastSound::Silent);
         assert!(xml.contains(r#"activationType="protocol""#));
         assert!(xml.contains(r#"launch="dshdesktop://open""#));
         assert!(xml.contains(r#"<audio silent="true"/>"#));
-        // 图标必须是 appLogoOverride（缺 placement 会被渲染成正文下方的整幅大图）
-        assert!(xml.contains(r#"placement="appLogoOverride""#));
+        // 正文区不放 image：appLogoOverride 会与顶部行小图标（AUMID IconUri）
+        // 叠出双图标并挤压正文排版（机器 B 实测），图标只留顶部行
+        assert!(!xml.contains("<image"));
         // XML 转义：标题里的特殊字符必须不破坏结构
         assert!(xml.contains("标题&lt;b&gt;&amp;特殊"));
         assert!(!xml.contains("标题<b>"));
         // default 档 = 省略 audio 元素（系统默认提示音）
-        let xml = toast_xml("t", "b", &ToastSound::Default, None);
+        let xml = toast_xml("t", "b", &ToastSound::Default);
         assert!(!xml.contains("<audio"));
         assert!(!xml.contains("<image"));
     }
 
-    /// 锚定"图标随包分发且是高分辨率源"契约：安装形态下 toast_icon_path 探测
-    /// <install>/icons/128x128@2x.png，所以 bundle.resources 必须把它映射到安装
-    /// 根的 icons/——漏映射则安装包根本不含图标文件，toast 静默退回无图标
-    /// （0.4.5 初版实踩：dev 下 resource_dir 指源码树恰好有文件，掩盖了安装包
-    /// 缺失，机器 B 必现）。同时钉住源文件实际像素 ≥256：toast image 只收单个
-    /// URI 无法按 DPI 分套，源图低于 256px 在 200%+ 屏幕缩放下会糊。
+    /// 锚定"图标随包分发且是高分辨率源"契约：AUMID IconUri（toast 顶部行小
+    /// 图标）指向安装形态 <install>/icons/128x128@2x.png，所以 bundle.resources
+    /// 必须把它映射到安装根的 icons/——漏映射则安装包根本不含图标文件，IconUri
+    /// 静默失效（0.4.5 初版实踩：dev 下 resource_dir 指源码树恰好有文件，掩盖
+    /// 了安装包缺失，机器 B 必现）。同时钉住源文件实际像素 ≥256：图标位只收
+    /// 单文件无法按 DPI 分套，源图低于 256px 在 200%+ 屏幕缩放下会糊。
     #[test]
     fn bundled_icon_is_shipped_hi_dpi() {
         let root = env!("CARGO_MANIFEST_DIR");

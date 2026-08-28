@@ -46,10 +46,11 @@ src-tauri/src/
                     turn/end 按"回合内是否干过活"拆任务完成/回答完成、session/title
                     台账、子代理经 origin 过滤）；sink 在 lib.rs：前台=任一窗口聚焦，
                     按 settings.notify 四类规则门控，全部通知统一挂提示音，
-                    被抑制/弹失败都写 events.log；toast.rs=WinRT 直连 toast（带 appLogoOverride
-                    应用图标，resources 映射 icons/128x128@2x.png=256px 高DPI源），
+                    被抑制/弹失败都写 events.log；toast.rs=WinRT 直连 toast（顶部行
+                    小图标经 AUMID IconUri 指向随包 256px PNG，XML 不含 image），
                     点击走协议激活回主窗口（启动时注册 dshdesktop:// + AUMID 显示名
-                    /IconUri；到顶靠 platform bring_to_front 延迟择时+AttachThreadInput）
+                    /IconUri；single-instance 回调统一走 show_main→platform
+                    bring_to_front 两段择时+AttachThreadInput+ASFW_ANY 授权）
   theme.rs          标题栏主题跟随 settings.yaml 的 ui-theme.preference；首启播种；
                     主题变化时 SWP_FRAMECHANGED+RedrawWindow 强制非客户区重绘
                     （DwmSetWindowAttribute 只改属性不重绘，否则标题栏要等激活才换色）；
@@ -200,8 +201,8 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **fs-local 列目录遇 ACL 拒绝项即整列失败**（如 C:\ 根目录撞上 DumpStack.log）：上游 dsh 行为，Windows 上列举系统盘根目录必现；壳侧缓解是让模型知道 cwd 并待在 workspace，别试图在壳里修列目录
 - **提示音播放禁用 PlaySoundW，改自管 waveOut**：PlaySoundW 四轮翻车史——SND_NOSTOP 忙时放弃（0.3.x）、SND_ASYNC 缓冲悬垂（0.4.2）、SND_ASYNC 工作线程首播静默吞错（0.4.2 修后仍复现）、SND_SYNC 下 winmm 缓存设备句柄失效（0.4.5 机器 B：首次有声后续全静默，日志全 ok 播满时长）。现 `play_sound_file` 在专用线程自管 waveOut：每次播放 waveOutOpen 新开设备句柄（WAVE_MAPPER 取当前默认）、播完即关，打开/写入/收尾每步都有真实 MMSYSERR 错误码，日志带实际设备名；打断语义自管（新播放 reset 旧会话）。改回 PlaySound 等于把盲区请回来
 - **toast 点击激活只能走协议激活**：未打包 Win32 应用的 in-process `ToastNotification.Activated` 回调在 Win10 不可靠——AUMID 无注册、补 HKCU AppUserModelId 键两种条件下点击均不触发（机器 A 实测，toast 被点掉但不回调）；现 toast XML 带 `activationType="protocol" launch="dshdesktop://open"`，点击由系统拉起协议 → 二次实例被 single-instance 拦截 → 回调 show 主窗口。链路依赖启动时的 `ensure_activation_registered`（HKCU 写协议+AUMID，仅安装形态写入，dev 跳过防覆盖已安装版指向）
-- **协议激活到顶要过两道坎，show_main 必须走 platform `bring_to_front`**：①前台锁——点击 toast 时前台在 Shell，运行中实例的 SetForegroundWindow 被拒；②Shell 归还竞争——toast 关闭动画完成后 Shell 把前台"归还"给点击前的应用，同步做的 always-on-top 抖动会被这次归还压回去（0.4.5 初版同步抖动机器 B 实测依旧压底）。现实现=后台线程两段择时（250ms/550ms，等归还落定，未拿到前台就再压一次；两轮都没拿到也无碍——TOPMOST 抖动已保证视觉到顶）→ 每段：TOPMOST → AttachThreadInput 挂前台线程借权限 → BringWindowToTop/SetForegroundWindow/SetActiveWindow → detach → 落回 NOTOPMOST（不常驻置顶挡别人）。AttachThreadInput 在 windows-sys 的 `Win32::System::Threading`（不在 WindowsAndMessaging），SetActiveWindow 在 `Win32::UI::Input::KeyboardAndMouse`
-- **toast 图标要同时钉住"随包映射"和"高分辨率源"**：bundle.resources 漏映射 `icons/128x128@2x.png` 时安装包根本不含图标文件，toast 静默无图标——dev 下 resource_dir 指源码树恰好有文件会掩盖此坑（0.4.5 初版实踩，机器 A 正常机器 B 必现）；且 toast `<image>` 只收单个 URI 无法按屏幕 DPI 分套，必须用 256px 源（128x128@2x.png）让系统向下缩放，128px 在 200%+ 缩放下发糊。toast.rs 锚定测试 bundled_icon_is_shipped_hi_dpi 双钉
+- **协议激活到顶的教训：先验证调用链，再加固机制**：机器 B"窗口在浏览器下面"的真根因是 single-instance 回调里内联的 `show+unminimize+set_focus` 三件套**根本没调 `tray::show_main`**——此前对 show_main 做的所有置顶加固都落在协议激活走不到的路径上（机器 A"验证通过"是假阳性：隐藏窗口 show 后自然出现在可见位置，没有真实遮挡竞争）。现回调统一走 show_main → platform `bring_to_front`：后台线程两段择时（250/550ms，压住 Shell 在 toast 关闭动画后把前台归还点击前应用的动作）→ TOPMOST → AttachThreadInput 挂前台线程借权限 → BringWindowToTop/SetForegroundWindow/SetActiveWindow → detach → NOTOPMOST（不常驻置顶）；另有第二路权限——协议激活拉起的二次实例在 main 开头（single-instance 拦截前）`AllowSetForegroundWindow(ASFW_ANY)` 把 Shell 授予的前台权限广播给主实例（Chromium/VSCode 单实例激活同款）。bring_to_front 每步落 events.log（每轮前台 pid/attach/sfg 结果 + 2s 后最终归属），失败可直接读日志定位。AttachThreadInput 在 windows-sys `Win32::System::Threading`，SetActiveWindow 在 `Win32::UI::Input::KeyboardAndMouse`；attach 对 UWP 前台线程（如操作中心）会被拒——那是通知中心点条目的特例，真实 banner 点击时前台是桌面进程不受影响
+- **toast 图标只有顶部行小图标，不放 appLogoOverride**：顶部行（应用名左侧）小图标由 HKCU AppUserModelId 键的 IconUri 提供，指向随包 256px `icons/128x128@2x.png`（图标位单文件无法按 DPI 分套，256px 源系统自缩放，128px 在 200%+ 缩放发糊）；toast XML **不含** `<image>`——appLogoOverride 会在正文区再渲染一个大图标，与顶部行叠出双图标且挤压文字排版（机器 B 实测）。两道坑都有锚定测试：①bundle.resources 漏映射 `icons/128x128@2x.png` 则安装包不含图标、IconUri 静默失效，dev 下 resource_dir 指源码树恰好有文件会掩盖（0.4.5 初版实踩）；②toast XML 断言无 `<image>` 元素
 
 ## 测试基线
 

@@ -175,6 +175,13 @@ impl Platform for WindowsPlatform {
         if raw_hwnd == 0 {
             return;
         }
+        // 全链路诊断落 events.log：前台锁/Shell 归还竞争在机器 B 上翻过车
+        // （同步抖动、单段择时均实测无效），每步结果可回放，失败有因可查。
+        let log = self.runtime_base_dir().join("events.log");
+        crate::append_debug_line(
+            &log,
+            &format!("[{}] bring_to_front: begin hwnd={raw_hwnd:#x}", crate::local_stamp()),
+        );
         // 后台线程执行：调用侧含托盘回调（主事件循环），不能被择时 sleep 卡住；
         // 期间窗口失效（极速关窗/退出）时下面各 Win32 调用只是返回失败，无害。
         std::thread::spawn(move || {
@@ -201,25 +208,27 @@ impl Platform for WindowsPlatform {
                         SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
                     );
                     // 2) AttachThreadInput 把本线程输入队列挂到前台线程——attach 后
-                    //    本进程被视为前台协作方，SetForegroundWindow 的前台锁放行
-                    //    （托盘点击本就有权限，协议激活路径没有，统一走这里两路通吃）
+                    //    本进程被视为前台协作方，SetForegroundWindow 的前台锁放行；
+                    //    协议激活路径另有二次实例 AllowSetForegroundWindow(ASFW_ANY)
+                    //    的事先授权（lib.rs run 开头），双保险
                     let fore = GetForegroundWindow();
+                    let mut fore_pid = 0u32;
                     let fore_tid = if fore.is_null() {
                         0
                     } else {
-                        GetWindowThreadProcessId(fore, std::ptr::null_mut())
+                        GetWindowThreadProcessId(fore, &mut fore_pid)
                     };
                     let cur_tid = GetCurrentThreadId();
                     let attached = fore_tid != 0
                         && fore_tid != cur_tid
                         && AttachThreadInput(cur_tid, fore_tid, 1) != 0;
                     BringWindowToTop(hwnd);
-                    SetForegroundWindow(hwnd);
+                    let sfg = SetForegroundWindow(hwnd);
                     SetActiveWindow(hwnd);
                     if attached {
                         AttachThreadInput(cur_tid, fore_tid, 0);
                     }
-                    // 3) 落回普通层：此时已是前景窗口，z 序停在普通层顶端；不常驻
+                    // 3) 落回普通层：此时应是前景窗口，z 序停在普通层顶端；不常驻
                     //    TOPMOST，避免挡住用户后续打开的其它窗口
                     SetWindowPos(
                         hwnd,
@@ -230,12 +239,50 @@ impl Platform for WindowsPlatform {
                         0,
                         SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
                     );
-                    // 前台已到手即收工；没到手（前台是 Shell 系 UI 等特例）第二轮再抢，
-                    // 两轮都失败也无碍——TOPMOST 抖动已保证窗口视觉到顶可见
-                    if GetForegroundWindow() == hwnd {
+                    let fg = GetForegroundWindow();
+                    let mut fg_pid = 0u32;
+                    if !fg.is_null() {
+                        GetWindowThreadProcessId(fg, &mut fg_pid);
+                    }
+                    let ours = fg_pid == std::process::id();
+                    crate::append_debug_line(
+                        &log,
+                        &format!(
+                            "[{}] bring_to_front: attempt {} fore_pid={} attach={} sfg={} fg_pid={} ours={}",
+                            crate::local_stamp(),
+                            attempt + 1,
+                            fore_pid,
+                            attached as i32,
+                            sfg,
+                            fg_pid,
+                            ours
+                        ),
+                    );
+                    // 前台已到手即收工；两轮都失败也无碍——TOPMOST 抖动已保证
+                    // 窗口视觉到顶可见
+                    if fg == hwnd {
                         break;
                     }
                 }
+            }
+            // 追记 2s 后的最终前台归属：若 Shell 归比比两段择时更晚，这里能看到
+            // 前台又被谁拿走（择时窗口是否要再后移的证据）
+            std::thread::sleep(std::time::Duration::from_secs(2));
+            unsafe {
+                let fg = GetForegroundWindow();
+                let mut fg_pid = 0u32;
+                if !fg.is_null() {
+                    GetWindowThreadProcessId(fg, &mut fg_pid);
+                }
+                crate::append_debug_line(
+                    &log,
+                    &format!(
+                        "[{}] bring_to_front: settled fg_pid={} ours={}",
+                        crate::local_stamp(),
+                        fg_pid,
+                        fg_pid == std::process::id()
+                    ),
+                );
             }
         });
     }

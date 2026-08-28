@@ -34,6 +34,20 @@ use process::{DshState, ProcessEvent};
 use progress::ProgressPayload;
 
 pub fn run() {
+    // 协议激活的二次实例：Windows 响应用户点击 toast 拉起本进程，它手握前台
+    // 权限，但随即被下面的 single-instance 插件拦截退出——权限随之作废。赶在
+    // 拦截前把前台权限广播出去（ASFW_ANY），运行中实例随后 bring_to_front 的
+    // SetForegroundWindow 才是合法调用（前台锁只认前台进程或其授权方；
+    // Chromium/VSCode 的单实例激活同款机制）。普通启动/非前台进程调用只是
+    // 返回失败，无害。
+    #[cfg(windows)]
+    if std::env::args().any(|a| a == notify::toast::PROTOCOL_ARG) {
+        unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::AllowSetForegroundWindow(
+                windows_sys::Win32::UI::WindowsAndMessaging::ASFW_ANY,
+            );
+        }
+    }
     tauri::Builder::default()
         // 单实例必须最先注册；第二次启动时聚焦已有主窗口（用户双开，或点击系统
         // 通知 toast 的协议激活——后者带 --dshdesktop-protocol 标记，落一行日志）
@@ -49,11 +63,11 @@ pub fn run() {
                     );
                 }
             }
-            if let Some(w) = app.get_webview_window("main") {
-                let _ = w.show();
-                let _ = w.unminimize();
-                let _ = w.set_focus();
-            }
+            // 必须走 tray::show_main——它内含 platform bring_to_front（两段择时 +
+            // AttachThreadInput + TOPMOST 抖动）。裸 show+set_focus 在前台锁下
+            // 无声失败：窗口可见时被浏览器等前台应用压在原地（机器 B 实测"在
+            // 浏览器下面"——这里曾内联三件套，根本没调到 show_main，加固全落空）
+            tray::show_main(app);
         }))
         .plugin(tauri_plugin_notification::init())
         // 窗口几何记忆：缩放/移动实时入缓存，退出时落盘，下次启动建窗时恢复。
