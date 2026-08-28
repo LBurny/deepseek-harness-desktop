@@ -283,7 +283,7 @@ pub fn open_update_page() -> Result<(), String> {
 }
 
 #[cfg(windows)]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     // rundll32 是 GUI 子系统进程，不会闪控制台窗口
     std::process::Command::new("rundll32")
         .args(["url.dll,FileProtocolHandler", url])
@@ -293,7 +293,7 @@ fn open_url(url: &str) -> Result<(), String> {
 }
 
 #[cfg(target_os = "macos")]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     std::process::Command::new("open")
         .arg(url)
         .spawn()
@@ -302,7 +302,7 @@ fn open_url(url: &str) -> Result<(), String> {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn open_url(url: &str) -> Result<(), String> {
+pub(crate) fn open_url(url: &str) -> Result<(), String> {
     std::process::Command::new("xdg-open")
         .arg(url)
         .spawn()

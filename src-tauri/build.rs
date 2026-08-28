@@ -10,6 +10,7 @@ fn main() {
                 "get_status",
                 "restart_dsh",
                 "get_recent_logs",
+                "open_log_file",
                 "get_autostart",
                 "set_autostart",
                 "get_bootstrap_error",

@@ -67,6 +67,7 @@ pub fn run() {
             commands::get_status,
             commands::restart_dsh,
             commands::get_recent_logs,
+            commands::open_log_file,
             commands::get_autostart,
             commands::set_autostart,
             commands::get_bootstrap_error,

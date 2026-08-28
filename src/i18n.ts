@@ -18,6 +18,7 @@ const en: Record<string, string> = {
   '错误': 'Error',
   '重启服务': 'Restart service',
   '重启中…': 'Restarting…',
+  '打开日志': 'Open log',
   '诊断日志': 'Diagnostics log',
 
   // 其它设置

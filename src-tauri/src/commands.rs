@@ -35,17 +35,34 @@ pub async fn restart_dsh(state: State<'_, SharedState>) -> Result<(), String> {
     Ok(())
 }
 
-#[tauri::command]
-pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
-    // events.log = 壳侧诊断 + dsh 进程输出的统一持久层（1MB 截断），
-    // 读尾部即得跨会话的近期历史；面板开着期间的增量走 dsh-log 实时事件
-    let log = state
+/// events.log 固定落位：DSH home 上级（%LOCALAPPDATA%\DSHDesktop\events.log）
+fn events_log_path(state: &SharedState) -> std::path::PathBuf {
+    state
         .runtime
         .home
         .parent()
         .unwrap_or(std::path::Path::new("."))
-        .join("events.log");
-    crate::diagnostics::read_log_tail(&log, crate::diagnostics::LOG_TAIL_LINES)
+        .join("events.log")
+}
+
+#[tauri::command]
+pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
+    // events.log = 壳侧诊断 + dsh 进程输出的统一持久层（1MB 截断），
+    // 读尾部即得跨会话的近期历史；面板开着期间的增量走 dsh-log 实时事件
+    crate::diagnostics::read_log_tail(
+        &events_log_path(&state),
+        crate::diagnostics::LOG_TAIL_LINES,
+    )
+}
+
+/// 用系统默认程序打开 events.log（记事本等），便于复制完整日志上报
+#[tauri::command]
+pub fn open_log_file(state: State<SharedState>) -> Result<(), String> {
+    let log = events_log_path(&state);
+    if !log.exists() {
+        return Err(crate::i18n::pick("日志文件尚未生成", "Log file does not exist yet").into());
+    }
+    crate::update::open_url(&log.to_string_lossy())
 }
 
 #[tauri::command]

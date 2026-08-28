@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.4] - 2026-08-28
+
+### Changed
+
+- Diagnostics panel layout now matches the plugins panel: the header is split left/right with the status badge staying beside the title and the action buttons moved to the right — 重启服务 becomes the primary (solid) button in the 更新全部 position, and a new 打开日志 ghost button sits to its left in the 重启 dsh position. 打开日志 opens `%LOCALAPPDATA%\DSHDesktop\events.log` with the system default program (new `open_log_file` command via the shell's rundll32 path — no console flash; registered in the ACL manifest/capabilities but not exposed to the remote source), so a full log can be copied for reporting without digging through Explorer. The log area itself is card-ified like the 已安装 list: the 诊断日志 heading lives inside the card and the log fills the remaining height in a bordered, rounded box
+
 ## [0.4.3] - 2026-08-28
 
 ### Added
@@ -18,7 +24,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sound-link diagnostics: every sound play attempt (preview clicks and real notifications) now logs a timestamped line to events.log with the resolved wav path, PlaySound result and elapsed ms, so "which click had no sound" can be reconciled against the log. A failed PlaySound additionally falls back to the toast's system-default sound instead of leaving the toast silent (machines with broken winmm, e.g. Windows N editions)
 
 ### Added
-
 
 - CI: the bundled-runtime cache (`rt-<dsh version>-<script hash>`) never actually hit across releases — Actions caches are ref-scoped, so a cache saved by a tag-triggered run is invisible to the next tag run (observed on 0.4.0→0.4.1: same key still missed, the ~20-minute runtime fetch re-ran and the release pipeline took ~70 min). The cache steps already existed in build.yml, but its trigger was manual-only. build.yml now also runs on main pushes (docs-only changes ignored), warming the cache into the default-branch scope that tag runs can read; from now on, a release whose dsh version is unchanged hits the cache, and the first release after a dsh bump should push main first, then tag
 

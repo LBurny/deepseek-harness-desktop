@@ -11,6 +11,7 @@
   let remote = $state<Remote | null>(null)
   let logs = $state<string[]>([])
   let restarting = $state(false)
+  let logError = $state('')
   let logEl: HTMLPreElement | undefined = $state()
 
   let stateText = $derived(
@@ -51,6 +52,15 @@
     }, 1500)
   }
 
+  async function openLog() {
+    logError = ''
+    try {
+      await invoke('open_log_file')
+    } catch (e) {
+      logError = String(e)
+    }
+  }
+
   let unlistenLog: (() => void) | undefined
   let timer = 0
 
@@ -77,11 +87,19 @@
 
 <main>
   <header>
-    <h1>{t('诊断面板')}</h1>
-    <span class="badge" class:ok={stateText === t('运行中')} class:bad={stateText === t('失败')}>{stateText}</span>
+    <div class="head-left">
+      <h1>{t('诊断面板')}</h1>
+      <span class="badge" class:ok={stateText === t('运行中')} class:bad={stateText === t('失败')}>{stateText}</span>
+    </div>
+    <div class="actions">
+      <button class="ghost" onclick={openLog}>{t('打开日志')}</button>
+      <button class="primary" onclick={restart} disabled={restarting}>
+        {restarting ? t('重启中…') : t('重启服务')}
+      </button>
+    </div>
   </header>
 
-  <section class="card">
+  <section class="card info">
     <div class="row"><span>{t('版本')}</span><b>{status?.version ?? '…'}</b></div>
     <div class="row"><span>{t('端口')}</span><b>{status?.port ?? '—'}</b></div>
     <div class="row"><span>{t('进程 PID')}</span><b>{status?.pid ?? '—'}</b></div>
@@ -91,14 +109,11 @@
     {/if}
   </section>
 
-  <section class="actions">
-    <button onclick={restart} disabled={restarting}>
-      {restarting ? t('重启中…') : t('重启服务')}
-    </button>
+  <section class="card list">
+    <h2>{t('诊断日志')}</h2>
+    {#if logError}<p class="operr">{logError}</p>{/if}
+    <pre class="logs" bind:this={logEl}>{#each logs as line}{line + '\n'}{/each}</pre>
   </section>
-
-  <h2>{t('诊断日志')}</h2>
-  <pre class="logs" bind:this={logEl}>{#each logs as line}{line + '\n'}{/each}</pre>
 </main>
 
 <style>
@@ -109,8 +124,14 @@
     display: flex;
     flex-direction: column;
     gap: 14px;
+    overflow: hidden;
   }
   header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .head-left {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -120,10 +141,11 @@
     margin: 0;
   }
   h2 {
-    font-size: 13px;
-    color: var(--text-2);
-    margin: 4px 0 0;
+    margin: 0;
+    padding: 12px 16px 4px;
+    font-size: 12px;
     font-weight: 600;
+    color: var(--text-2);
   }
   .badge {
     font-size: 12px;
@@ -140,10 +162,37 @@
     background: var(--bad-soft-bg);
     color: var(--bad);
   }
+  .actions {
+    display: flex;
+    gap: 10px;
+  }
+  button {
+    border: none;
+    border-radius: 8px;
+    padding: 8px 18px;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .primary {
+    background: var(--accent);
+    color: #fff;
+  }
+  .ghost {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-2);
+  }
   .card {
     background: var(--bg-raise);
     border: 1px solid var(--border);
     border-radius: 10px;
+  }
+  .info {
+    flex-shrink: 0;
     padding: 12px 16px;
     display: flex;
     flex-direction: column;
@@ -162,30 +211,24 @@
   .row b.bad {
     color: var(--bad);
   }
-  .actions {
+  .list {
+    flex: 1;
+    min-height: 0;
     display: flex;
-    align-items: center;
-    gap: 18px;
+    flex-direction: column;
   }
-  button {
-    background: var(--accent);
-    color: #fff;
-    border: none;
-    border-radius: 8px;
-    padding: 8px 18px;
-    font-size: 13px;
-    cursor: pointer;
-  }
-  button:disabled {
-    opacity: 0.5;
-    cursor: default;
+  .operr {
+    margin: 6px 16px 0;
+    font-size: 12px;
+    color: var(--bad);
   }
   .logs {
     flex: 1;
-    margin: 0;
+    min-height: 0;
+    margin: 8px 12px 12px;
     background: var(--bg-input);
     border: 1px solid var(--border);
-    border-radius: 10px;
+    border-radius: 8px;
     padding: 12px;
     overflow-y: auto;
     font-family: 'Cascadia Mono', Consolas, monospace;
