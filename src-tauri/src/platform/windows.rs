@@ -162,6 +162,83 @@ impl Platform for WindowsPlatform {
         });
         Ok(())
     }
+
+    fn bring_to_front(&self, raw_hwnd: usize) {
+        use windows_sys::Win32::Foundation::HWND;
+        use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
+        use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetActiveWindow;
+        use windows_sys::Win32::UI::WindowsAndMessaging::{
+            BringWindowToTop, GetForegroundWindow, GetWindowThreadProcessId,
+            SetForegroundWindow, SetWindowPos, HWND_NOTOPMOST, HWND_TOPMOST,
+            SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+        };
+        if raw_hwnd == 0 {
+            return;
+        }
+        // 后台线程执行：调用侧含托盘回调（主事件循环），不能被择时 sleep 卡住；
+        // 期间窗口失效（极速关窗/退出）时下面各 Win32 调用只是返回失败，无害。
+        std::thread::spawn(move || {
+            let hwnd = raw_hwnd as HWND;
+            // 两段择时：点击 toast 激活后，Shell 会在 toast 关闭动画完成时把前台
+            // "归还"给点击前的应用——同步抢会被这次归还压回去（机器 B 实测窗口弹出
+            // 却依旧在底部）。第一段 250ms 等归还落定后抢；若仍未拿到前台（归还
+            // 比我们更晚），第二段 550ms 再压一次，覆盖更晚的归还时序。
+            for attempt in 0..2 {
+                std::thread::sleep(std::time::Duration::from_millis(if attempt == 0 {
+                    250
+                } else {
+                    300
+                }));
+                unsafe {
+                    // 1) 先 TOPMOST：视觉立即到顶，不依赖任何前台权限
+                    SetWindowPos(
+                        hwnd,
+                        HWND_TOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_SHOWWINDOW,
+                    );
+                    // 2) AttachThreadInput 把本线程输入队列挂到前台线程——attach 后
+                    //    本进程被视为前台协作方，SetForegroundWindow 的前台锁放行
+                    //    （托盘点击本就有权限，协议激活路径没有，统一走这里两路通吃）
+                    let fore = GetForegroundWindow();
+                    let fore_tid = if fore.is_null() {
+                        0
+                    } else {
+                        GetWindowThreadProcessId(fore, std::ptr::null_mut())
+                    };
+                    let cur_tid = GetCurrentThreadId();
+                    let attached = fore_tid != 0
+                        && fore_tid != cur_tid
+                        && AttachThreadInput(cur_tid, fore_tid, 1) != 0;
+                    BringWindowToTop(hwnd);
+                    SetForegroundWindow(hwnd);
+                    SetActiveWindow(hwnd);
+                    if attached {
+                        AttachThreadInput(cur_tid, fore_tid, 0);
+                    }
+                    // 3) 落回普通层：此时已是前景窗口，z 序停在普通层顶端；不常驻
+                    //    TOPMOST，避免挡住用户后续打开的其它窗口
+                    SetWindowPos(
+                        hwnd,
+                        HWND_NOTOPMOST,
+                        0,
+                        0,
+                        0,
+                        0,
+                        SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                    );
+                    // 前台已到手即收工；没到手（前台是 Shell 系 UI 等特例）第二轮再抢，
+                    // 两轮都失败也无碍——TOPMOST 抖动已保证窗口视觉到顶可见
+                    if GetForegroundWindow() == hwnd {
+                        break;
+                    }
+                }
+            }
+        });
+    }
 }
 
 #[cfg(not(windows))]

@@ -33,6 +33,13 @@ pub trait Platform: Send + Sync {
     /// Err（调用侧降级 toast 系统默认音）；真实播放结果（含失败原因/重试）经
     /// diag 上报。非阻塞：派发后立即返回，不卡调用线程。
     fn play_sound_file(&self, path: &Path, diag: Option<SoundDiag>) -> Result<(), String>;
+    /// 把窗口带到前台并聚焦（点击 toast / 托盘打开主界面时）。Windows 上有两道
+    /// 坎：前台锁（非前台进程的 SetForegroundWindow 被拒）和 Shell 归还竞争
+    /// （点击 toast 后 Shell 会在 toast 关闭动画完成时把前台还给点击前的应用，
+    /// 同步抢会被压回——机器 B 实测"窗口弹出但依旧在底部"）。Windows 实现为
+    /// 后台线程延迟择时 + AttachThreadInput 借前台权限 + 置顶抖动；非阻塞。
+    /// 默认 no-op（其它平台实现时覆盖）。
+    fn bring_to_front(&self, _raw_hwnd: usize) {}
 }
 
 #[cfg(windows)]
@@ -89,5 +96,14 @@ mod tests {
         let ms = t0.elapsed().as_secs_f64() * 1000.0;
         let _ = r;
         assert!(ms < 1000.0, "play_sound_file 派发不应阻塞调用线程，实测 {ms:.0}ms");
+    }
+
+    /// 空 hwnd 安全：提前返回不 spawn 线程，调用侧（含托盘主事件循环）不被阻塞。
+    #[test]
+    fn bring_to_front_null_hwnd_is_safe_noop() {
+        let p = current();
+        let t0 = std::time::Instant::now();
+        p.bring_to_front(0);
+        assert!(t0.elapsed().as_millis() < 100);
     }
 }

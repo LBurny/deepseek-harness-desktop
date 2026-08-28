@@ -10,8 +10,9 @@
 //!
 //! 图标：ToastGeneric 的 `<image>` **必须带 placement="appLogoOverride"** 才是
 //! 左上角应用 logo（实测缺该属性会被渲染成正文下方的整幅大图）；图标文件随包
-//! 分发（resources 映射 icons/128x128.png），dev 找不到文件时省略（无图标但
-//! 不影响弹出）。
+//! 分发（resources 映射 icons/128x128@2x.png = 256×256——toast src 只能给一个
+//! URI 不能按 DPI 分套，给 256px 源让系统自缩放，覆盖到 ~500% 屏幕缩放不糊），
+//! dev 找不到文件时省略（无图标但不影响弹出）。
 //!
 //! 声音与 AUMID 映射逐项对齐 tauri-plugin-notification 的 Windows 后端
 //! （notify-rust），保证弹出的 toast 外观与替换前完全一致：
@@ -38,9 +39,12 @@ pub(crate) const PROTOCOL_ARG: &str = "--dshdesktop-protocol";
 /// 协议 scheme（HKCU 注册的 URL Protocol 名）
 const PROTOCOL_SCHEME: &str = "dshdesktop";
 
-/// 随包分发的 toast 图标（相对 resource_dir / exe 目录；tauri.conf resources
-/// 把 src-tauri/icons/128x128.png 映射到 <install>/icons/128x128.png）
-const ICON_REL: &str = r"icons\128x128.png";
+/// 随包分发的 toast 图标（相对 resource_dir / exe 目录）：用 128x128@2x.png
+/// （256×256）而非 128x128.png——toast <image> 只收单个 URI，无法按屏幕 DPI
+/// 分套，高缩放（200%+）下 128px 会被拉伸发糊；256px 源由系统向下缩放，
+/// 100%~500% 缩放全程清晰。tauri.conf resources 映射到
+/// <install>/icons/128x128@2x.png（锚定测试 bundled_icon_is_shipped_hi_dpi）
+const ICON_REL: &str = r"icons\128x128@2x.png";
 
 /// XML 文本转义（title/body 来自通知内容/会话标题，可能含 & < > " '）
 fn xml_escape(s: &str) -> String {
@@ -252,5 +256,27 @@ mod tests {
         let xml = toast_xml("t", "b", &ToastSound::Default, None);
         assert!(!xml.contains("<audio"));
         assert!(!xml.contains("<image"));
+    }
+
+    /// 锚定"图标随包分发且是高分辨率源"契约：安装形态下 toast_icon_path 探测
+    /// <install>/icons/128x128@2x.png，所以 bundle.resources 必须把它映射到安装
+    /// 根的 icons/——漏映射则安装包根本不含图标文件，toast 静默退回无图标
+    /// （0.4.5 初版实踩：dev 下 resource_dir 指源码树恰好有文件，掩盖了安装包
+    /// 缺失，机器 B 必现）。同时钉住源文件实际像素 ≥256：toast image 只收单个
+    /// URI 无法按 DPI 分套，源图低于 256px 在 200%+ 屏幕缩放下会糊。
+    #[test]
+    fn bundled_icon_is_shipped_hi_dpi() {
+        let root = env!("CARGO_MANIFEST_DIR");
+        let conf: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(format!("{root}/tauri.conf.json")).unwrap(),
+        )
+        .unwrap();
+        let key = ICON_REL.replace('\\', "/");
+        assert_eq!(conf["bundle"]["resources"][&key], key.as_str());
+        let png = std::fs::read(format!("{root}/{key}")).unwrap();
+        // PNG IHDR：偏移 16/20 各 4 字节 big-endian 宽/高
+        let w = u32::from_be_bytes(png[16..20].try_into().unwrap());
+        let h = u32::from_be_bytes(png[20..24].try_into().unwrap());
+        assert!(w >= 256 && h >= 256, "toast 图标源图 {w}x{h} 低于 256px，高 DPI 下会糊");
     }
 }

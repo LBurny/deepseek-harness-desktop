@@ -24,7 +24,11 @@
       "icons/128x128@2x.png",
       "icons/icon.ico"
     ],
-    "resources": { "runtime": "runtime", "resources/sounds": "sounds" },
+    "resources": {
+      "runtime": "runtime",
+      "resources/sounds": "sounds",
+      "icons/128x128@2x.png": "icons/128x128@2x.png"
+    },
     "windows": {
       "nsis": {
         "installerHooks": "windows/nsis-hooks.nsh"

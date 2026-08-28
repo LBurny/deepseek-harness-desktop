@@ -278,18 +278,30 @@ fn window_title(zh: &str, en: &str) -> String {
 }
 
 /// 打开主界面并聚焦：托盘左键/菜单"打开主界面"/点击系统通知共用
-/// （toast 的 Activated 回调从 WinRT 线程经 run_on_main_thread 调进来）
+/// （toast 协议激活经 single-instance 回调调进来）
 pub(crate) fn show_main(app: &AppHandle) {
     if let Some(w) = app.get_webview_window("main") {
         let _ = w.show();
         let _ = w.unminimize();
-        // 置顶抖动（短暂 always_on_top 再取消）：点击 toast 激活时前台在 Shell，
-        // 运行中实例的 SetForegroundWindow 被前台锁拒绝——窗口会弹出但被压在
-        // 当前前台应用下面（机器 B 实测"老是覆盖在下面"）。强制置顶一次把窗口
-        // 顶到 Z 序顶端，焦点若仍被拒窗口也可见可点。
-        let _ = w.set_always_on_top(true);
-        let _ = w.set_focus();
-        let _ = w.set_always_on_top(false);
+        // 带到前台走平台实现（非阻塞、内部择时）：点击 toast 激活时前台在 Shell，
+        // 运行中实例的 SetForegroundWindow 被前台锁拒绝，且 Shell 会在 toast 关闭
+        // 动画完成时把前台"归还"给点击前的应用——此前同步的 always-on-top 抖动 +
+        // set_focus 两关都过不去（机器 B 实测"弹出但依旧在底部"）。Windows 实现
+        // 为延迟 250ms + AttachThreadInput 借前台权限 + 置顶抖动，见
+        // platform/windows.rs bring_to_front。
+        #[cfg(windows)]
+        if let (Ok(hwnd), Some(platform)) = (
+            w.hwnd(),
+            app.try_state::<std::sync::Arc<dyn crate::platform::Platform>>(),
+        ) {
+            platform.bring_to_front(hwnd.0 as usize);
+        }
+        #[cfg(not(windows))]
+        {
+            let _ = w.set_always_on_top(true);
+            let _ = w.set_focus();
+            let _ = w.set_always_on_top(false);
+        }
     }
 }
 
