@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.6] - 2026-08-28
+
+### Fixed
+
+- 手机远程界面：模型选择药丸退回全名显示、窄屏溢出截断（"glm-5.3-flash …"）——上游 dsh 删除了图标化规则锚定的 `_triggerEffort` 段，按 mobile.css 的锚定哲学规则静默失配、页面回到未适配态。图标化改锚语义钩子 `data-slot="conversation.input.model"`（隐藏文案，mask+currentColor 火花图标跟随主题文字色）
+- 手机远程界面：模型选择菜单左缘越出屏幕被裁（模型列表显示 "-V4-Flash"、"DeepSeek" 前缀丢失）。菜单以 45px 药丸为包含块 `right:0` 绝对定位；≤700px 下药丸根改静态定位使包含块上移到输入卡片，显式 `bottom: calc(100% + 8px)` 让菜单从卡片上方弹出（上游的 `bottom:36px` 锚相对卡片会叠进输入行），`max-width: calc(100vw - 24px)` + 内部滚动兜底超长模型名
+- 手机远程界面：产物块的「在文件夹中显示」按钮在 ≤700px 下隐藏——它唤起的是 PC 端资源管理器，手机远程端看不见也点不到，还白占一行；「产物」标签与文件药丸保留
+
 ## [0.4.5] - 2026-08-28
 
 ### Added

@@ -134,15 +134,17 @@
     flex: 0 1 auto;
     min-width: 0;
   }
-  /* 模型触发器 = 唯一带 effort 段的触发器（triggerEffort 仅它拥有），
-     权限触发器的文案上游在窄屏已自行隐藏，无需处理 */
-  [class*="_trailing"] [class*="_trigger"]:has(> [class*="_triggerEffort"]) [class*="_triggerLabel"],
-  [class*="_trailing"] [class*="_trigger"]:has(> [class*="_triggerEffort"]) [class*="_triggerEffort"] {
+  /* 模型触发器锚 data-slot 语义钩子（conversation.input.model）。旧锚点
+     "_triggerEffort 段" 上游已删（0.4.5 后实测），整组规则曾静默失效：
+     全名药丸在窄屏溢出截断、与发送键挤行——上游改标记时这里的表现就是
+     "回到未适配态"，改版后须手机视口回归一遍。权限触发器的文案上游在
+     窄屏已自行隐藏，无需处理 */
+  [data-slot="conversation.input.model"] [class*="_triggerLabel"] {
     display: none;
   }
   /* 模型触发器原生只有文案 + chevron，文案隐藏后补一枚火花图标；
      mask + currentColor 让图标跟随主题文字色（深浅色都正确） */
-  [class*="_trailing"] [class*="_trigger"]:has(> [class*="_triggerEffort"])::before {
+  [data-slot="conversation.input.model"] [class*="_trigger"]::before {
     content: "";
     flex: 0 0 auto;
     width: 15px;
@@ -153,13 +155,32 @@
   }
 
   /*
-   * 触发器二级菜单越界：菜单以触发器为包含块 right:0 右对齐，宽 240px 时
-   * 左缘越出中列被 centerCol 的 overflow:hidden 裁掉（标签"模型"只剩"型"）。
-   * 触发器改静态定位后包含块上移到输入卡片，right:0 对齐卡片右缘，
-   * bottom:calc(100%+8px) 也顺势变成贴着卡片上方弹出，菜单完整在屏内。
+   * 模型二级菜单越界：菜单 absolute right:0 相对 45px 药丸定位，宽 281px 时
+   * 左缘越出屏幕被裁（模型列表 "-V4-Flash" 左半截）。药丸根改静态定位，包含
+   * 块上移到输入卡片（trailing/row 均 static，卡片是第一个 relative 祖先），
+   * right:0 对齐卡片右缘；上游菜单纵向锚 bottom:36px（相对 28px 药丸=贴药丸
+   * 上方），落到卡片上会叠进输入行——显式 bottom:calc(100%+8px) 抬到卡片
+   * 上方弹出。max-width 兜底超长模型名，菜单内部滚动。
    */
-  [class*="_trailing"] [class*="_root"]:has(> [class*="_menu"]) {
+  [data-slot="conversation.input.model"] > [class*="_root"] {
     position: static;
+  }
+  [data-slot="conversation.input.model"] [class*="_menu"] {
+    left: auto;
+    right: 0;
+    top: auto;
+    bottom: calc(100% + 8px);
+    max-width: calc(100vw - 24px);
+    overflow-y: auto;
+  }
+
+  /*
+   * 产物块（P4kPIW_*）：手机上"在文件夹中显示"按钮没有意义——它唤起的是 PC
+   * 端的资源管理器，手机远程端看不见也点不到，还白占一行。隐藏按钮，保留
+   * "产物"标签与文件药丸（点击查看文件内容仍可用）。
+   */
+  [class*="_showFolder"] {
+    display: none;
   }
 
   /*
