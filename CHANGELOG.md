@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.7] - 2026-08-28
+
+### Fixed
+
+- 手机远程界面：消息页脚的统计串（时间 · 用时 · 首 token · tok/s，单行 nowrap 约 367px）在窄屏溢出窗口右缘被裁；允许换行的备选方案实测第二行会压进输入卡片被遮挡。按"信息"子页即统计归处的定位，≤700px 下页脚统计整体隐藏，只留操作图标（原生单行 28px 布局不动）；统计信息仍可从「信息」标签页查看
+
 ## [0.4.6] - 2026-08-28
 
 ### Fixed

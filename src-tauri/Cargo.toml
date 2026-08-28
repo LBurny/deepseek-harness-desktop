@@ -1,6 +1,6 @@
 [package]
 name = "dshdesktop"
-version = "0.4.6"
+version = "0.4.7"
 edition = "2021"
 description = "Desktop shell for deepseek-harness (dsh)"
 repository = "https://github.com/LBurny/deepseek-harness-desktop"
