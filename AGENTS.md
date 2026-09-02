@@ -167,7 +167,9 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   正常——是网络层拦截不是配置问题，别改 sslBackend/别关 sslVerify。系统 Clash 代理
   127.0.0.1:7890 走 github.com 通畅，一次性绕法：
   `git -c http.proxy=http://127.0.0.1:7890 push`（**不写入 git 配置**，拦截消失后直连仍可用；
-  先 `curl -sI -x http://127.0.0.1:7890 https://github.com` 确认代理在线）
+  先 `curl -sI -x http://127.0.0.1:7890 https://github.com` 确认代理在线）。0.4.9 实踩补充：
+  同一代理下 curl 稳定 200 但 git（openssl）握手被掐 SSL_ERROR_SYSCALL 时，加
+  `-c http.sslBackend=schannel` 一次性即通（只换 TLS 栈，sslVerify 不动、不写配置）
 
 ## 关键约定与坑（细节见 docs/design.zh-CN.md）
 
