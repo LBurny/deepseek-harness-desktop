@@ -1,10 +1,11 @@
 name: release
 
-# 推送 v* 标签时构建安装包并发布到 GitHub Releases。
-# 用法：git tag v0.1.0 && git push origin v0.1.0
+# 【0.4.9 起降为手动备用】正式发版改走本地：pnpm tauri build 产物由
+# scripts/release-local.ps1 直接建/更新 GitHub Release——tag 推送不再触发本流程
+# （私有仓库 windows runner 跑满 30~70 分钟太久，且缓存按 ref 隔离、tag run 读不到
+# 自己存的缓存）。本流程仅在 Actions 页手动 workflow_dispatch 时可用，链路保持可用作兜底。
 on:
-  push:
-    tags: ["v*"]
+  workflow_dispatch:
 
 permissions:
   contents: write   # 创建 release 所需

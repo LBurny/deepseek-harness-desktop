@@ -118,7 +118,8 @@ src-tauri/windows/  nsis-hooks.nsh：安装/卸载钩子；preinstall/preuninsta
                     postuninstall RMDir /r runtime 兜底清单外残留
 scripts/            follow-upstream.ps1(一键跟版)、fetch-runtime.ps1(下载
                     Node+dsh+cloudflared+精简)、prune-runtime.ps1、
-                    acceptance.ps1(端到端验收)、use-fixture-runtime.ps1、
+                    acceptance.ps1(端到端验收)、release-local.ps1(本地发版直接
+                    上传 GitHub Release)、use-fixture-runtime.ps1、
                     check-node.ps1(查 dsh 进程/运行时目录)、gen-icon.mjs、
                     shot-window.ps1、
                     simulate-first-launch.ps1、hide-show-theme.ps1、get-attr20.ps1、
@@ -142,19 +143,18 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
-  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.4.0，下一版 0.4.1。
-- **发版步骤**：bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）
-  → CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` +
-  `acceptance.ps1` 全过 → commit → `git tag v0.y.z` 推送 → `release.yml`（CI 跑测试门禁→
-  构建→发 Release，资产 *_x64-setup.exe + sha256）。github 直连被拦时 push 走 §GitHub 访问的代理。
-- CI 的 release 链路有**运行时缓存**（key=`rt-<dsh版本>-<fetch/prune脚本哈希>`）：dsh 版本
-  不变则跳过 ~20 分钟的 npm install；想强制重拉就换 dsh 版本或改脚本（key 自动失效）。
-  **缓存必须由 main 分支的 build.yml 预热**（Actions 缓存按 ref 隔离，tag run 存的缓存
-  下一个 tag run 读不到——0.4.0→0.4.1 实测同 key 仍 miss、release 跑满 ~70 分钟）：
-  tag 触发的 release run 只能读「当前 tag / 默认分支」的缓存，main 上的 build.yml 把
-  回填存进默认分支作用域。所以发版注意：dsh 版本变了（key 变）时**先推 main 等
-  build.yml 回填缓存，再打 tag**；dsh 版本没变的常规发版，main 的缓存是热的，一次
-  push main+tag 即可命中。
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.4.9，下一版 0.5.0。
+- **发版步骤（0.4.9 起本地发布，弃用 CI release）**：bump 三处版本号（`package.json` /
+  `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→ CHANGELOG 把 Unreleased 收编进新版节
+  → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 → commit → `git tag v0.y.z`
+  推送（tag 不再触发发布）→ `powershell -File scripts/release-local.ps1` 用本地安装包直接
+  建/更新 GitHub Release（需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑）。
+  github 直连被拦时 push 走 §GitHub 访问的代理（openssl 被掐就加 `-c http.sslBackend=schannel`）。
+- **弃用 CI 发布的原因（0.4.9 实踩）**：私有仓库 tag 触发的 release run 跑满 30~70 分钟
+  （Actions 缓存按 ref 隔离，tag run 读不到自己存的缓存、只能等 main 预热），而本地构建
+  3~5 分钟 + release-local.ps1 上传总共几分钟。release.yml 已降为 workflow_dispatch 手动备用。
+  CI 只剩 build.yml（push main 触发）：跑测试+构建 artifact，兼作 rt 运行时缓存预热
+  （缓存按 dsh 版本+脚本哈希为 key；ref 隔离机制细节见 build.yml 头注释）。
 
 ## GitHub 访问
 
