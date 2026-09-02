@@ -6,6 +6,11 @@
 //!
 //! 当前事实基线：@deepseek-ai/dsh 0.1.1-rc.2（子包为浮动区间，抓取时解析到
 //! 最新 rc；npm latest 标签可能滞后，fetch-runtime.ps1 须显式 -DshVersion）。
+//!
+//! 下一版预研：上游已打 dsh-v0.1.2-alpha.1（npm 未发布），逐条漂移核对与跟版
+//! runbook 见 docs/upstream-0.1.2-alpha.1-prep.zh-CN.md——大改三件：Web 鉴权
+//! （launch token + cookie）、事件传输重写（/api/remote.mux + $events +
+//! per-session follow）、shipped 预设搬进 dsh-agent-presets 包。
 
 use std::path::{Path, PathBuf};
 
