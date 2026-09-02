@@ -481,6 +481,32 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
     }
 }
 
+/// 预装 /init 插件的 UI 折叠锚点（preseed 插件靠 source.kind="plugin"+notice
+/// 把长提示词渲染成一行折叠的「上下文注入」；上游改了渲染分支即红）
+fn probe_preseed_plugin_needles(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    for (needle, desc, advice) in [
+        (
+            upstream::CONTEXT_INJECTION_BRANCH_NEEDLE,
+            "会话 UI 仍有 source.kind!==\"user\" → 折叠上下文行分支",
+            "上游改了消息渲染分支：/init 注入的提示词可能重新渲染成完整用户气泡，改 upstream::CONTEXT_INJECTION_BRANCH_NEEDLE（影响 preseed 插件 dsh-command-init 的 source 策略）",
+        ),
+        (
+            upstream::CONTEXT_INJECTION_TITLE_NEEDLE,
+            "会话 UI 仍有 contextInjection locale 键（折叠行标题）",
+            "上游改了 ContextInjectionRow 渲染路径：/init 折叠行标题丢失或整条改版，改 upstream::CONTEXT_INJECTION_TITLE_NEEDLE（影响 preseed 插件 dsh-command-init）",
+        ),
+        (
+            upstream::NOTICE_SUMMARY_NEEDLE,
+            "会话 UI 仍有 noticeSummary（notice 折叠行摘要）",
+            "上游改了 notice 摘要读取：/init 折叠行只剩插件名、摘要丢失，改 upstream::NOTICE_SUMMARY_NEEDLE（影响 preseed 插件 dsh-command-init）",
+        ),
+    ] {
+        let hit = tree_find(&nm, needle.as_bytes(), Some("client.js"), 4 << 20, 4);
+        c.check(desc, hit.is_some(), format!("hit={hit:?}"), advice);
+    }
+}
+
 /// dsh plugin 子命令（plugins.rs 的装/卸/更新依赖它；上游改版即红）
 fn probe_plugins_cli(rt: &Path, c: &mut Checker) {
     let text = fs::read_to_string(upstream::dsh_bin(rt)).unwrap_or_default();
@@ -647,6 +673,7 @@ async fn upstream_contract() {
     probe_pickerpatch(&rt, &mut c);
     probe_presets(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);
+    probe_preseed_plugin_needles(&rt, &mut c);
     match spawn_dsh(&rt).await {
         Ok(dsh) => {
             probe_http(&dsh, &mut c).await;

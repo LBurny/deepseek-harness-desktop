@@ -255,3 +255,18 @@ pub const MODEL_TRIGGER_LABEL_NEEDLE: &str = "triggerLabel";
 /// 影响面：图标化规则须把两段文案一起隐藏，漏掉此段则裸文本药丸把
 /// trailing 组挤换行（0.4.7 实踩）。
 pub const MODEL_TRIGGER_EFFORT_NEEDLE: &str = "triggerEffort";
+
+// ── 预装 /init 插件的 UI 折叠锚点（resources/preseed-plugins/dsh-command-init）──
+/// 消息渲染的"用户气泡 vs 折叠上下文行"分支。实测落盘：
+/// @deepseek-ai/dsh-client-ui-conversation/lib/client.js（messageDefinition.start：
+/// `event.data.source.kind !== "user"` → context 节点 → ContextInjectionRow
+/// 折叠行；kind=="user" 才渲染完整气泡）。影响面：/init 注入的长提示词靠
+/// source.kind="plugin" 落进折叠的「上下文注入」行——分支改掉则提示词重新
+/// 渲染成完整气泡（功能不损、美观回退）；契约套件 tree_find 守门。
+pub const CONTEXT_INJECTION_BRANCH_NEEDLE: &str = r#"source.kind !== "user""#;
+/// 折叠行标题的 locale 键（同文件 "message.contextInjection"，zh="上下文注入"）。
+/// 影响面：键消失意味着 ContextInjectionRow 整条渲染路径改版，同上。
+pub const CONTEXT_INJECTION_TITLE_NEEDLE: &str = "contextInjection";
+/// notice form 摘要的读取函数（同文件 noticeSummary(source)，读 source.summary
+/// 显示在折叠行标题旁）。影响面：改名则 /init 折叠行只剩插件名、一行摘要丢失。
+pub const NOTICE_SUMMARY_NEEDLE: &str = "noticeSummary";

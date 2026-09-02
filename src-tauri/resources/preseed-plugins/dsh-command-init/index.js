@@ -2,9 +2,10 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 /**
 * Human-facing `/init` command: render the AGENTS.md authoring prompt for the
-* invocation's workspace and submit it as an ordinary user message, so the
-* agent runs it as a normal turn. Mirrors the shipped command plugins
-* (command-goal) for message submission.
+* invocation's workspace and submit it as a plugin-sourced context injection,
+* so the agent runs it as a normal turn while the transcript shows a single
+* collapsible row instead of a full user bubble (same mechanism as
+* dsh-plan-mode narrations; kind:"user" would always render as a bubble).
 * @module dsh-command-init
 */
 const name = "command-init";
@@ -12,6 +13,9 @@ const inject = ["commands"];
 
 const DESCRIPTION = "Create or update this workspace's AGENTS.md instruction file";
 const INPUT_HINT = "additional instructions (optional)";
+
+/** One-line label on the collapsed "context injection" transcript row (convention: ≤120 chars). */
+const NOTICE_SUMMARY = "Create/update AGENTS.md workspace instructions";
 
 /** Render the init prompt with the workspace root and user-supplied args filled in. */
 function renderPrompt(cwd, args) {
@@ -56,23 +60,31 @@ After creating or editing AGENTS.md, summarize the main sections you wrote and m
 }
 
 /**
-* Submit the rendered prompt as a user message on the invocation's agent.
+* Submit the rendered prompt as a plugin-sourced message on the invocation's agent.
 * `followup` queues it for the next turn and wakes the driver, so an idle
-* agent starts a fresh turn with the prompt as its user input.
+* agent starts a fresh turn with the prompt as its input. The `plugin` source
+* with `notice` form keeps the model receiving the full text while the UI
+* renders one collapsible "context injection" row showing just the summary.
 */
 function executeInit(invocation) {
 	const cwd = invocation.agent?.session?.header?.cwd;
-	const text = renderPrompt(typeof cwd === "string" && cwd.length > 0 ? cwd : void 0, invocation.rawInput.trim());
+	const extra = invocation.rawInput.trim();
+	const text = renderPrompt(typeof cwd === "string" && cwd.length > 0 ? cwd : void 0, extra);
 	invocation.agent.followup(createUserMessage({
 		content: [{
 			type: "text",
 			text
 		}],
-		source: { kind: "user" }
+		source: {
+			kind: "plugin",
+			plugin: "dsh-command-init",
+			form: "notice",
+			summary: extra.length > 0 ? `${NOTICE_SUMMARY} (+ additional instructions)` : NOTICE_SUMMARY
+		}
 	}));
 	return {
 		kind: "success",
-		text: "Submitted the AGENTS.md init prompt as a user message."
+		text: "Submitted the AGENTS.md init prompt as a collapsed context injection."
 	};
 }
 

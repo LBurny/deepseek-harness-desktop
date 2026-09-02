@@ -354,4 +354,20 @@ mod tests {
         }
         assert!(count > 0, "preseed-plugins 源目录不应为空");
     }
+
+    /// /init 插件注入的提示词必须走 plugin+notice 源：UI 把非 user 源渲染成
+    /// 一行折叠的「上下文注入」（可展开），kind:"user" 则是完整气泡（0.4.9
+    /// 用户实测长提示词气泡太丑）。上游渲染分支漂移由契约套件
+    /// probe_preseed_plugin_needles 守门（upstream::CONTEXT_INJECTION_*）。
+    #[test]
+    fn init_plugin_injects_collapsed_plugin_source() {
+        let index = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/resources/preseed-plugins/dsh-command-init/index.js"
+        ))
+        .unwrap();
+        assert!(index.contains(r#"kind: "plugin""#), "index.js 应以 plugin 源注入才折叠");
+        assert!(index.contains(r#"form: "notice""#), "index.js 应以 notice form 提供折叠行摘要");
+        assert!(!index.contains(r#"kind: "user""#), "kind:user 会渲染成完整用户气泡");
+    }
 }

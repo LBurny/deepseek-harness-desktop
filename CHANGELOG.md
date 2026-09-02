@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- 内置 `/init` 命令注入的提示词不再以完整用户消息气泡显示：消息源从 `kind:"user"` 改为 `kind:"plugin"` + `form:"notice"`（一行摘要），UI 渲染成一行可折叠的「上下文注入 · dsh-command-init · 摘要」行（点击展开全文），模型仍收到完整提示词。与官方 dsh-plan-mode /goal 的注入方式一致；用户在插件面板删除行为不受影响。dsh-command-init 插件 0.1.0 → 0.1.1，已安装实例经 preseed 文件同步在下次启动自动更新
+
+### Added
+
+- 上游契约套件新增三条探针守护上述折叠行为：会话 UI 的 `source.kind !== "user"` 折叠分支、`contextInjection` locale 键、`noticeSummary` 摘要读取（upstream.rs 新增 CONTEXT_INJECTION_BRANCH_NEEDLE / CONTEXT_INJECTION_TITLE_NEEDLE / NOTICE_SUMMARY_NEEDLE 常量，上游改版即红）；preseed.rs 加锚定测试钉死随包插件 index.js 不走 `kind:"user"`
+
 ## [0.4.9] - 2026-09-02
 
 ### Added
