@@ -79,6 +79,13 @@ src-tauri/src/
                     显式 pipe（否则 output 恒空）；IPC 返回全部 serde camelCase 重命名
                     （漏 rename_all 则 exitCode 恒 undefined、成功被误报失败）；
                     清单读 profiles/web/package.json；串行锁防并发写；装完需重启生效
+  preseed.rs        预安装插件播种（resources/preseed-plugins/ 随包分发，安装后落
+                    <install>/preseed-plugins/）：首启同步文件到 $DSH_HOME/profiles/plugins/
+                    <name> 再走官方 dsh plugin add；插件必须是 bundle 形态（package.json
+                    声明 dsh.bundle.patch 自我挂载 insert）——reconcile 才会自动挂层/摘层，
+                    用户在插件面板删除后无残留；marker .plugins-preseeded 记录种过的名字，
+                    依赖消失而 marker 在 = 用户删除 → 不复活（语义同 skills 种子）；
+                    壳升级时文件有变化则覆盖同步；dev 下 resources 不拷贝 = 静默无操作
   picker.rs         目录选择器钉 browse：win32+回环时 dsh 决议为 native（系统对话框弹在
                     电脑屏幕，手机远程端不可见）；启动幂等写 cordis.patch.yml 官方
                     overlay，与 mcp.rs 同文件 Value 级共存，失败只记 events.log

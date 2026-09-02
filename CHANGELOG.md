@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.4.9] - 2026-09-02
+
+### Added
+
+- 预安装插件机制 + 内置 `/init` 斜杠命令：随安装包分发 `resources/preseed-plugins/dsh-command-init`（bundle 形态，自带 `dsh.bundle.patch` 自我挂载），首启时播种到 `$DSH_HOME/profiles/plugins/` 并走官方 `dsh plugin add` 挂进 web profile 层列表（preseed.rs）；`/init` 把"创建/更新工作区 AGENTS.md"的提示语按当前工作区路径渲染后以用户消息提交执行。用户可在插件管理面板正常删除（dsh plugin remove 自动摘层），marker 文件 `.plugins-preseeded` 保证删除后不被重新播种；壳升级时插件文件有变化则覆盖同步
+
 ## [0.4.8] - 2026-08-28
 
 ### Fixed

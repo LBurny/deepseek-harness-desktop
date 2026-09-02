@@ -1,0 +1,8 @@
+# dsh-command-init bundle patch: mount the /init command plugin as one row
+# over the profile root group — the same insert shape dsh-base composes with.
+# Because the package declares dsh.bundle, `dsh plugin add` appends it to the
+# profile's dsh.profile.bundles layer list and `dsh plugin remove` drops it,
+# so uninstall from the DSHDesktop plugins page unloads /init cleanly.
+- insert:
+    - id: command-init
+      name: dsh-command-init

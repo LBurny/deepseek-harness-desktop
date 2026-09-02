@@ -13,6 +13,7 @@ pub mod notify;
 pub mod platform;
 pub mod plugins;
 pub mod port;
+pub mod preseed;
 pub mod picker;
 pub mod pickerpatch;
 pub mod presets;
@@ -451,6 +452,30 @@ pub fn run() {
                     &debug_log,
                     &format!("pickerpatch: browse drives/hidden -> {browse_outcome:?}"),
                 );
+            }
+            // 预安装插件播种（/init 命令等）：随包插件首启种入 profile 并经官方
+            // `dsh plugin add` 挂层；用户在插件面板删除后不复活（preseed.rs 头注）。
+            // 必须在 spawn_supervised 之前，dsh 首次启动即挂载；失败只记 events.log。
+            // dev 模式 tauri 不拷贝 bundle.resources，源目录缺失时静默无操作。
+            let preseed_src = handle
+                .path()
+                .resource_dir()
+                .ok()
+                .map(|d| runtime::strip_verbatim(&d).join("preseed-plugins"));
+            if let Some(src) = preseed_src {
+                let seed_home = plugins::PluginsHome::new(
+                    paths.node_exe.clone(),
+                    paths.dsh_bin.clone(),
+                    paths.home.clone(),
+                );
+                match preseed::seed_preinstalled_plugins(&seed_home, &src) {
+                    Ok(report) if !report.is_quiet() => append_debug_line(
+                        &debug_log,
+                        &format!("preseed: plugins -> {report:?}"),
+                    ),
+                    Ok(_) => {}
+                    Err(e) => append_debug_line(&debug_log, &format!("preseed: {e}")),
+                }
             }
             // block_on 提供 tokio runtime 上下文，spawn_supervised 内部的 tokio::spawn 依赖它
             let proc = tauri::async_runtime::block_on(async {

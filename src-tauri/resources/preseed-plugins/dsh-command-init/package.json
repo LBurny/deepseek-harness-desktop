@@ -1,0 +1,19 @@
+{
+  "name": "dsh-command-init",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Human-facing /init command: submit the AGENTS.md workspace-instruction authoring prompt as a user message",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*"
+  }
+}
