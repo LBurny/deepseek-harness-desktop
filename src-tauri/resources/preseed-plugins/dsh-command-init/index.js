@@ -84,7 +84,7 @@ function executeInit(invocation) {
 	}));
 	return {
 		kind: "success",
-		text: "Submitted the AGENTS.md init prompt as a collapsed context injection."
+		text: "Prompt submitted to prepare for generating or maintaining the AGENTS.md file."
 	};
 }
 
