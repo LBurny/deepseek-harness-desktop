@@ -8,6 +8,8 @@
 #       bump 三处版本号 / cargo test / pnpm tauri build / commit / tag / push 已完成。
 # 用法：powershell -File scripts/release-local.ps1 [-Version 0.4.9]
 # 幂等：Release 已存在则复用并替换同名资产，可安全重跑。
+# 注意：替换某版产物直接重跑本脚本即可，**别删远端 tag**——删 tag 会把已发布的
+#       Release 转成草稿（按 tag 查 404 → 重跑会再建一个，出重复），删后需手动清草稿。
 param(
     [string]$Version  # 缺省读 src-tauri/tauri.conf.json 的 version
 )
