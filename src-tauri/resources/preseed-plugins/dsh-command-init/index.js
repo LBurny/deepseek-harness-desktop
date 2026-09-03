@@ -84,7 +84,7 @@ function executeInit(invocation) {
 	}));
 	return {
 		kind: "success",
-		text: "Prompt submitted to prepare for generating the AGENTS.md file."
+		text: "Prompt submitted to prepare for generating the AGENTS.md file"
 	};
 }
 

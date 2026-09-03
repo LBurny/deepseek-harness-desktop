@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- `/init` 命令结果行文案改为 "Prompt submitted to prepare for generating the AGENTS.md file."（原 "Submitted the AGENTS.md init prompt as a collapsed context injection."——用户反馈原句偏实现细节）。dsh-command-init 插件 0.1.1 → 0.1.2，已安装实例下次启动经 preseed 文件同步自动更新
+- `/init` 命令结果行文案改为 "Prompt submitted to prepare for generating the AGENTS.md file"（原 "Submitted the AGENTS.md init prompt as a collapsed context injection."——用户反馈原句偏实现细节）。dsh-command-init 插件 0.1.1 → 0.1.2，已安装实例下次启动经 preseed 文件同步自动更新
 
 ## [0.5.0] - 2026-09-03
 
