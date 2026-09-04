@@ -7,6 +7,9 @@
  *    并预览图片/md/代码。桌面壳直连 dsh 不经代理，天然无此标签。
  * 3) 输入卡片工具行（"+" 旁）注入回形针附件按钮，手机端从系统文件
  *    选择器传图片进草稿（上游只有拖拽/剪贴板两条入口，手机都没有）。
+ * 4) 视口复位：iOS WKWebView 键盘收起后页面停在无法手势复位的平移残留上
+ *    （头部与标签栏停在视口外，观感如全屏），输入框失焦/视口变化时复位文档
+ *    滚动并强制重排。
  *
  * 设计要点：
  * - 渐进增强：任何一步找不到目标节点就静默放弃——mobile.css 里统计行的
@@ -345,3 +348,55 @@
   }
 })()
 
+
+/*
+ * 视口复位：iOS WKWebView（微信内置浏览器实测）在底部输入框聚焦→键盘收起后，
+ * 页面会停在一段无法用手势复位的平移残留上——头部（会话标题与 对话/轨迹/项目/
+ * 信息 标签栏）停在视口之外，观感如"进入了全屏模式"，且上下滑动失灵。
+ * dsh 自身没有键盘视口处理（bundle 里仅 react-dom 引用 visualViewport，桌面
+ * Chromium/模拟键盘均无法复现），因此在增强层自愈：输入框失焦与键盘视口变化
+ * 时，把文档滚动复位到 0 并强制一次重排，逼 WebKit 撤销平移残留。健康状态下
+ * 文档滚动恒为 0，复位是无操作；聚焦期间的平移（键盘弹出时露出光标）是合法
+ * 行为，不干预。
+ */
+;(() => {
+  try {
+    const EDITOR = 'textarea, [contenteditable="true"], [role="textbox"]'
+    let keyboard = false
+    const stuck = () =>
+      window.scrollY !== 0 ||
+      window.scrollX !== 0 ||
+      document.documentElement.scrollTop !== 0 ||
+      document.body.scrollTop !== 0
+    const reset = () => {
+      if (keyboard || !stuck()) return
+      window.scrollTo(0, 0)
+      document.documentElement.scrollTop = 0
+      document.body.scrollTop = 0
+      void document.body.offsetHeight // 强制重排：逼 WebKit 重新夹紧视口平移
+    }
+    document.addEventListener(
+      'focusin',
+      (e) => {
+        if (e.target.closest?.(EDITOR)) keyboard = true
+      },
+      true,
+    )
+    document.addEventListener(
+      'focusout',
+      (e) => {
+        if (!e.target.closest?.(EDITOR)) return
+        keyboard = false
+        // 键盘收起带动画：零头几次定时补位，覆盖动画结束后的最终布局
+        for (const ms of [0, 350, 900]) setTimeout(reset, ms)
+      },
+      true,
+    )
+    // 键盘弹出/收起都走 visualViewport resize：收起且无聚焦时复位
+    window.visualViewport?.addEventListener('resize', () => {
+      if (!keyboard) setTimeout(reset, 100)
+    })
+  } catch {
+    /* 静默：增强失败不影响页面 */
+  }
+})()

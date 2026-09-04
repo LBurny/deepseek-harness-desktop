@@ -35,6 +35,8 @@ pub struct FakeDsh {
     pub opens: Arc<Mutex<Vec<String>>>,
     /// /api 命中记录 (路径, 是否携带 dsh-auth cookie)，供代理转发断言
     pub api_hits: Arc<Mutex<Vec<(String, bool)>>>,
+    /// 插件 bundle 命中记录（原始 path+query），供"缓存击穿参数须剥掉再转发"断言
+    pub plugin_hits: Arc<Mutex<Vec<String>>>,
 }
 
 #[derive(Clone)]
@@ -47,6 +49,8 @@ struct FakeState {
     opens: Arc<Mutex<Vec<String>>>,
     /// /api 命中记录 (路径, 是否携带 dsh-auth cookie)，供代理转发断言
     api_hits: Arc<Mutex<Vec<(String, bool)>>>,
+    /// 插件 bundle 命中记录（原始 path+query）
+    plugin_hits: Arc<Mutex<Vec<String>>>,
 }
 
 /// cookie 名固定假形态（真值 = dsh-auth-<base64url(sha256(authority))>，测试只认前缀）
@@ -136,7 +140,13 @@ async fn page(State(st): State<FakeState>, headers: HeaderMap, RawQuery(q): RawQ
         .into_response()
 }
 
-async fn plugin_client() -> Response {
+async fn plugin_client(
+    State(st): State<FakeState>,
+    uri: axum::http::Uri,
+) -> Response {
+    // 记录原始 path+query：测试断言代理转发时已剥掉壳侧缓存击穿参数（dsh 对
+    // 组合 URL 的 query 逐字校验，多余参数 404——0.5.4 真机实测）
+    st.plugin_hits.lock().unwrap().push(uri.to_string());
     // 静态资产无鉴权门（真实 dsh /assets/* 无门）；0.1.2 needle 形态供代理改写测试
     (
         StatusCode::OK,
@@ -291,17 +301,22 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
     let shutdown = Arc::new(Notify::new());
     let opens = Arc::new(Mutex::new(Vec::new()));
     let api_hits = Arc::new(Mutex::new(Vec::new()));
+    let plugin_hits = Arc::new(Mutex::new(Vec::new()));
     let state = FakeState {
         scripted_tx,
         cookie_name: Arc::from(fake_cookie_name(port)),
         opens: opens.clone(),
         api_hits: api_hits.clone(),
+        plugin_hits: plugin_hits.clone(),
     };
     let app = Router::new()
         .route("/", axum::routing::get(page))
         .route("/app", axum::routing::get(app_page))
         .route("/app-nohead", axum::routing::get(app_page_nohead))
         .route("/plugins/fake/client.js", axum::routing::get(plugin_client))
+        // 0.1.2 合并加载形态：/plugins/??<a>/client.js,<b>/client.js&rev=N 的
+        // path 部分只剩 "/plugins/"，组合清单整体在 query 里（真机实测）
+        .route("/plugins/", axum::routing::get(plugin_client))
         .route("/api/{*rest}", axum::routing::any(api))
         .route(
             dshdesktop_lib::upstream::DSH_MUX_PATH,
@@ -323,6 +338,7 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
         shutdown,
         opens,
         api_hits,
+        plugin_hits,
     }
 }
 

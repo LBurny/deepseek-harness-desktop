@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-09-04
+
+### Fixed
+
+- **远程端每次进入/新建会话都弹内测声明**（0.5.1 起 dsh 0.1.2 实踩，手机远程实拍反馈）：dsh 0.1.2 把插件客户端 bundle 从单插件 `/plugins/<id>/client.js?rev=N` 改为**合并加载** `/plugins/??<a>/client.js,<b>/client.js,...&rev=N`（path 部分只剩 `/plugins/`，组合清单整体在 query 里，单条 3.7MB），代理的改写判定 `ends_with("/client.js")` 静默失配——内测声明的持久化三元式没被改写成 `"host"`，远程端确认记录不落 settings.yaml、每次连接都弹。现 matcher 双形态都认；顺带修掉 `send_forwarded` 就地重算改写判定的潜伏 bug（拿带 scheme 的完整 URL 判定恒 false → accept-encoding 从未被剥过，真 dsh 一旦压缩响应改写路径即整体失效）。真机 combo bundle 改写产物已过 `node --check` 语法验证
+- **改写产物对已缓存手机端不生效**：bundle 响应被 dsh 标为 `cache-control: immutable, max-age=1y`，而 rev 跨 dsh 重启稳定（内容哈希）——修好改写后，手机端一年内仍会命中缓存里的未改写副本。现未带 `dshv=<壳版本>` 的 bundle 请求由代理 302 到带参同 URL 强制重取（重定向 no-store）；带参请求转发前由代理剥掉该参数——真 dsh 对组合 URL 的 query 逐字校验、多余参数直接 404（真机实测），buster 只活在代理与浏览器之间。改写缓冲上限 4MB→16MB（combo 实测 3.7MB，留增长余量）。回归测试：combo 改写 + 302 击穿 + 转发剥参 + 非 bundle 资源不重定向（tests/remote_proxy.rs，假 dsh 增设 `/plugins/` 合并形态路由与命中记录）
+- **手机端输入框聚焦→退出后，对话/轨迹/项目/信息标签栏消失、页面难以滑动**（微信内置浏览器实拍反馈）：iOS WKWebView 键盘收起后页面停在无法用手势复位的平移残留上——头部（会话标题+标签栏）停在视口外，观感如"进入全屏"。dsh 自身无键盘视口处理（bundle 仅 react-dom 引用 visualViewport；桌面 Chromium 与模拟键盘均不可复现，纯 iOS WebKit 行为）。现 mobile.js 增加视口复位：输入框失焦与 visualViewport resize 时把文档滚动复位到 0 并强制重排（聚焦中的合法平移不干预；健康态文档滚动恒 0，复位为无操作）。Playwright 已验证复位路径生效
+
 ## [0.5.3] - 2026-09-04
 
 ### Changed

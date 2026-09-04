@@ -280,9 +280,13 @@ async fn rewrites_welcome_notice_persistence_in_plugin_bundle() {
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let http = client();
 
-    // 插件 bundle：三元式应被改写为 "host"（0.1.2 needle 带 $host 接收者前缀）
+    // 插件 bundle：三元式应被改写为 "host"（0.1.2 needle 带 $host 接收者前缀）；
+    // 带 buster 模拟 302 击穿后的重取（缺 buster 会被 302，见 cache_bust 测试）
     let r = http
-        .get(format!("{base}/plugins/fake/client.js?rev=1"))
+        .get(format!(
+            "{base}/plugins/fake/client.js?rev=1&dshv={}",
+            env!("CARGO_PKG_VERSION")
+        ))
         .header("cookie", format!("{COOKIE_NAME}={token}"))
         .header("accept-encoding", "gzip, br") // 浏览器常态；改写路径须剥掉求 identity
         .send()
@@ -312,6 +316,133 @@ async fn rewrites_welcome_notice_persistence_in_plugin_bundle() {
         .unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.text().await.unwrap().contains("<html>"));
+
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 0.1.2 起插件客户端 bundle 合并加载：`/plugins/??<a>/client.js,<b>/client.js&rev=N`
+/// （path 部分只剩 "/plugins/"，组合清单整体在 query 里）。改写 matcher 必须命中
+/// combo 形态，否则三元式不被改写、远程端内测声明每次连接都弹（0.5.3 实踩）。
+/// 带 buster 的请求转发时须已剥掉 dshv（真 dsh 对组合 URL query 逐字校验，多余参数 404）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn rewrites_welcome_notice_in_combo_bundle() {
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
+    let base = format!("http://127.0.0.1:{}", proxy.port);
+    let http = client();
+
+    let combo = "/plugins/??@deepseek-ai/dsh-client-ui-settings/client.js,@deepseek-ai/dsh-client-ui-session/client.js&rev=b6deae2120c2";
+    let r = http
+        .get(format!(
+            "{base}{combo}&dshv={}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .header("cookie", format!("{COOKIE_NAME}={token}"))
+        .header("accept-encoding", "gzip, br")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "combo bundle（带 buster）应转发成功，实际 {:?}",
+        r.status()
+    );
+    assert!(
+        r.headers().get("content-encoding").is_none(),
+        "改写路径不应带压缩编码"
+    );
+    let body = r.text().await.unwrap();
+    assert!(
+        body.contains(r#"ctx.remote.$host, "host""#),
+        "combo bundle 的三元式应被改写，实际：{body}"
+    );
+    assert!(!body.contains("isLoopback"), "改写后不应残留三元式：{body}");
+    let hits = fake.plugin_hits.lock().unwrap().clone();
+    assert!(
+        hits.iter().any(|h| h == combo),
+        "转发到 dsh 的 combo URL 不应携带 dshv，实际 hits：{:?}",
+        hits
+    );
+
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 缓存击穿：dsh 把 bundle 响应标为 immutable（一年），而壳侧改写产物随壳版本
+/// 变化——未带 dshv 的 bundle 请求 302 到带 dshv=<壳版本> 的同 URL 强制重取；
+/// 带 buster 的请求直接放行；WS 升级与非 bundle 资源永不重定向。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn plugin_bundle_requests_are_cache_busted() {
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
+    let base = format!("http://127.0.0.1:{}", proxy.port);
+    let http = client();
+    let cookie = format!("{COOKIE_NAME}={token}");
+    let ver = env!("CARGO_PKG_VERSION");
+
+    // 1. 单插件形态缺 buster → 302 追加 dshv，重定向本身 no-store
+    let r = http
+        .get(format!("{base}/plugins/fake/client.js?rev=1"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 302, "缺 buster 的 bundle 请求应 302");
+    let loc = r
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        loc,
+        format!("/plugins/fake/client.js?rev=1&dshv={ver}"),
+        "Location 应带壳版本 buster"
+    );
+    assert_eq!(
+        r.headers().get("cache-control").map(|v| v.to_str().unwrap()),
+        Some("no-store"),
+        "302 本身不得被缓存"
+    );
+
+    // 2. combo 形态缺 buster → 同样 302
+    let combo = "/plugins/??@deepseek-ai/a/client.js,@deepseek-ai/b/client.js&rev=abc";
+    let r = http
+        .get(format!("{base}{combo}"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 302, "combo bundle 缺 buster 也应 302");
+    let loc = r
+        .headers()
+        .get("location")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(loc, format!("{combo}&dshv={ver}"));
+
+    // 3. 带 buster → 不再 302，直接转发
+    let r = http
+        .get(format!("{base}/plugins/fake/client.js?rev=1&dshv={ver}"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "带 buster 应直接转发，实际 {:?}", r.status());
+
+    // 4. 非 bundle 的 /plugins/ 资源不 302（fake 对未知路径回 404 = 转发结果）
+    let r = http
+        .get(format!("{base}/plugins/fake/icon.png"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 404, "非 bundle 资源不应被 302 击穿");
 
     fake.shutdown.notify_one();
     proxy.shutdown().await;

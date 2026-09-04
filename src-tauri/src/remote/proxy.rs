@@ -47,8 +47,16 @@ const GATE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><tit
 /// 确认记录不落 settings.yaml、每次连接都弹声明；改写为 "host" 后远程端与桌面端
 /// 共用同一份持久化确认（桌面是回环源本就已写 host）。
 const WELCOME_NOTICE_REPL: &[u8] = br#""host""#;
-/// 只对不超过该体积的插件 bundle 做缓冲改写，超出原样透传（声明照弹，不破坏功能）
-const REWRITE_BUFFER_LIMIT: u64 = 4 * 1024 * 1024;
+/// 只对不超过该体积的插件 bundle 做缓冲改写，超出原样透传（声明照弹，不破坏功能）。
+/// 0.1.2 起合并加载：单条 combo 请求即全量插件客户端（实测 3.7MB），留增长余量
+const REWRITE_BUFFER_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// 缓存击穿参数：dsh 把 bundle 响应标为 `immutable, max-age=1y`，而壳侧改写产物
+/// 随壳版本变化（如内测声明持久化三元式）。未带 dshv 的 bundle 请求 302 到带
+/// `dshv=<壳版本>` 的同 URL 强制重取一次；带参请求在转发前剥掉该参数（真 dsh
+/// 对组合 URL 的 query 逐字校验，多余参数 404——0.5.4 真机实测），dsh 永远看不到。
+const CACHE_BUST_PARAM: &str = "dshv";
+const CACHE_BUST_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// 移动端适配样式（同目录 mobile.css，编译期内嵌）：远程访问的 dsh Web UI 在手机上
 /// 有两处实测破版——设置弹窗内容区被 188px 固定导航列压到一字一行竖排、narrow 模式
@@ -62,10 +70,57 @@ const MOBILE_JS: &str = include_str!("mobile.js");
 /// 注入标记：测试断言与排查时识别（注释节点，无渲染影响）
 const MOBILE_INJECT_MARKER: &str = "<!-- dshdesktop-mobile -->";
 
-/// 插件客户端 bundle 路径：/plugins/<id>/client.js[?rev=N]
+/// 插件客户端 bundle 路径。两种形态都要命中：
+/// - 单插件（0.1.1 及以前）：`/plugins/<id>/client.js[?rev=N]`
+/// - 合并加载（0.1.2 起，真机实测）：`/plugins/??<a>/client.js,<b>/client.js,...&rev=N`
+///   ——path 部分只剩 "/plugins/"，组合清单整体在 query 里；漏掉 combo 形态则改写
+///   静默失效（0.5.3 实踩：远程端内测声明每次连接都弹）
 fn is_plugin_client_bundle(path_and_query: &str) -> bool {
+    if path_and_query.starts_with("/plugins/??") {
+        return true;
+    }
     let path = path_and_query.split('?').next().unwrap_or(path_and_query);
     path.starts_with("/plugins/") && path.ends_with("/client.js")
+}
+
+/// 转发前剥掉壳自己的缓存击穿参数（dsh 对 query 逐字校验，多余参数 404）。
+/// 其余参数（含组合清单本体）原样保序保留。
+fn strip_cache_bust(path_and_query: &str) -> String {
+    let Some((path, query)) = path_and_query.split_once('?') else {
+        return path_and_query.to_string();
+    };
+    let kept: Vec<String> = url::form_urlencoded::parse(query.as_bytes())
+        .filter(|(k, _)| k != CACHE_BUST_PARAM)
+        .map(|(k, v)| {
+            if v.is_empty() {
+                k.to_string()
+            } else {
+                format!("{k}={v}")
+            }
+        })
+        .collect();
+    if kept.is_empty() {
+        path.to_string()
+    } else {
+        format!("{path}?{}", kept.join("&"))
+    }
+}
+
+/// 是否该做缓存击穿重定向：GET/HEAD、非 WS 升级、bundle 形态、且未带 buster
+fn wants_cache_bust(req: &Request, path_and_query: &str) -> bool {
+    if !matches!(*req.method(), axum::http::Method::GET | axum::http::Method::HEAD) {
+        return false;
+    }
+    if wants_websocket(req.headers()) {
+        return false;
+    }
+    if !is_plugin_client_bundle(path_and_query) {
+        return false;
+    }
+    let has_buster = req.uri().query().is_some_and(|q| {
+        url::form_urlencoded::parse(q.as_bytes()).any(|(k, _)| k == CACHE_BUST_PARAM)
+    });
+    !has_buster
 }
 
 /// 浏览器文档导航请求（accept 含 text/html）：HTML 改写路径的候选
@@ -196,7 +251,28 @@ async fn gate_middleware(State(st): State<ProxyState>, req: Request, next: Next)
     let current_token = st.token.read().unwrap().clone();
     let cookie_ok = cookie_authed(headers, &current_token);
     match (cookie_ok, query_token) {
-        (true, _) => next.run(req).await, // 已持 cookie：放行（旧链接里的过期 token 不影响）
+        (true, _) => {
+            // 缓存击穿：bundle 响应被 dsh 标 immutable 一年，壳侧改写产物随壳版本
+            // 变化——未带 buster 的 bundle 请求 302 到带 dshv 的同 URL 强制重取
+            if wants_cache_bust(&req, &path_and_query) {
+                let sep = if path_and_query.contains('?') { '&' } else { '?' };
+                return (
+                    StatusCode::FOUND,
+                    [
+                        (
+                            header::LOCATION,
+                            format!("{path_and_query}{sep}{CACHE_BUST_PARAM}={CACHE_BUST_VERSION}"),
+                        ),
+                        (
+                            header::CACHE_CONTROL,
+                            "no-store".to_string(),
+                        ),
+                    ],
+                )
+                    .into_response();
+            }
+            next.run(req).await
+        }
         (false, Some(t)) if token_eq(&t, &current_token) => {
             // 302 剥离 token + 种 cookie；浏览器地址栏不留凭据
             let location = strip_token_query(&path_and_query);
@@ -263,6 +339,8 @@ async fn ensure_cookie(st: &ProxyState, force_refresh: bool) -> Option<String> {
 }
 
 async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response {
+    // 壳侧缓存击穿参数只在代理与浏览器之间有意义，转发前剥掉（dsh query 逐字校验）
+    let path_and_query = &strip_cache_bust(path_and_query);
     let Some(c) = st.creds.borrow().clone() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "dsh 未就绪").into_response();
     };
@@ -277,7 +355,16 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
         Err(_) => return (StatusCode::BAD_GATEWAY, "读取请求体失败").into_response(),
     };
     let cookie = ensure_cookie(&st, false).await;
-    let res = send_forwarded(&st, &req_headers, &method, &url, cookie.as_deref(), &body_bytes).await;
+    let res = send_forwarded(
+        &st,
+        &req_headers,
+        &method,
+        &url,
+        cookie.as_deref(),
+        &body_bytes,
+        rewrite_bundle,
+    )
+    .await;
     let mut res = match res {
         Some(r) => r,
         None => return (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
@@ -295,6 +382,7 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
                     &url,
                     Some(&fresh),
                     &body_bytes,
+                    rewrite_bundle,
                 )
                 .await
                 {
@@ -336,7 +424,10 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// 按剥头规则构造并发出转发请求（cookie 由调用方注入；body 整读以便 401 重放）
+/// 按剥头规则构造并发出转发请求（cookie 由调用方注入；body 整读以便 401 重放）。
+/// rewrite_bundle 由调用方按 path_and_query 判定传入——本函数拿到的 url 带
+/// scheme://host 前缀，就地重算会恒为 false（曾致 accept-encoding 不剥、真 dsh
+/// 压缩响应后改写路径整体失效）
 async fn send_forwarded(
     st: &ProxyState,
     headers: &HeaderMap,
@@ -344,8 +435,8 @@ async fn send_forwarded(
     url: &str,
     cookie: Option<&str>,
     body_bytes: &[u8],
+    rewrite_bundle: bool,
 ) -> Option<reqwest::Response> {
-    let rewrite_bundle = is_plugin_client_bundle(url.split('?').next().unwrap_or(url));
     let wants_html = headers
         .get(header::ACCEPT)
         .and_then(|v| v.to_str().ok())
@@ -614,6 +705,83 @@ fn gate() -> Response {
         GATE_HTML,
     )
         .into_response()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn req(method: &str, uri: &str, upgrade_ws: bool) -> Request {
+        let mut b = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header(header::HOST, "127.0.0.1:1");
+        if upgrade_ws {
+            b = b
+                .header(header::CONNECTION, "Upgrade")
+                .header(header::UPGRADE, "websocket");
+        }
+        b.body(Body::empty()).unwrap()
+    }
+
+    fn pq(r: &Request) -> String {
+        r.uri()
+            .path_and_query()
+            .map(|p| p.as_str().to_string())
+            .unwrap()
+    }
+
+    #[test]
+    fn bundle_matcher_covers_single_and_combo_forms() {
+        // 单插件（0.1.1 及以前）
+        assert!(is_plugin_client_bundle("/plugins/fake/client.js"));
+        assert!(is_plugin_client_bundle("/plugins/fake/client.js?rev=1"));
+        // 合并加载（0.1.2 起）：path 部分只剩 "/plugins/"，清单在 query 里
+        assert!(is_plugin_client_bundle(
+            "/plugins/??@deepseek-ai/a/client.js,@deepseek-ai/b/client.js&rev=b6deae2120c2"
+        ));
+        // 非 bundle：其余资产与纯根路径
+        assert!(!is_plugin_client_bundle("/plugins/fake/icon.png"));
+        assert!(!is_plugin_client_bundle("/plugins/events"));
+        assert!(!is_plugin_client_bundle("/plugins/"));
+    }
+
+    #[test]
+    fn strip_cache_bust_removes_only_buster() {
+        assert_eq!(
+            strip_cache_bust("/plugins/??@a/client.js,@b/client.js&rev=abc&dshv=0.5.4"),
+            "/plugins/??@a/client.js,@b/client.js&rev=abc"
+        );
+        assert_eq!(
+            strip_cache_bust("/plugins/fake/client.js?rev=1&dshv=0.5.4"),
+            "/plugins/fake/client.js?rev=1"
+        );
+        // 无 query / 无该参数：原样
+        assert_eq!(strip_cache_bust("/plugins/fake/client.js"), "/plugins/fake/client.js");
+        assert_eq!(
+            strip_cache_bust("/plugins/fake/client.js?rev=1"),
+            "/plugins/fake/client.js?rev=1"
+        );
+    }
+
+    #[test]
+    fn cache_bust_only_for_get_bundle_without_buster() {
+        let combo = "/plugins/??@a/client.js,@b/client.js&rev=abc";
+        assert!(wants_cache_bust(&req("GET", combo, false), combo));
+        // HEAD 也击穿；POST 不动
+        assert!(wants_cache_bust(&req("HEAD", combo, false), combo));
+        assert!(!wants_cache_bust(&req("POST", combo, false), combo));
+        // 带 buster：不再 302
+        let busted = format!("{combo}&dshv=0.5.4");
+        assert!(!wants_cache_bust(&req("GET", &busted, false), &busted));
+        // WS 升级永不重定向
+        assert!(!wants_cache_bust(&req("GET", combo, true), combo));
+        // 非 bundle 资源不击穿
+        assert!(!wants_cache_bust(
+            &req("GET", "/plugins/fake/icon.png", false),
+            "/plugins/fake/icon.png"
+        ));
+    }
 }
 
 fn cookie_authed(headers: &HeaderMap, token: &str) -> bool {
