@@ -120,7 +120,10 @@ src-tauri/src/
   remote/           mod.rs=RemoteManager（生命周期/token/6 命令；reset_link 原地轮换
                     token，域名不变）；proxy.rs=axum token 门岗反向代理（覆盖全 Router
                     的中间件；HTTP 流式转发+WS 帧桥接；转发剥 origin/referer/sec-fetch-*
-                    否则 dsh 403；.no_proxy() 防系统代理劫持回环；HTML 注入移动端适配：
+                    否则 dsh 403；.no_proxy() 防系统代理劫持回环；门岗 cookie 30 天
+                    长效（Max-Age=2592000——会话 cookie 会被手机浏览器进程回收丢弃，
+                    地址栏已被 302 剥掉 token，一丢即 403 假"失效"，0.5.7 起长效化）；
+                    HTML 注入移动端适配：
                     mobile.css 700px 断点 + mobile.js "项目/信息"标签 + 回形针附件按钮；
                     HTML 挂载点后注入 splash.css/splash.js 加载过渡页（#root 出现子
                     节点即淡出，挂载点 needle 收 upstream.rs，miss 则整体不注入）；

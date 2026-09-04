@@ -101,9 +101,14 @@ async fn gate_requires_token() {
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let http = client();
 
-    // 1. 无凭据 → 403
+    // 1. 无凭据 → 403，失效页应指引改点原始完整链接（cookie 丢失场景旧链接仍有效）
     let r = http.get(format!("{base}/")).send().await.unwrap();
     assert_eq!(r.status(), 403, "无凭据应 403");
+    let body = r.text().await.unwrap();
+    assert!(
+        body.contains("完整链接"),
+        "失效页应提示改点带 token 的完整链接，实际 {body}"
+    );
 
     // 2. 错误 token → 403，且有 ≥400ms 的防爆破延迟
     let t0 = Instant::now();
@@ -145,6 +150,10 @@ async fn gate_requires_token() {
         "应种 cookie，实际 {set_cookie}"
     );
     assert!(set_cookie.contains("HttpOnly"), "cookie 应 HttpOnly");
+    assert!(
+        set_cookie.contains("Max-Age=2592000"),
+        "cookie 应为 30 天长效（手机浏览器杀进程不再掉登录），实际 {set_cookie}"
+    );
 
     // 4. 带 cookie → 200 且转发到 dsh（0.1.2 假服务器回 SPA 入口 HTML）
     let r = http
@@ -749,13 +758,24 @@ async fn reset_token_revokes_old_credential() {
         .unwrap();
     assert_eq!(r.status(), 403, "重置后旧 token 应失效");
 
-    // 新 token → 302 + 种新 cookie
+    // 新 token → 302 + 种新 cookie（同样长效）
     let r = http
         .get(format!("{base}/?token={new_token}"))
         .send()
         .await
         .unwrap();
     assert_eq!(r.status(), 302, "新 token 应 302 种 cookie");
+    let set_cookie = r
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        set_cookie.contains("Max-Age=2592000"),
+        "重置后新 cookie 同样应为 30 天长效，实际 {set_cookie}"
+    );
     let r = http
         .get(format!("{base}/"))
         .header("cookie", format!("{COOKIE_NAME}={new_token}"))

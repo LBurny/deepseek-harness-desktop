@@ -37,6 +37,11 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message as DshMessage;
 
 pub const COOKIE_NAME: &str = "__dsh_remote";
+/// cookie 有效期 30 天：会话 cookie（无 Max-Age）会被手机浏览器在进程回收时
+/// 丢弃——地址栏已被 302 剥掉 token，cookie 一丢即 403"链接无效或已过期"，
+/// 同一次开启期间手机端被迫反复回电脑扫码。长效化后收藏地址栏 URL 也能直接用；
+/// 吊销语义不变（reset_link 轮换 token，旧 cookie 值即刻不匹配）。
+const COOKIE_MAX_AGE_SECS: u32 = 30 * 24 * 3600;
 /// 错误 token 的固定响应延迟，拖慢在线猜测
 const WRONG_TOKEN_DELAY: Duration = Duration::from_millis(500);
 /// 请求体缓冲上限：重放（401 换 cookie 后重发一次）需要整读请求体；超过该
@@ -45,7 +50,9 @@ const REPLAY_BODY_LIMIT: usize = 64 * 1024 * 1024;
 
 const GATE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>DSHDesktop</title></head>\
 <body style=\"font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0\">\
-<p>DSHDesktop 远程访问：链接无效或已过期。<br>请在电脑托盘菜单重新生成链接。</p></body></html>";
+<p>DSHDesktop 远程访问：链接无效或已失效。<br>\
+若电脑端远程访问仍在开启，改点最初那条带 ?token= 的完整链接即可重新进入；<br>\
+若已在电脑上重开远程访问，旧链接整体作废，请在电脑托盘菜单复制新链接。</p></body></html>";
 
 /// 内测声明三元式 needle 已上移 crate::upstream::WELCOME_NOTICE_NEEDLE（单一事实源，
 /// 含为何须带 `connection.` 前缀的说明）。改写语义：隧道场景 dsh 选 "memory" 持久化，
@@ -371,7 +378,9 @@ async fn gate_middleware(State(st): State<ProxyState>, req: Request, next: Next)
                     (header::LOCATION, location),
                     (
                         header::SET_COOKIE,
-                        format!("{COOKIE_NAME}={t}; HttpOnly; Secure; SameSite=Lax; Path=/"),
+                        format!(
+                            "{COOKIE_NAME}={t}; HttpOnly; Secure; SameSite=Lax; Path=/; Max-Age={COOKIE_MAX_AGE_SECS}"
+                        ),
                     ),
                 ],
             )

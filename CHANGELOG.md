@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.7] - 2026-09-05
+
+### Changed
+
+- **远程访问门岗 cookie 改为 30 天长效，手机端不再反复"链接无效或已过期"**（用户反馈）：此前 `__dsh_remote` 是会话 cookie（无 Max-Age），手机浏览器（iOS Safari / 微信内置浏览器）进程一回收就把它丢了——而地址栏已被 302 剥掉 token，cookie 一丢再开页面即 403 失效页，同一次开启期间被迫反复回电脑扫码。现加 `Max-Age=2592000`：同一次开启期间手机端可收藏地址栏 URL 直接复用，杀浏览器/关机重开都不再掉登录。吊销语义不变（"重置链接"轮换 token，旧 cookie 值即刻不匹配）；链接整体仍随每次开启换新（quick tunnel 域名随机是结构性限制，永久固定链接需命名隧道+自有域名）
+- **失效门页文案改为分场景指引**：电脑端远程仍开着 → 改点最初那条带 `?token=` 的完整链接即可重新进入（多数"失效"其实只是手机端 cookie 丢了）；重开过远程访问 → 旧链接整体作废，托盘菜单复制新链接
+
 ## [0.5.6] - 2026-09-04
 
 ### Added
