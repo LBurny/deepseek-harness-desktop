@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-09-04
+
+### Changed
+
+- 检查更新链路指向新建的**公开发布仓库** [deepseek-harness-desktop-releases](https://github.com/LBurny/deepseek-harness-desktop-releases)（源码仓库保持私有，发布渠道分离）——其它设置页的"GitHub 下载"、"手动更新"与启动时自动检查全部改读该仓库的 releases。由此修掉持续已久的已知限制：源码仓库转私有后匿名检查更新必 404（0.4.x~0.5.2）；公开仓库匿名可读，检查更新恢复正常。release-local.ps1 发版目标同步切换到发布仓库；update.rs 新增锚定测试防指回私有仓
+
 ## [0.5.2] - 2026-09-04
 
 ### Fixed

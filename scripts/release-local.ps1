@@ -4,7 +4,8 @@
 # workflow_dispatch 手动备用。产物格式与旧 CI 完全一致：*_x64-setup.exe + .sha256
 # （小写 hash + 两空格 + 文件名，ascii）。
 #
-# 前置：GH_TOKEN 环境变量（对私有仓库有 contents:write）；
+# 前置：GH_TOKEN 环境变量（对发布仓库有 contents:write；发布目标是公开仓库
+#       deepseek-harness-desktop-releases，源码仓库保持私有——0.5.3 起二者分离）；
 #       bump 三处版本号 / cargo test / pnpm tauri build / commit / tag / push 已完成。
 # 用法：powershell -File scripts/release-local.ps1 [-Version 0.4.9]
 # 幂等：Release 已存在则复用并替换同名资产，可安全重跑。
@@ -23,7 +24,7 @@ if (-not $Version) {
     $Version = $conf.version
 }
 $tag = "v$Version"
-$repo = 'LBurny/deepseek-harness-desktop'
+$repo = 'LBurny/deepseek-harness-desktop-releases'  # 公开发布仓库（0.5.3 起与私有源码仓分离）
 
 if (-not $env:GH_TOKEN) { throw 'GH_TOKEN 环境变量未设置（私有仓库 API 必需）' }
 $headers = @{

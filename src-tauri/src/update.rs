@@ -1,5 +1,7 @@
 //! 检查更新：GitHub `releases/latest` API 查版本，手动更新直接下载 NSIS 安装包。
 //!
+//! - 目标是**公开发布仓库** deepseek-harness-desktop-releases（0.5.3 起）：源码仓库
+//!   私有期间匿名 API 必 404（0.4.x~0.5.2 已知限制），公开仓库匿名可读，检查更新恢复
 //! - reqwest 走系统代理：访问的是外网 GitHub（回环才需要 no_proxy，见 remote/proxy.rs），
 //!   国内用户挂代理时代理反而是通路的必要条件
 //! - GitHub API 必须带 User-Agent，否则一律 403
@@ -14,8 +16,8 @@ use std::sync::Arc;
 use tauri::{AppHandle, Emitter};
 
 const RELEASES_LATEST_API: &str =
-    "https://api.github.com/repos/LBurny/deepseek-harness-desktop/releases/latest";
-const RELEASES_PAGE: &str = "https://github.com/LBurny/deepseek-harness-desktop/releases";
+    "https://api.github.com/repos/LBurny/deepseek-harness-desktop-releases/releases/latest";
+const RELEASES_PAGE: &str = "https://github.com/LBurny/deepseek-harness-desktop-releases/releases";
 /// 进度事件名：前端 Settings 页监听；负载 { downloaded, total }，total=0 表示长度未知
 const PROGRESS_EVENT: &str = "update-download-progress";
 
@@ -452,5 +454,13 @@ mod tests {
                 .unwrap();
         assert!(rel.assets.is_empty());
         assert_eq!(display_version(&rel.tag_name), "1.0.0");
+    }
+
+    #[test]
+    fn update_targets_public_releases_repo() {
+        // 源码仓库私有：检查更新/手动更新/GitHub 下载必须指向公开发布仓库——
+        // 指回源码私有仓库则匿名 API 一律 404（0.4.x~0.5.2 已知限制实踩，0.5.3 起分离）
+        assert!(RELEASES_LATEST_API.contains("/LBurny/deepseek-harness-desktop-releases/"));
+        assert!(RELEASES_PAGE.ends_with("/LBurny/deepseek-harness-desktop-releases/releases"));
     }
 }
