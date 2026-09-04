@@ -153,8 +153,56 @@ async fn dsh_restarts_after_crash() {
     wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
 }
 
-/// 0.1.2 契约：Ready 态发出时 token 必已捕获（导航要带 ?token= 才能过 BrowserAuth），
-/// 且原始就绪行里的 token 不得进入日志事件（链接即凭据）。
+/// 回归（0.5.1 实踩）：dsh 重启后旧进程的 launch token 不得被当成新进程的用——
+/// token 按进程轮换，若 Ready 门控读到缓存旧 token，主窗口会带旧 token 导航落
+/// 401 页、mux 凭据交换 401 死循环。第二进程给就绪行加 3s 延迟拉开窗口：
+/// 拿旧 token 抢跑的 Ready 会在 token 打印前发出，断言立刻抓到。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn restart_replaces_stale_token() {
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("fake-dsh.token"), "token-alpha-aaaa").unwrap();
+    let (events, emit) = collect_events();
+    let (token_tx, token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let proc = DshProcess::spawn_supervised(
+        Arc::new(TestPlatform),
+        fixture_paths(work.path()),
+        token_tx,
+        emit,
+    );
+    wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
+    assert_eq!(proc.token().as_deref(), Some("token-alpha-aaaa"));
+
+    std::fs::write(work.path().join("fake-dsh.token"), "token-bravo-bbbb").unwrap();
+    std::fs::write(work.path().join("fake-dsh.token-delay"), "3000").unwrap();
+    proc.restart().await;
+    // 等第二次 Ready（数两个 Ready 事件）
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        let ready_count = events
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|e| matches!(e, ProcessEvent::StateChanged(DshState::Ready { .. })))
+            .count();
+        if ready_count >= 2 {
+            break;
+        }
+        assert!(Instant::now() < deadline, "no second Ready within 30s");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(
+        proc.token().as_deref(),
+        Some("token-bravo-bbbb"),
+        "第二次 Ready 发出时 token 必须是新进程的（旧 token 抢跑即回归）"
+    );
+    assert_eq!(
+        token_rx.borrow().as_deref(),
+        Some("token-bravo-bbbb"),
+        "token 广播端同样不得残留旧 token"
+    );
+    proc.stop().await;
+    wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
+}
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ready_implies_token_captured_and_logs_redacted() {
     let work = tempfile::tempdir().unwrap();

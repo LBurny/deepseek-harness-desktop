@@ -47,7 +47,9 @@ pub async fn exchange_cookie(port: u16, token: &str) -> Result<String, String> {
         .get(&url)
         .send()
         .await
-        .map_err(|e| format!("token 交换请求失败: {e}"))?;
+        // without_url：reqwest 错误 Display 默认带 "for url (…/?token=…)"，
+        // token 会随错误串落日志（0.5.1 events.log 实踩明文）
+        .map_err(|e| format!("token 交换请求失败: {}", e.without_url()))?;
     let status = resp.status().as_u16();
     if status != 303 {
         return Err(format!("token 交换应得 303，实际 {status}（token 已轮换或契约漂移）"));
@@ -109,5 +111,19 @@ mod tests {
         );
         assert_eq!(parse_set_cookie("invalid"), None);
         assert_eq!(parse_set_cookie("=v"), None);
+    }
+
+    /// 链接即凭据：交换失败的错误串不得含 token 与带 token 的 URL——reqwest 的
+    /// Display 默认带 "for url (http://…/?token=…)"，0.5.1 实踩明文落 events.log
+    #[tokio::test]
+    async fn exchange_error_never_leaks_token_or_url() {
+        // 拿一个刚关闭的端口保证连接失败（走 reqwest 网络错误分支）
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
+        let err = exchange_cookie(port, "secret-token-xyz").await.unwrap_err();
+        assert!(!err.contains("secret-token-xyz"), "错误串不得含 token：{err}");
+        assert!(!err.contains("?token="), "错误串不得含带 token 的 URL：{err}");
+        assert!(!err.contains("for url"), "reqwest URL 尾巴应剥掉：{err}");
     }
 }

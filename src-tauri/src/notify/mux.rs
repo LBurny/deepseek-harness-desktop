@@ -112,10 +112,11 @@ impl MuxSource {
             let cookie = match dsh_session::exchange_cookie(c.port, &c.token).await {
                 Ok(k) => k,
                 Err(e) => {
-                    log_fn(format!(
+                    // 纵深防御：exchange_cookie 已 without_url，这里再过一道脱敏
+                    log_fn(crate::remote::redact_token(&format!(
                         "[mux] cookie 交换失败（端口 {}）：{e}，{RECONNECT_DELAY:?} 后重试",
                         c.port
-                    ));
+                    )));
                     tokio::select! {
                         _ = tokio::time::sleep(RECONNECT_DELAY) => {}
                         r = creds.changed() => if r.is_err() { return },

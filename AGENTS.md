@@ -156,7 +156,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
-  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.4.9，下一版 0.5.0。
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.2，下一版 0.5.3。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release）**：bump 三处版本号（`package.json` /
   `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→ CHANGELOG 把 Unreleased 收编进新版节
   → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 → commit → `git tag v0.y.z`
@@ -219,14 +219,23 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **缩放快捷键匹配**：主匹配 `e.code`，`e.key` 兜底（合成按键/RDP 注入 keydown 的 `e.code` 为空）；zoom_ui 负载是 `direction:"in"/"out"`，步进由命令读设置（不写死在脚本里）；改快捷键须重注入钩子（set_shell_settings 已做，热替换不叠加）
 - **reqwest 在系统代理下会劫持 127.0.0.1**：用户开 Clash 等系统代理时 reqwest 默认走代理且不认 bypass 列表——凡访问本机回环（remote/proxy.rs 转发客户端、测试里访问 fixture/代理端口的客户端）必须 `.no_proxy()`，否则请求被代理软件接管表现为假 502/挂起
 - **手机端适配验证不能直连 dsh 端口**：mobile.css/mobile.js 只由代理注入，直连 `127.0.0.1:<dsh端口>` 的页面与手机看到的不是一回事（没有 项目/信息 标签、没有任何适配样式）——0.4.6 前在直连环境"验证"图标化白忙一轮。复刻手机环境=Playwright 390px 视口 + `addStyleTag/addScriptTag({path})` 注入同目录 mobile.css/mobile.js（mobile.js 挂观察器后有初始 `ensure()` 全量扫描，晚注入等价于 head 注入）；token 仅内存且日志脱敏，真走代理只能从托盘远程页读链接（用户用机期间别动 CUA）
-- **0.1.2 token/cookie 时序三坑**：①就绪行晚于 HTTP 绑定——端口可探通但 401，
+- **0.1.2 token/cookie 时序四坑**：①就绪行晚于 HTTP 绑定——端口可探通但 401，
   token 必须从 stdout 持续 pump 捕获，"端口通了"不等于"能登录"；process.rs 的
   Ready 门控（wait_token）就是为此，超时按未就绪杀树重试而非白屏；②cookie 绑
   `127.0.0.1:<port>` authority——dsh 重启换端口后旧 cookie 全失效，代理转发遇
   401 要清缓存重换并重放一次（只重放一次防环），MuxSource/代理每次（重）连
   现换不缓存跨端口值；③WS upgrade 是独立桥接路径，cookie 注入最易漏（proxy
   bridge 用 http::Request 手动带 Cookie 头）——漏了手机端表现为"页面开但全断"；
-  假 dsh（tests/support）把这三条全仿真，契约漂移先红在测试里
+  ④**token 按进程轮换，spawn 前必须清缓存**（0.5.1 实踩）：token/watch 只写不清，
+  重启后 wait_token 拿旧 token 秒过、Ready 抢跑——主窗口带旧 token 导航落 401
+  页、mux/代理 {新端口,旧 token} 换 cookie 401 死循环；现 supervise 循环每次
+  spawn 前清空 token 缓存与广播端，回归测试靠 fixture 的 fake-dsh.token（按次换
+  token）+ fake-dsh.token-delay（拉开 HTTP 就绪与 token 打印窗口）钉死；
+  假 dsh（tests/support）把①②③全仿真，契约漂移先红在测试里
+- **reqwest 错误 Display 自带完整 URL**：`error sending request for url (…/?token=…)`
+  ——凭据相关请求的失败日志若直接 `{e}` 输出，token 明文落 events.log（0.5.1
+  实踩）。凡带 token 的 URL 请求，错误一律 `e.without_url()` 剥尾巴后再格式化；
+  dsh_session.rs 有单元测试钉死
 - **主窗口由 setup 代码创建（tauri.conf windows 为空）**：on_download 只能挂 WebviewWindowBuilder，conf 声明的窗口无法附加。建窗参数须与原 conf 一致（visible(false)+center()+min 900x600），window-state 对代码创建窗口同样在创建事件排队 restore（托盘按需窗口同款），回归靠 verify-no-size-flash/verify-window-state 两脚本
 - **dsh 预设已独立成包（0.1.2）**：minimal 预设从 dsh 包内 `config/agent-presets/` 迁到 node_modules 的 `@deepseek-ai/dsh-agent-presets/presets/minimal`（PRESET_DIR_SEGMENTS 已随版）；0.1.1-rc.2 时代 composeProfile 重写 roots 的行为上游已删（prep §一），预设如需补丁理论上可走 patch 影子覆盖，但当前无需求——签名哨兵（presets.rs + 契约探针）继续盯着 win32 修复不回退
 - **fs-local 列目录遇 ACL 拒绝项即整列失败**（如 C:\ 根目录撞上 DumpStack.log）：上游 dsh 行为，Windows 上列举系统盘根目录必现；壳侧缓解是让模型知道 cwd 并待在 workspace，别试图在壳里修列目录
@@ -237,7 +246,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 222 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 224 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 

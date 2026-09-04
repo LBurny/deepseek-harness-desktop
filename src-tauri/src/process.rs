@@ -122,6 +122,14 @@ impl DshProcess {
             if self.inner.shutdown.load(Ordering::SeqCst) {
                 break;
             }
+            // launch token 按 dsh 进程轮换：spawn 前清掉上一进程的缓存与广播端，
+            // 否则 wait_token 拿旧 token 秒过、Ready 抢跑——主窗口带旧 token 导航
+            // 落 dsh 401 页，mux/代理凭据交换 401 死循环（0.5.1 重启后实踩）。
+            // 旧进程此时已被 kill+wait 回收、其 stdout 泵已 EOF，无竞态。
+            *self.inner.token.lock().unwrap() = None;
+            if let Some(tx) = &self.inner.token_tx {
+                tx.send_if_modified(|cur| cur.take().is_some());
+            }
             self.set_state(DshState::Starting);
             let port = match free_port() {
                 Ok(p) => p,

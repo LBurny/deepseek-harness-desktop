@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-09-04
+
+### Fixed
+
+- **运行中重启 dsh 后主窗口落 401 页、通知/远程凭据 401 死循环**（0.5.1 实踩）：launch token 按 dsh 进程轮换，而壳侧 token 缓存只写不清——重启后 `wait_token` 读到上一进程的旧 token 秒过、Ready 抢跑，主窗口带旧 token 导航被 BrowserAuth 拒（"dsh web authentication required" 页），mux/远程代理拿 {新端口, 旧 token} 换 cookie 无限 401。现 supervise 循环每次 spawn 前清空 token 缓存与广播端，Ready 只认当前进程打出的新 token；回归测试用"第二进程换 token + 就绪行延迟 3s"拉开竞态窗口钉死（tests/process.rs::restart_replaces_stale_token，fixture 新增 fake-dsh.token / fake-dsh.token-delay 文件开关）
+- **launch token 明文落 events.log**（0.5.1 实踩）：reqwest 网络错误的 Display 自带 `for url (…/?token=…)` 尾巴，cookie 交换失败日志把完整带 token URL 打了出来。现 `exchange_cookie` 用 `without_url()` 剥掉 URL，mux 失败日志再过一道 `redact_token` 纵深防御；新增单元测试钉死错误串不含 token/URL
+
 ## [0.5.1] - 2026-09-04
 
 ### Changed

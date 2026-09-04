@@ -75,10 +75,22 @@ const server = http.createServer((req, res) => {
   res.end('ok')
 })
 
+// 0.1.2 launch token：cwd 下 fake-dsh.token 文件指定（重启换新 token 回归用），
+// 缺省常量。fake-dsh.token-delay 存在时按毫秒数延迟打印就绪行——拉开 HTTP 就绪与
+// token 打印的窗口，复现"HTTP 已 ready 但 token 未出"时壳侧拿旧 token 抢跑的竞态。
+const tokenFile = path.join(process.cwd(), 'fake-dsh.token')
+const launchToken = fs.existsSync(tokenFile)
+  ? fs.readFileSync(tokenFile, 'utf8').trim()
+  : 'fixture-token-0123456789abcdef'
+const delayFile = path.join(process.cwd(), 'fake-dsh.token-delay')
+const tokenDelay = fs.existsSync(delayFile) ? Number(fs.readFileSync(delayFile, 'utf8').trim()) : 0
+
 server.listen(port, '127.0.0.1', () => {
   console.log(`listening http://127.0.0.1:${port}`)
   // 0.1.2 BrowserAuth：就绪后 stdout 打印带 launch token 的 URL（壳的 token 唯一来源）
-  console.log(`dsh web: http://127.0.0.1:${port}/?token=fixture-token-0123456789abcdef`)
+  setTimeout(() => {
+    console.log(`dsh web: http://127.0.0.1:${port}/?token=${launchToken}`)
+  }, tokenDelay)
 })
 
 // WebSocket 下行流：与真实 dsh 一致，/api/events.mux 与 /api/events.host 通过 WS 推送
