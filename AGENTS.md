@@ -156,7 +156,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
-  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.4，下一版 0.5.5。
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.5，下一版 0.5.6。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起发布目标切到公开发布仓）**：bump 三处版本号（`package.json` /
   `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→ CHANGELOG 把 Unreleased 收编进新版节
   → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 → commit → `git tag v0.y.z`
@@ -260,6 +260,17 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   react-dom 引用 visualViewport），桌面 Chromium/模拟键盘均不可复现，纯 iOS
   WebKit 行为——mobile.js 视口复位：输入框失焦与 vv resize 时把文档滚动复位 0
   并强制重排（聚焦中的合法平移不干预；健康态文档滚动恒 0，复位为无操作）
+- **iOS WKWebView 聚焦 <16px 输入框自动缩放整页且不复原（0.5.4 手机实拍实踩）**：
+  输入框聚焦→返回后整页放大，标签栏/输入框被推出可视区，手势缩不回（微信内置
+  浏览器同样中招）。触发条件：viewport meta 未禁缩放（dsh 入口文档是 Vite 模板
+  原值 `width=device-width, initial-scale=1`）+ 聚焦元素 font-size<16px
+  （composer 实测 `var(--dsh-content-font-size,14px)`）。双防线：①proxy.rs 注入
+  HTML 时把 viewport meta 改写为 `maximum-scale=1, user-scalable=no`（needle/
+  replacement 收 upstream.rs::VIEWPORT_META_*，上游改模板值契约探针翻红）；
+  ②mobile.css ≤700px 下 `[class*="_composerStack"] textarea{font-size:16px}`——
+  从触发条件上消灭缩放，改写 miss 时兜底。注意 dsh 包内无任何 `textarea{}` 字号
+  规则，composer 字号是继承卡片来的，直接子代规则稳赢；平移残留（上一条）与
+  缩放是两种独立症状，视口复位对缩放无效，别混修
 - **主窗口由 setup 代码创建（tauri.conf windows 为空）**：on_download 只能挂 WebviewWindowBuilder，conf 声明的窗口无法附加。建窗参数须与原 conf 一致（visible(false)+center()+min 900x600），window-state 对代码创建窗口同样在创建事件排队 restore（托盘按需窗口同款），回归靠 verify-no-size-flash/verify-window-state 两脚本
 - **dsh 预设已独立成包（0.1.2）**：minimal 预设从 dsh 包内 `config/agent-presets/` 迁到 node_modules 的 `@deepseek-ai/dsh-agent-presets/presets/minimal`（PRESET_DIR_SEGMENTS 已随版）；0.1.1-rc.2 时代 composeProfile 重写 roots 的行为上游已删（prep §一），预设如需补丁理论上可走 patch 影子覆盖，但当前无需求——签名哨兵（presets.rs + 契约探针）继续盯着 win32 修复不回退
 - **fs-local 列目录遇 ACL 拒绝项即整列失败**（如 C:\ 根目录撞上 DumpStack.log）：上游 dsh 行为，Windows 上列举系统盘根目录必现；壳侧缓解是让模型知道 cwd 并待在 workspace，别试图在壳里修列目录

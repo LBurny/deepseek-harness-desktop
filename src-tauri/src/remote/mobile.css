@@ -161,6 +161,19 @@
   }
 
   /*
+   * 输入框字号抬到 16px：iOS WKWebView（含微信内置浏览器）聚焦 font-size<16px
+   * 的输入框时自动放大整页、收起键盘后不复原（0.5.4 手机实拍实踩——标签栏与
+   * 输入框被推出可视区）。proxy.rs 已把 viewport meta 改写为禁缩放形态作为主
+   * 防线，本规则是双保险：上游改了 meta 值导致改写 miss 时，16px 字号从触发
+   * 条件上消灭缩放。composer 实测字号 var(--dsh-content-font-size,14px)，锚点
+   * composerStack（native 对话输入卡片祖先）+ 原生 textarea；16px 会把
+   * line-height(calc(24px+delta)) 顶高一档，行高跟随无碍。
+   */
+  [class*="_composerStack"] textarea {
+    font-size: 16px;
+  }
+
+  /*
    * 模型二级菜单越界：菜单 absolute right:0 相对 45px 药丸定位，宽 281px 时
    * 左缘越出屏幕被裁（模型列表 "-V4-Flash" 左半截）。药丸根改静态定位，包含
    * 块上移到输入卡片（trailing/row 均 static，卡片是第一个 relative 祖先），

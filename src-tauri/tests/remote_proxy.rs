@@ -494,12 +494,27 @@ async fn injects_mobile_css_into_html_documents() {
         "注入内容应含目录浏览对话框的适配规则（picker.rs 钉的 browse 交互）：{body}"
     );
     assert!(
+        body.contains("_composerStack\"] textarea"),
+        "注入内容应含输入框 ≥16px 字号规则（iOS 聚焦缩放双保险）：{body}"
+    );
+    assert!(
         body.contains("</style><script>") && body.contains("data-dshmobile-tab"),
         "应注入信息标签页脚本：{body}"
     );
     assert!(
         body.find("<!-- dshdesktop-mobile -->").unwrap() < body.find("</head>").unwrap(),
         "样式应注入到 </head> 之前"
+    );
+    // viewport meta 改写：禁缩放防 iOS WKWebView 聚焦 <16px 输入框放大整页不复原
+    assert!(
+        body.contains(
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no\">"
+        ),
+        "viewport meta 应改写为禁缩放形态：{body}"
+    );
+    assert!(
+        !body.contains("content=\"width=device-width, initial-scale=1\""),
+        "原始 viewport meta 不应残留：{body}"
     );
 
     // 2. 无 </head> 的 HTML：原文透传

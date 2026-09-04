@@ -240,6 +240,19 @@ pub const PRESET_PLATFORM_NEEDLE: &str = "win32";
 /// 影响：proxy.rs 改写失效时内测声明每次远程连接都弹（功能不崩，静默退化）。
 pub const WELCOME_NOTICE_NEEDLE: &[u8] = br#"ctx.remote.$host.isLoopback ? "host" : "memory""#;
 
+/// dsh Web UI 入口文档的 viewport meta content 属性值（不含外层引号）。
+/// 实测落盘：@deepseek-ai/dsh-web-frontend/dist/index.html（Vite 模板
+/// `<meta name="viewport" content="width=device-width, initial-scale=1" />`）。
+/// 影响：proxy.rs 把它改写为禁缩放形态（VIEWPORT_META_REPLACEMENT）——iOS
+/// WKWebView（含微信内置浏览器）聚焦 font-size<16px 的输入框时自动放大整页，
+/// 收起键盘后缩放不复原，标签栏/输入框被推出可视区（0.5.4 手机实拍实踩）。
+/// 上游若改 content 值，改写静默失效，契约探针翻红。
+pub const VIEWPORT_META_NEEDLE: &[u8] = br#"content="width=device-width, initial-scale=1""#;
+/// 禁缩放形态：maximum-scale=1 阻断聚焦自动缩放，user-scalable=no 阻断双指
+/// 缩放（app 式远程 UI 不需要）；桌面浏览器本就不认这两条，远程桌面访问无感。
+pub const VIEWPORT_META_REPLACEMENT: &[u8] =
+    br#"content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no""#;
+
 // ── 插件管理（plugins.rs；dsh plugin 官方入口 + 壳内置 pnpm）────────
 /// plugin 子命令与 profile 参数。上游出处：bin.js command("plugin") +
 /// requiredOption("--profile <name>")，参数原样透传给 pnpm。

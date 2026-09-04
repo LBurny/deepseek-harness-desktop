@@ -717,6 +717,26 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         format!("hit={hit:?}"),
         "主题键改名：改 upstream::KEY_UI_THEME（影响 theme.rs 跟随与首启播种）",
     );
+    // proxy.rs 的 HTML 注入改写前提：入口文档 viewport meta 仍是 Vite 模板原值
+    // （实测落盘：dsh-web-frontend/dist/index.html）——变了则禁缩放改写静默失效，
+    // iOS 聚焦输入框自动放大整页不复原（0.5.4 手机实拍实踩）
+    let index_html: PathBuf = [".", "@deepseek-ai", "dsh-web-frontend", "dist", "index.html"]
+        .iter()
+        .collect();
+    let index_html = nm.join(index_html);
+    let hit = std::fs::read(&index_html)
+        .ok()
+        .map(|b| {
+            b.windows(upstream::VIEWPORT_META_NEEDLE.len())
+                .any(|w| w == upstream::VIEWPORT_META_NEEDLE)
+        })
+        .unwrap_or(false);
+    c.check(
+        "入口文档 viewport meta 仍是 Vite 模板原值",
+        hit,
+        format!("path={index_html:?}"),
+        "dsh 改了 viewport meta：proxy.rs 禁缩放改写失效（iOS 聚焦输入框整页放大），改 upstream::VIEWPORT_META_NEEDLE",
+    );
     // mobile.css 缩小 Session log 药丸的锚点：CSS Modules 本地名仍在插件包内
     // （实测落盘：@deepseek-ai/dsh-session-log-export/lib/client.js）
     let hit = tree_find(

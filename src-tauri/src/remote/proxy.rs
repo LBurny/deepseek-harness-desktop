@@ -537,26 +537,35 @@ fn buffered_builder(res: &reqwest::Response) -> axum::http::response::Builder {
 
 /// 缓冲 HTML 文档并往 </head> 前注入移动端适配样式与信息标签页脚本；找不到
 /// </head> 原样返回（dsh 改版换了文档结构就静默失效，页面回到未适配状态但
-/// 不破坏功能）。
+/// 不破坏功能）。注入前先把 viewport meta 改写为禁缩放形态——iOS WKWebView
+/// 聚焦 font-size<16px 的输入框（composer 实测 14px）自动放大整页且收键盘
+/// 不复原，标签栏/输入框被推出可视区（0.5.4 手机实拍实踩）；needle 未命中
+/// 原样透传，上游改版由契约探针翻红。
 async fn rewrite_html_document(res: reqwest::Response) -> Response {
     let builder = buffered_builder(&res);
     match res.bytes().await {
         Ok(bytes) if bytes.len() as u64 <= REWRITE_BUFFER_LIMIT => {
-            let body = match find_subslice_ci(&bytes, b"</head>") {
+            let doc = replace_all(
+                &bytes,
+                crate::upstream::VIEWPORT_META_NEEDLE,
+                crate::upstream::VIEWPORT_META_REPLACEMENT,
+            )
+            .unwrap_or_else(|| bytes.to_vec());
+            let body = match find_subslice_ci(&doc, b"</head>") {
                 Some(pos) => {
                     let mut out =
-                        Vec::with_capacity(bytes.len() + MOBILE_CSS.len() + MOBILE_JS.len() + 96);
-                    out.extend_from_slice(&bytes[..pos]);
+                        Vec::with_capacity(doc.len() + MOBILE_CSS.len() + MOBILE_JS.len() + 96);
+                    out.extend_from_slice(&doc[..pos]);
                     out.extend_from_slice(MOBILE_INJECT_MARKER.as_bytes());
                     out.extend_from_slice(b"<style>");
                     out.extend_from_slice(MOBILE_CSS.as_bytes());
                     out.extend_from_slice(b"</style><script>");
                     out.extend_from_slice(MOBILE_JS.as_bytes());
                     out.extend_from_slice(b"</script>");
-                    out.extend_from_slice(&bytes[pos..]);
+                    out.extend_from_slice(&doc[pos..]);
                     out
                 }
-                None => bytes.to_vec(),
+                None => doc,
             };
             builder
                 .body(Body::from(body))

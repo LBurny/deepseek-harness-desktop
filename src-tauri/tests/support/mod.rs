@@ -160,14 +160,15 @@ async fn plugin_client(
 }
 
 async fn app_page() -> Response {
-    // SPA 入口文档模拟（代理移动端注入测试）：含 </head>
+    // SPA 入口文档模拟（代理移动端注入测试）：含 </head> 与 dsh 同款 viewport meta
+    // （iOS 自动缩放防线改写对象，值对齐 upstream::VIEWPORT_META_NEEDLE）
     (
         StatusCode::OK,
         [(
             "content-type",
             HeaderValue::from_static("text/html; charset=utf-8"),
         )],
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>fake</title></head><body><div id=\"root\"></div></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>fake</title></head><body><div id=\"root\"></div></body></html>",
     )
         .into_response()
 }

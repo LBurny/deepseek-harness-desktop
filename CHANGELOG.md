@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-09-04
+
+### Fixed
+
+- **手机端输入框聚焦→返回后整页放大、标签栏与输入框都看不到**（0.5.4 手机实拍反馈，0.5.4 视口复位修的是平移残留、对缩放无效）：根因是 iOS WKWebView（含微信内置浏览器）聚焦 font-size<16px 的输入框时**自动缩放整页**、收起键盘后缩放不复原——dsh composer 实测字号 `var(--dsh-content-font-size,14px)`，命中触发条件；dsh 入口文档的 viewport meta 是 Vite 模板原值 `width=device-width, initial-scale=1`，未禁缩放。两道防线：①代理注入 HTML 时把 viewport meta 改写为 `initial-scale=1, maximum-scale=1, user-scalable=no`（needle 即上游模板原值，收 upstream.rs::VIEWPORT_META_NEEDLE/REPLACEMENT 契约常量；上游改值则契约探针翻红）；②mobile.css ≤700px 下 composer textarea 字号抬到 16px，从触发条件上消灭缩放（改写 miss 时仍生效）。Playwright 实测改写后 meta 生效、390px 视口 composer 字号 16px、1200px 桌面宽度规则不生效
+
 ## [0.5.4] - 2026-09-04
 
 ### Fixed
