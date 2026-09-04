@@ -280,18 +280,14 @@
   }
 
   /*
-   * Session log 下载按钮（会话头部右侧药丸）：原生 height:32px + min-width:111px
-   * 固定死椭圆尺寸，手机上下缘几乎贴到下方标签栏（间隙仅 4px）。收紧到
-   * 26px 高 + 内容定宽，间隙扩到约 10px。选择器写两遍凑 0-2-0 优先级——
-   * 上游样式由 JS 运行时注入、文档序在我们之后，平级优先级必输。
-   * 锚点 _sessionLogButton 本地名子串；上游改名则回到原生尺寸，功能不损。
+   * Session log 下载按钮（会话头部右侧药丸）：手机端直接隐藏——没有人在手机
+   * 上翻 session 日志（要看也是在 PC 端看），且它悬浮盖住旁边的"N 个后台
+   * 任务运行中"文案（0.5.5 手机实拍）。选择器写两遍凑 0-2-0 优先级——上游
+   * 样式由 JS 运行时注入、文档序在我们之后，平级优先级必输。
+   * 锚点 _sessionLogButton 本地名子串；上游改名则按钮复原显示，功能不损。
    */
   [class*="_sessionLogButton"][class*="_sessionLogButton"] {
-    height: 26px;
-    min-width: 0;
-    padding: 3px 10px;
-    font-size: 12px;
-    line-height: 18px;
+    display: none;
   }
 
   /*

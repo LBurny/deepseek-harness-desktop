@@ -15,6 +15,38 @@ const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_FAILURES: u32 = 5;
 const READY_TIMEOUT: Duration = Duration::from_secs(60);
 
+/// wait_token 的超时预算。判定基准是"静默"（stdout/stderr 持续无输出）而非固定
+/// 时长：npm 冷装（npx 解析未缓存包）会静默下载数分钟，固定 60s 会把快装完的
+/// 进程杀树、白等一轮再靠缓存余温重启（0.5.5 实踩）。见到 npm 冷装警告行
+/// （is_mcp_install_line）后切换到 install 长预算；absolute 防"一直打印但永远
+/// 不就绪"的病态进程把启动挂死。
+#[derive(Debug, Clone, Copy)]
+pub struct BootTimeouts {
+    /// 普通静默预算（等价旧的固定 60s 语义）
+    pub silence: Duration,
+    /// 冷装模式预算（npm fetch 可能长时间无输出）
+    pub install: Duration,
+    /// 从 wait 开始的绝对上限
+    pub absolute: Duration,
+}
+
+impl Default for BootTimeouts {
+    fn default() -> Self {
+        Self {
+            silence: READY_TIMEOUT,
+            install: Duration::from_secs(600),
+            absolute: Duration::from_secs(600),
+        }
+    }
+}
+
+/// npm 冷装警告行：npx 在线解析未缓存包时打印（非 TTY 下警告后直接安装）。
+/// 见到它说明本次启动在联网下载 MCP 组件——wait_token 切 install 预算（本模块）、
+/// splash 换"正在下载"文案（lib.rs bridge_event）。
+pub(crate) fn is_mcp_install_line(line: &str) -> bool {
+    line.contains("npm warn exec") && line.contains("will be installed")
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DshState {
     Starting,
@@ -42,6 +74,11 @@ struct Inner {
     shutdown: AtomicBool,
     stop: Notify,
     restart: Notify,
+    /// 最近一次子进程 stdout/stderr 活动时间（wait_token 静默判定的基准）；spawn 时重置
+    last_activity: Mutex<std::time::Instant>,
+    /// 本次启动是否已见到 npm 冷装警告行（wait_token 切长预算）；spawn 时重置
+    mcp_install: AtomicBool,
+    timeouts: BootTimeouts,
 }
 
 #[derive(Clone)]
@@ -56,6 +93,19 @@ impl DshProcess {
         token_tx: watch::Sender<Option<Arc<str>>>,
         events: impl Fn(ProcessEvent) + Send + Sync + 'static,
     ) -> Self {
+        Self::spawn_supervised_with_timeouts(platform, paths, token_tx, events, BootTimeouts::default())
+    }
+
+    /// 带自定义启动预算的构造（集成测试用短预算覆盖静默/冷装分支；生产走
+    /// spawn_supervised 的 BootTimeouts::default()）
+    #[doc(hidden)]
+    pub fn spawn_supervised_with_timeouts(
+        platform: Arc<dyn Platform>,
+        paths: RuntimePaths,
+        token_tx: watch::Sender<Option<Arc<str>>>,
+        events: impl Fn(ProcessEvent) + Send + Sync + 'static,
+        timeouts: BootTimeouts,
+    ) -> Self {
         let this = Self {
             inner: Arc::new(Inner {
                 platform,
@@ -68,6 +118,9 @@ impl DshProcess {
                 shutdown: AtomicBool::new(false),
                 stop: Notify::new(),
                 restart: Notify::new(),
+                last_activity: Mutex::new(std::time::Instant::now()),
+                mcp_install: AtomicBool::new(false),
+                timeouts,
             }),
         };
         let runner = this.clone();
@@ -130,7 +183,13 @@ impl DshProcess {
             if let Some(tx) = &self.inner.token_tx {
                 tx.send_if_modified(|cur| cur.take().is_some());
             }
+            // 静默判定基准与冷装标记随新进程重置（旧进程的泵已 EOF，无竞态）
+            *self.inner.last_activity.lock().unwrap() = std::time::Instant::now();
+            self.inner.mcp_install.store(false, Ordering::SeqCst);
             self.set_state(DshState::Starting);
+            // 启动计时：从进入 Starting 到 Ready 的分解（HTTP 绑定 / 等 token 行），
+            // Ready 时落日志——诊断面板"上次启动"行与用户报"启动慢"的定位数据源
+            let spawned_at = tokio::time::Instant::now();
             let port = match free_port() {
                 Ok(p) => p,
                 Err(e) => {
@@ -190,10 +249,11 @@ impl DshProcess {
             }
 
             if wait_ready(port, READY_TIMEOUT).await {
+                let http_elapsed = spawned_at.elapsed();
                 // 0.1.2 契约：HTTP 就绪后 stdout 才打就绪行（token 唯一来源）。
                 // Ready 必须等 token——导航要 ?token= 过 BrowserAuth，没 token 的
                 // Ready 只会让主窗口落 401 页
-                if !self.wait_token(READY_TIMEOUT).await {
+                if !self.wait_token().await {
                     self.log(
                         "[dshdesktop] dsh stdout 未出现就绪 URL（token）——上游 READY_URL_PREFIX 契约漂移？",
                     );
@@ -212,6 +272,14 @@ impl DshProcess {
                 }
                 failures = 0;
                 backoff = Duration::from_millis(500);
+                // 分解行先于 Ready 落日志：观察者看到 Ready 时该行必已存在
+                let total = spawned_at.elapsed();
+                self.log(format_boot_timing(
+                    port,
+                    total,
+                    http_elapsed,
+                    total.saturating_sub(http_elapsed),
+                ));
                 self.set_state(DshState::Ready { port });
             } else {
                 self.log("[dshdesktop] dsh not ready within 60s, killing");
@@ -266,20 +334,28 @@ impl DshProcess {
     }
 
     /// 等 stdout 就绪行捕获到 token；期间响应 stop（返回 false=应终止循环）。
-    /// 50ms 轮询而非 Notify 纯等待——notify_waiters 只唤醒已注册的 waiter，
-    /// 检查与注册之间的通知会丢（错过一次就是干等 60s 超时）
-    async fn wait_token(&self, timeout: Duration) -> bool {
-        let deadline = tokio::time::Instant::now() + timeout;
+    /// 判定是"静默超时"而非固定时长：持续有输出（哪怕慢）就等下去；见到 npm 冷装
+    /// 警告行后切 install 长预算（fetch 可能数分钟无输出）；absolute 封顶防病态
+    /// 进程永远挂着。50ms 轮询而非 Notify 纯等待——notify_waiters 只唤醒已注册的
+    /// waiter，检查与注册之间的通知会丢（错过一次就是干等到超时）
+    async fn wait_token(&self) -> bool {
+        let started = tokio::time::Instant::now();
         loop {
             if self.token().is_some() {
                 return true;
             }
+            let silence = self.inner.last_activity.lock().unwrap().elapsed();
+            let budget = if self.inner.mcp_install.load(Ordering::SeqCst) {
+                self.inner.timeouts.install
+            } else {
+                self.inner.timeouts.silence
+            };
+            if silence >= budget || started.elapsed() >= self.inner.timeouts.absolute {
+                return false;
+            }
             tokio::select! {
                 _ = tokio::time::sleep(Duration::from_millis(50)) => {}
                 _ = self.inner.stop.notified() => return false,
-            }
-            if tokio::time::Instant::now() >= deadline {
-                return false;
             }
         }
     }
@@ -304,6 +380,12 @@ impl DshProcess {
         tokio::spawn(async move {
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
+                // 静默判定基准：任何输出都刷新活动时间
+                *this.inner.last_activity.lock().unwrap() = std::time::Instant::now();
+                // npm 冷装信号：wait_token 据此切 install 长预算（下载可能数分钟无输出）
+                if is_mcp_install_line(&line) {
+                    this.inner.mcp_install.store(true, Ordering::SeqCst);
+                }
                 // 0.1.2 起 stdout 就绪行是 launch token 唯一来源：先捕获再脱敏。
                 // 链接即凭据，原始行不得进入任何日志面（dsh-log/events.log/诊断环）
                 if let Some((_, token)) = crate::dsh_session::parse_ready_line(&line) {
@@ -335,6 +417,17 @@ impl DshProcess {
     }
 }
 
+/// Ready 时落的启动耗时分解行（诊断面板"上次启动"的数据源）。格式被锚定：
+/// 改动须同步 diagnostics::parse_boot_timing、process.rs 与 tests/process.rs 的测试。
+fn format_boot_timing(port: u16, total: Duration, http: Duration, token: Duration) -> String {
+    format!(
+        "[dshdesktop] ready: port={port} total={:.2}s http={:.2}s token={:.2}s",
+        total.as_secs_f64(),
+        http.as_secs_f64(),
+        token.as_secs_f64()
+    )
+}
+
 /// dsh 子进程的 PATH：内嵌 node 目录与 profile 插件的 .bin 目录前置为前两项
 /// （node 目录在前——npx/node 必须赢过系统 PATH 上的旧版本），其余项原样保留。
 /// base 为父进程 PATH（None 表示未设置，结果只含前两项）。
@@ -354,6 +447,32 @@ mod tests {
     use super::*;
     use std::ffi::OsString;
     use std::path::PathBuf;
+
+    #[test]
+    fn mcp_install_line_detection() {
+        // npx 冷装的判定行（npm 非 TTY 下警告后直接安装）：shell 靠它切长超时预算
+        // + splash 换"正在下载"文案，判定错放=杀树回归
+        assert!(super::is_mcp_install_line(
+            "npm warn exec The following package was not found and will be installed: @playwright/mcp@0.0.80"
+        ));
+        // 无关行不误判
+        assert!(!super::is_mcp_install_line("listening http://127.0.0.1:31817"));
+        assert!(!super::is_mcp_install_line("Context7 Documentation MCP Server v4.0.5 running on stdio"));
+        assert!(!super::is_mcp_install_line("npm warn deprecated something"));
+    }
+
+    #[test]
+    fn boot_timing_line_format() {
+        // 启动耗时分解的统一格式：诊断面板按此解析（diagnostics::parse_boot_timing），
+        // 改格式必须同步解析器与测试
+        let line = super::format_boot_timing(
+            31817,
+            Duration::from_millis(12340),
+            Duration::from_millis(1230),
+            Duration::from_millis(11110),
+        );
+        assert_eq!(line, "[dshdesktop] ready: port=31817 total=12.34s http=1.23s token=11.11s");
+    }
 
     #[test]
     fn child_path_prepends_node_dir_and_profile_bin_and_preserves_base() {

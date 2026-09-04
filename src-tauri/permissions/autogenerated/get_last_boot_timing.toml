@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-get-last-boot-timing"
+description = "Enables the get_last_boot_timing command without any pre-configured scope."
+commands.allow = ["get_last_boot_timing"]
+
+[[permission]]
+identifier = "deny-get-last-boot-timing"
+description = "Denies the get_last_boot_timing command without any pre-configured scope."
+commands.deny = ["get_last_boot_timing"]

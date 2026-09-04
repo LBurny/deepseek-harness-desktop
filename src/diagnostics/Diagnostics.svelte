@@ -6,9 +6,12 @@
 
   type Status = { state: string; port: number | null; pid: number | null; version: string }
   type Remote = { phase: string; url: string | null; error: string | null }
+  // 与 Rust BootTimingDto（camelCase）对应；at = 日志行首时间戳（跨会话回填时有）
+  type BootTiming = { port: number; totalS: number; httpS: number; tokenS: number; at: string | null }
 
   let status = $state<Status | null>(null)
   let remote = $state<Remote | null>(null)
+  let boot = $state<BootTiming | null>(null)
   let logs = $state<string[]>([])
   let restarting = $state(false)
   let logError = $state('')
@@ -38,9 +41,27 @@
             : t('未开启'),
   )
 
+  let bootText = $derived(
+    !boot
+      ? t('无记录')
+      : t('共 {total}s（HTTP {http}s / 就绪行 {token}s）', {
+          total: boot.totalS.toFixed(1),
+          http: boot.httpS.toFixed(1),
+          token: boot.tokenS.toFixed(1),
+        }),
+  )
+
+  // 状态从未就绪翻转到 Ready 时重新拉一次分解行（面板开着看完整次启动的场景）；
+  // 首次 refresh 若已是 Ready 也会触发，覆盖跨会话回填
+  let prevState = ''
   async function refresh() {
     status = await invoke<Status>('get_status')
     remote = await invoke<Remote>('get_remote_status')
+    const now = status?.state ?? ''
+    if (now.startsWith('Ready') && !prevState.startsWith('Ready')) {
+      boot = await invoke<BootTiming | null>('get_last_boot_timing')
+    }
+    prevState = now
   }
 
   async function restart() {
@@ -104,6 +125,7 @@
     <div class="row"><span>{t('端口')}</span><b>{status?.port ?? '—'}</b></div>
     <div class="row"><span>{t('进程 PID')}</span><b>{status?.pid ?? '—'}</b></div>
     <div class="row"><span>{t('远程访问')}</span><b class:bad={remote?.phase === 'error'}>{remoteText}</b></div>
+    <div class="row"><span>{t('上次启动')}</span><b>{bootText}</b></div>
     {#if status && status.state.startsWith('Failed')}
       <div class="row"><span>{t('错误')}</span><b class="bad">{status.state}</b></div>
     {/if}

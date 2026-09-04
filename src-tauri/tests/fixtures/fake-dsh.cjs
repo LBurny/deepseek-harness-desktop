@@ -84,9 +84,16 @@ const launchToken = fs.existsSync(tokenFile)
   : 'fixture-token-0123456789abcdef'
 const delayFile = path.join(process.cwd(), 'fake-dsh.token-delay')
 const tokenDelay = fs.existsSync(delayFile) ? Number(fs.readFileSync(delayFile, 'utf8').trim()) : 0
+// fake-dsh.npm-install-warn 存在时，就绪行前打印一行 npx 冷装警告（真实 dsh 的
+// MCP 条目走 cmd /c npx 未缓存包时的形态）——配合 token-delay 拉开静默窗口，
+// 供壳侧"npm 冷装长预算"超时逻辑回归
+const installWarnFile = path.join(process.cwd(), 'fake-dsh.npm-install-warn')
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`listening http://127.0.0.1:${port}`)
+  if (fs.existsSync(installWarnFile)) {
+    console.error('npm warn exec The following package was not found and will be installed: fake-mcp@1.0.0')
+  }
   // 0.1.2 BrowserAuth：就绪后 stdout 打印带 launch token 的 URL（壳的 token 唯一来源）
   setTimeout(() => {
     console.log(`dsh web: http://127.0.0.1:${port}/?token=${launchToken}`)

@@ -1,0 +1,78 @@
+/*
+ * DSHDesktop 远程访问加载过渡页（splash）：proxy.rs 改写 SPA 入口文档时随
+ * <div id="root"></div> 挂载点注入（needle 命中才注入，见 proxy.rs）。
+ *
+ * 背景：dsh 服务端不做任何压缩，经 cloudflared 隧道的远程首连要下载 ~5MB
+ * （SPA ~1.2MB + 插件 bundle ~3.7MB——bundle 因壳侧改写还被迫走 identity），
+ * 弱网白屏几十秒，观感如卡死。splash 随 HTML 解析立即可见，React 挂载完成
+ * （#root 出现子节点）后由 splash.js 淡出移除。
+ *
+ * 深浅色随 prefers-color-scheme（dsh 主题默认跟随系统，过渡屏与系统一致即可，
+ * 代理拿不到 dsh 设置）；文案语言由 splash.js 按 navigator.language 填
+ * （<html lang> 是 Vite 模板恒 en，不可靠）。
+ */
+#dsh-splash {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483647;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  margin: 0;
+  background: #f7f7f8;
+  color: #55565a;
+  font:
+    14px/1.6 -apple-system,
+    "Segoe UI",
+    "PingFang SC",
+    "Microsoft YaHei",
+    sans-serif;
+  transition: opacity 0.3s ease;
+}
+@media (prefers-color-scheme: dark) {
+  #dsh-splash {
+    background: #16171a;
+    color: #9a9ba0;
+  }
+}
+#dsh-splash.dsh-splash-done {
+  opacity: 0;
+  pointer-events: none;
+}
+#dsh-splash .dsh-splash-spinner {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  border: 3px solid currentColor;
+  border-top-color: transparent;
+  opacity: 0.8;
+  animation: dsh-splash-spin 1s linear infinite;
+}
+#dsh-splash .dsh-splash-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+}
+/*
+ * 弱网提示：正常几秒就挂载完成，只有加载超过 12s 才淡入这行说明——
+ * 等得久的用户知道"在下载、不是死了"，正常加载则完全无感。
+ */
+#dsh-splash .dsh-splash-hint {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0;
+  animation: dsh-splash-hint 0.6s ease 12s forwards;
+}
+@keyframes dsh-splash-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes dsh-splash-hint {
+  to {
+    opacity: 0.75;
+  }
+}

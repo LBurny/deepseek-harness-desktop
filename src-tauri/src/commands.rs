@@ -55,6 +55,17 @@ pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
     )
 }
 
+/// 诊断面板"上次启动"行：最近一次 dsh 启动的耗时分解（spawn→HTTP 绑定→token 行）。
+/// 数据源是 events.log 尾部里 process.rs 落的 ready 分解行；找不到（旧日志/从未就绪）→ None
+#[tauri::command]
+pub fn get_last_boot_timing(state: State<SharedState>) -> Option<crate::diagnostics::BootTimingDto> {
+    let lines = crate::diagnostics::read_log_tail(
+        &events_log_path(&state),
+        crate::diagnostics::LOG_TAIL_LINES,
+    );
+    crate::diagnostics::last_boot_timing(&lines)
+}
+
 /// 用系统默认程序打开 events.log（记事本等），便于复制完整日志上报。
 /// 文件不存在（刚装好/从未写过日志）时创建空文件——"打开日志"永远可用
 /// （append_debug_line 首次写入也会自建，这里只是让按钮不依赖先发生点什么）

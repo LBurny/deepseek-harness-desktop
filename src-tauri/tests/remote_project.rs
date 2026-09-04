@@ -131,10 +131,12 @@ fn project_page_anchors_and_constants() {
     }
 }
 
-/// Session log 药丸缩小规则锚定：选择器/关键属性/断点位置，
-/// 断任一处手机上的药丸回原生 32px 高、重新贴近标签栏
+/// Session log 药丸隐藏规则锚定：选择器/关键属性/断点位置。
+/// 手机端直接 display:none——没有人在手机上翻 session 日志（要看也是在 PC
+/// 端看），且药丸悬浮盖住"N 个后台任务运行中"文案（0.5.5 手机实拍）。
+/// 断任一处手机上的药丸复原显示、重新盖住头部文案
 #[test]
-fn session_log_pill_shrink_rule() {
+fn session_log_pill_hidden_rule() {
     let css = std::fs::read_to_string(
         Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("src")
@@ -148,18 +150,18 @@ fn session_log_pill_shrink_rule() {
         dshdesktop_lib::upstream::SESSION_LOG_BUTTON_NEEDLE
     );
     // 必须双写凑 0-2-0 优先级：上游样式由 JS 运行时注入、文档序在我们之后，
-    // 单写平级必输（改断的表现是规则在页面里但计算样式仍是 32px）
+    // 单写平级必输（改断的表现是规则在页面里但按钮照显示）
     let doubled = format!("{anchor}{anchor}");
     let pos = css.find(&doubled).unwrap_or_else(|| {
         panic!("mobile.css 缺双写选择器 {doubled}（单写优先级压不过上游运行时注入样式）")
     });
     let end = css[pos..].find('}').map(|i| pos + i).unwrap();
     let block = &css[pos..end];
-    // 上游把 height:32px/min-width:111px 写死在按钮 CSS 里，必须显式覆盖这两项
-    for prop in ["height: 26px", "min-width: 0", "font-size: 12px"] {
-        assert!(block.contains(prop), "Session log 规则块缺 {prop}");
-    }
-    // 规则须在 700px 移动端断点内（桌面与宽屏远程保持原生尺寸）
+    assert!(
+        block.contains("display: none"),
+        "Session log 规则块缺 display: none（手机端应整体隐藏该按钮）"
+    );
+    // 规则须在 700px 移动端断点内（桌面与宽屏远程保持原生显示）
     let media = css.find("@media (max-width: 700px)").unwrap();
     assert!(pos > media, "Session log 规则须落在 700px 断点内");
 }

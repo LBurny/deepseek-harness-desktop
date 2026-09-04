@@ -159,6 +159,66 @@ async fn plugin_client(
         .into_response()
 }
 
+/// 大体积插件 bundle（>4KB，含内测声明 needle）：代理"改写+gzip"路径的仿真。
+/// 体积跨过 GZIP_MIN_SIZE 门槛才会在代理侧补回 gzip（小 bundle 维持 identity）
+async fn plugin_client_big(State(st): State<FakeState>, uri: axum::http::Uri) -> Response {
+    st.plugin_hits.lock().unwrap().push(uri.to_string());
+    let body = format!(
+        "const pad = \"{}\";\nconst w = new WelcomeNoticeStore(ctx.remote.$host, ctx.remote.$host.isLoopback ? \"host\" : \"memory\");\n",
+        "x".repeat(6000)
+    );
+    (
+        StatusCode::OK,
+        [(
+            "content-type",
+            HeaderValue::from_static("application/javascript; charset=utf-8"),
+        )],
+        body,
+    )
+        .into_response()
+}
+
+/// 大体积 SPA 静态资产（~100KB JS）：透传路径代理侧 gzip 的仿真。
+/// 真实 dsh 的 /assets/index-*.js、vendor-*.js 即此形态（无鉴权门、无压缩）
+async fn asset_big_js() -> Response {
+    let body: String = (0..5000)
+        .map(|i| format!("export const v{i} = {i};\n"))
+        .collect();
+    (
+        StatusCode::OK,
+        [(
+            "content-type",
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
+        body,
+    )
+        .into_response()
+}
+
+/// 小体积文本资产（<4KB）：低于 gzip 门槛应 identity 透传
+async fn asset_small_js() -> Response {
+    (
+        StatusCode::OK,
+        [(
+            "content-type",
+            HeaderValue::from_static("text/javascript; charset=utf-8"),
+        )],
+        "export const s = 1;\n",
+    )
+        .into_response()
+}
+
+/// 二进制资产（自带压缩格式）：content-type 不在白名单应 identity 透传
+async fn asset_logo_png() -> Response {
+    let body: Vec<u8> = (0..8192u32).map(|i| (i % 251) as u8).collect();
+    (
+        StatusCode::OK,
+        [("content-type", HeaderValue::from_static("image/png"))],
+        body,
+    )
+        .into_response()
+}
+
 async fn app_page() -> Response {
     // SPA 入口文档模拟（代理移动端注入测试）：含 </head> 与 dsh 同款 viewport meta
     // （iOS 自动缩放防线改写对象，值对齐 upstream::VIEWPORT_META_NEEDLE）
@@ -315,9 +375,17 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
         .route("/app", axum::routing::get(app_page))
         .route("/app-nohead", axum::routing::get(app_page_nohead))
         .route("/plugins/fake/client.js", axum::routing::get(plugin_client))
+        .route(
+            "/plugins/big/client.js",
+            axum::routing::get(plugin_client_big),
+        )
         // 0.1.2 合并加载形态：/plugins/??<a>/client.js,<b>/client.js&rev=N 的
         // path 部分只剩 "/plugins/"，组合清单整体在 query 里（真机实测）
         .route("/plugins/", axum::routing::get(plugin_client))
+        // SPA 静态资产仿真（透传路径代理侧 gzip 的测试目标）
+        .route("/assets/big.js", axum::routing::get(asset_big_js))
+        .route("/assets/small.js", axum::routing::get(asset_small_js))
+        .route("/assets/logo.png", axum::routing::get(asset_logo_png))
         .route("/api/{*rest}", axum::routing::any(api))
         .route(
             dshdesktop_lib::upstream::DSH_MUX_PATH,

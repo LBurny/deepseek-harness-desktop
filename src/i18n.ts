@@ -20,6 +20,9 @@ const en: Record<string, string> = {
   '重启中…': 'Restarting…',
   '打开日志': 'Open log',
   '诊断日志': 'Diagnostics log',
+  '上次启动': 'Last startup',
+  '无记录': 'No record',
+  '共 {total}s（HTTP {http}s / 就绪行 {token}s）': '{total}s total (HTTP {http}s / ready line {token}s)',
 
   // 其它设置
   '其它设置': 'Other settings',

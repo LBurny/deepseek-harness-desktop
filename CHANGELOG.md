@@ -5,7 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.5.6] - 2026-09-04
+
+### Added
+
+- **远程访问加载过渡页（splash）**（0.5.5 手机实拍反馈：打开远程页面白屏几十秒才出内容，观感如卡死）：dsh 服务端不做任何压缩，经 cloudflared 隧道的远程首连要下载 ~5MB（SPA ~1.2MB + 插件 bundle ~3.7MB，后者因壳侧改写还被迫走 identity）。现代理改写 SPA 入口文档时在 React 挂载点后注入加载过渡页：spinner + "DeepSeek Harness" 标题随 HTML 解析立即可见，深浅色随 `prefers-color-scheme`，提示文案语言随 `navigator.language`（`<html lang>` 是 Vite 模板恒 en 不可靠）；加载超 12s 淡入一行弱网说明；React 挂载完成（#root 出现子节点）即淡出移除。挂载点 needle 收 upstream.rs::SPA_ROOT_MOUNT_NEEDLE 契约常量——上游改版则契约探针翻红、splash 静默不注入（回到白屏，功能不损）
+- **代理侧 gzip 压缩**：dsh 不压缩任何响应，远程首连 ~5MB 文本资产全走 identity。现对 ≥4KB 的文本资产（js/css/json/svg/html，含插件 bundle 改写产物）在代理侧缓冲 gzip（spawn_blocking + flate2，zip 传递依赖同树不新增编译单元）——首连传输量降到约 1/3。仅 GET 成功响应 + 客户端宣告 `accept-encoding: gzip` + 无 Range + 未编码 + 已知长度在 4KB~16MB 内才做；变换响应剥 etag/content-length/accept-ranges 并标 `content-encoding: gzip` + `vary: accept-encoding`；压缩失败回退 identity，绝不发半包
+- **诊断面板"上次启动"耗时分解**：dsh 每次 Ready 前落 `[dshdesktop] ready: port=N total=Xs http=Ys token=Zs` 分解行（进入 Starting → HTTP 绑定 → token 就绪行三段耗时），诊断面板信息卡新增"上次启动"行（跨会话读 events.log 尾部取最近一次；面板开着期间状态翻转到 Ready 自动刷新）。"启动慢"类反馈从此有分解数据可读。新增命令 `get_last_boot_timing`（build.rs / capabilities / invoke_handler 三处注册，新增 tests/command_registration.rs 锚定三处一致 + 远程 capability 只放行 zoom_ui）
+- **events.log 统一时间戳**：append_debug_line 对无时间戳的行统一补 `[HH:MM:SS.mmm]` 本地前缀（壳侧自带戳的 bring_to_front/播放行、cloudflared 的 RFC3339 UTC 行不重复盖）。此前生命周期关键行（Starting/spawn/Ready）全无时间戳，启动时序只能靠外部文件 mtime 反推
+
+### Changed
+
+- **启动时自动检查更新改为默认开**：公开发布仓匿名可读后，settings.json 无此字段的老配置升级即获得启动检查；显式关过的用户不受影响（字段已落盘，serde default 只兜缺省）
+- **手机端隐藏 Session 日志下载按钮**（0.5.5 手机实拍反馈）：没有人在手机上翻 session 日志（要看也是在 PC 端看），且该药丸悬浮盖住会话头部"N 个后台任务运行中"文案。mobile.css ≤700px 下 `_sessionLogButton` 规则由缩小改为 `display: none`（桌面与宽屏远程保持原生显示；上游类名改名则按钮复原显示、契约探针守门，功能不损）
+
+### Fixed
+
+- **MCP 组件联网安装导致启动卡在"正在启动 dsh"数分钟，甚至超时被杀树白等一轮**（用户反馈，0.5.5 实踩定位）：dsh 的 `dsh web:` 就绪行要等 cordis loader 全部 settle，而 dsh-mcp-client 无条件等 MCP server 连接+首次工具同步完成——MCP 条目配成 `npx 裸名/@latest` 时每次启动都联网解析版本，上游发版（如 context7-mcp 4.0.5 发布当天）后的首次启动全量冷装，慢网下实测 >2-3min。两道工序：①wait_token 从固定 60s 改为**静默预算**——pump 有输出就继续等，见到 npm `will be installed` 警告行切 10min 冷装长预算（旧逻辑把快装完的进程杀树，60s 白等后靠 npm 缓存余温重试才成功）；②splash 检测到冷装信号即从"正在启动 dsh 服务…"切换为"正在下载 MCP 组件（首次联网安装，可能较慢）…"。回归：fake-dsh 新增 npm-install-warn 模拟，冷装长预算不被杀 + 纯静默卡死仍按预算杀树两条集成测试钉死
 
 ## [0.5.5] - 2026-09-04
 

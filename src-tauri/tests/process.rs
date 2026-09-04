@@ -117,6 +117,106 @@ async fn dsh_becomes_ready_and_stops() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_logs_boot_timing_breakdown() {
+    // Ready 时必须落一条耗时分解日志（诊断面板"上次启动"行的数据源）：
+    // [dshdesktop] ready: port=N total=Xs http=Ys token=Zs
+    let work = tempfile::tempdir().unwrap();
+    let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let proc = DshProcess::spawn_supervised(
+        Arc::new(TestPlatform),
+        fixture_paths(work.path()),
+        token_tx,
+        emit,
+    );
+    let s = wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
+    let DshState::Ready { port } = s else { unreachable!() };
+    wait_event(
+        &events,
+        |e| matches!(e, ProcessEvent::Log(l) if l.contains("[dshdesktop] ready: port=")),
+        Duration::from_secs(5),
+    );
+    let lines: Vec<String> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            ProcessEvent::Log(l) => Some(l.clone()),
+            _ => None,
+        })
+        .collect();
+    let line = lines
+        .iter()
+        .find(|l| l.contains("[dshdesktop] ready: port="))
+        .expect("ready 分解行必须存在");
+    let dto = dshdesktop_lib::diagnostics::parse_boot_timing(line)
+        .unwrap_or_else(|| panic!("分解行必须可解析：{line}"));
+    assert_eq!(dto.port, port, "分解行端口须与 Ready 端口一致：{line}");
+    assert!(dto.total_s > 0.0, "total 必须为正：{line}");
+    assert!(dto.total_s >= dto.http_s, "total 必须覆盖 http 段：{line}");
+    assert!(dto.total_s >= dto.token_s, "total 必须覆盖 token 段：{line}");
+    proc.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn npm_cold_install_gets_extended_token_budget() {
+    // npm 冷装（npx 未缓存包）可能静默下载数分钟：见到 "will be installed" 警告行后
+    // wait_token 必须切到长预算，不能再按普通静默预算杀树（否则快装完的进程被杀、
+    // 白等一轮再靠缓存余温重启——0.5.5 实踩）
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("fake-dsh.npm-install-warn"), "").unwrap();
+    // 警告行后静默 4s 才打 token：超过普通静默预算（1.5s），低于冷装预算（8s）
+    std::fs::write(work.path().join("fake-dsh.token-delay"), "4000").unwrap();
+    let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let proc = DshProcess::spawn_supervised_with_timeouts(
+        Arc::new(TestPlatform),
+        fixture_paths(work.path()),
+        token_tx,
+        emit,
+        dshdesktop_lib::process::BootTimeouts {
+            silence: Duration::from_millis(1500),
+            install: Duration::from_secs(8),
+            absolute: Duration::from_secs(30),
+        },
+    );
+    wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(20));
+    // 全程不得出现"未出现就绪 URL"的杀树记录
+    let killed = events.lock().unwrap().iter().any(|e| {
+        matches!(e, ProcessEvent::Log(l) if l.contains("未出现就绪 URL"))
+    });
+    assert!(!killed, "冷装模式下不得按普通静默预算杀树");
+    proc.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn silent_boot_still_killed_after_silence_budget() {
+    // 无冷装信号的纯静默卡死：超过静默预算照样杀树重试（旧行为保留——真卡死不能干等）
+    let work = tempfile::tempdir().unwrap();
+    std::fs::write(work.path().join("fake-dsh.token-delay"), "8000").unwrap();
+    let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let proc = DshProcess::spawn_supervised_with_timeouts(
+        Arc::new(TestPlatform),
+        fixture_paths(work.path()),
+        token_tx,
+        emit,
+        dshdesktop_lib::process::BootTimeouts {
+            silence: Duration::from_millis(1500),
+            install: Duration::from_secs(8),
+            absolute: Duration::from_secs(30),
+        },
+    );
+    // token 8s 才打，静默预算 1.5s → 第一轮必被杀并重试
+    wait_event(
+        &events,
+        |e| matches!(e, ProcessEvent::Log(l) if l.contains("未出现就绪 URL")),
+        Duration::from_secs(15),
+    );
+    proc.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dsh_restarts_after_crash() {
     let work = tempfile::tempdir().unwrap();
     std::fs::write(work.path().join("fake-dsh.exit-after"), "1500").unwrap();

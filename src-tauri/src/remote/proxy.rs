@@ -10,6 +10,11 @@
 //! WS 升级请求（/api/remote.mux）不走 HTTP 转发：握手在代理终结（cookie 门岗对
 //! 握手生效），与 dsh 另建 WS 后逐帧双向搬运（bridge_upgrade/bridge，dsh 侧
 //! 升级同样须带 dsh-auth cookie——漏注入手机端表现为"页面开但全断"）。
+//! 响应侧两处壳侧增强（只影响经代理的远程访问，桌面壳直连 dsh 不经这里）：
+//!   - HTML 文档：注入 mobile.css/mobile.js 移动端适配 + splash 加载过渡页
+//!     （React 挂载点 needle 命中才注入，SPA 挂载完成后自动淡出移除）
+//!   - 大体积文本资产（≥4KB 的 js/css/json/svg/html）：代理侧缓冲 gzip——dsh
+//!     服务端不做任何压缩，隧道首连 ~5MB identity 是远程白屏几十秒的根因之一
 
 use crate::dsh_session::{self, DshCreds};
 use super::token_eq;
@@ -69,6 +74,90 @@ const MOBILE_CSS: &str = include_str!("mobile.css");
 const MOBILE_JS: &str = include_str!("mobile.js");
 /// 注入标记：测试断言与排查时识别（注释节点，无渲染影响）
 const MOBILE_INJECT_MARKER: &str = "<!-- dshdesktop-mobile -->";
+
+/// 远程加载过渡页（splash）：dsh 服务端不做任何压缩，经隧道的远程首连要下载
+/// ~5MB（SPA ~1.2MB + 插件 bundle ~3.7MB——bundle 因壳侧改写还被迫走 identity），
+/// 弱网白屏几十秒、观感如卡死（0.5.5 手机实拍反馈）。rewrite_html_document 把
+/// React 挂载点（upstream::SPA_ROOT_MOUNT_NEEDLE，命中才注入，漂移则整体跳过）
+/// 替换为 挂载点+splash 覆盖层（spinner+标题+12s 后才淡入的弱网提示，深浅色随
+/// prefers-color-scheme，文案语言随 navigator.language）；React 挂载完成
+/// （#root 出现子节点）后 splash.js 淡出移除。桌面壳直连 dsh 不经代理，只有
+/// 远程访问看到它。
+const SPLASH_CSS: &str = include_str!("splash.css");
+const SPLASH_JS: &str = include_str!("splash.js");
+/// splash 覆盖层标记（hint 文案由 splash.js 按 navigator.language 填）
+const SPLASH_HTML: &str = concat!(
+    r#"<div id="dsh-splash" role="status"><div class="dsh-splash-spinner"></div>"#,
+    r#"<p class="dsh-splash-title">DeepSeek Harness</p><p class="dsh-splash-hint"></p></div>"#,
+);
+
+/// splash 替换串 = 挂载点原样 + splash 覆盖层 + 卸载脚本。脚本紧随标记注入，
+/// 解析到即执行——此时 #root 与 splash 都已存在，无需等 DOMContentLoaded
+fn splash_replacement() -> Vec<u8> {
+    let mut v = Vec::with_capacity(
+        crate::upstream::SPA_ROOT_MOUNT_NEEDLE.len() + SPLASH_HTML.len() + SPLASH_JS.len() + 16,
+    );
+    v.extend_from_slice(crate::upstream::SPA_ROOT_MOUNT_NEEDLE);
+    v.extend_from_slice(SPLASH_HTML.as_bytes());
+    v.extend_from_slice(b"<script>");
+    v.extend_from_slice(SPLASH_JS.as_bytes());
+    v.extend_from_slice(b"</script>");
+    v
+}
+
+/// 代理侧 gzip 的体积门槛：小于它压缩收益不抵 CPU 与首字节延迟；上限复用
+/// REWRITE_BUFFER_LIMIT（缓冲边界一致）。dsh 服务端不做任何压缩（0.1.2 全包
+/// grep 无 gzip/deflate 落盘代码），经隧道的远程首连 ~5MB 文本资产全走
+/// identity——splash 管观感，gzip 管实际时长（flate2 随 zip 已在依赖树）
+const GZIP_MIN_SIZE: u64 = 4 * 1024;
+
+/// 响应 content-type 是否值得压缩（字体/图片等自带压缩的格式不在列）
+fn gzip_eligible_content_type(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.split(';').next().unwrap_or(v).trim().to_ascii_lowercase())
+        .is_some_and(|ct| {
+            matches!(
+                ct.as_str(),
+                "application/javascript"
+                    | "text/javascript"
+                    | "text/css"
+                    | "application/json"
+                    | "image/svg+xml"
+                    | "text/html"
+            )
+        })
+}
+
+/// 客户端（浏览器）是否宣告接受 gzip：必须在转发路径剥 accept-encoding 之前
+/// 从原始请求头捕获（按 token 匹配，"xgzip" 不误伤）
+fn client_accepts_gzip(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.split(',').any(|t| t.trim().starts_with("gzip")))
+}
+
+/// 同步压缩核心（单测直接覆盖）；失败回 None，调用方回退 identity 原样服务
+fn gzip_compress(body: Vec<u8>) -> Option<Vec<u8>> {
+    use flate2::write::GzEncoder;
+    use std::io::Write;
+    let mut enc = GzEncoder::new(
+        Vec::with_capacity(body.len() / 3 + 64),
+        flate2::Compression::default(),
+    );
+    enc.write_all(&body).ok()?;
+    enc.finish().ok()
+}
+
+/// spawn_blocking 压缩（3.7MB 约一两百毫秒，别堵执行器线程）
+async fn gzip_bytes(body: Vec<u8>) -> Option<Vec<u8>> {
+    tokio::task::spawn_blocking(move || gzip_compress(body))
+        .await
+        .ok()
+        .flatten()
+}
 
 /// 插件客户端 bundle 路径。两种形态都要命中：
 /// - 单插件（0.1.1 及以前）：`/plugins/<id>/client.js[?rev=N]`
@@ -350,6 +439,10 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
     let method = req.method().clone();
     // 重放（401 换 cookie 后重发一次）需要整读请求体与请求头副本（into_body 消费 req）
     let req_headers = req.headers().clone();
+    // 代理侧 gzip 的两个前提从原始请求头捕获：压缩意愿（转发路径会剥掉
+    // accept-encoding，之后就拿不到）与 Range（区间请求不做变换）
+    let client_gzip = client_accepts_gzip(&req_headers);
+    let has_range = req_headers.contains_key(header::RANGE);
     let body_bytes = match axum::body::to_bytes(req.into_body(), REPLAY_BODY_LIMIT).await {
         Ok(b) => b,
         Err(_) => return (StatusCode::BAD_GATEWAY, "读取请求体失败").into_response(),
@@ -392,13 +485,14 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
             }
         }
     }
-    // 插件 bundle：缓冲改写内测声明持久化三元式（仅 identity + 体积上限内）
+    // 插件 bundle：缓冲改写内测声明持久化三元式（仅 identity + 体积上限内）；
+    // 改写产物在代理侧补回 gzip（为改写向 dsh 求的是 identity，浏览器实际收压缩流）
     if rewrite_bundle
         && res.status().is_success()
         && res.headers().get(header::CONTENT_ENCODING).is_none()
         && res.content_length().map_or(true, |n| n <= REWRITE_BUFFER_LIMIT)
     {
-        return rewrite_plugin_bundle(res).await;
+        return rewrite_plugin_bundle(res, client_gzip).await;
     }
     // HTML 文档（dsh 对所有路径回同一 SPA 入口）：缓冲注入移动端适配样式
     if wants_html
@@ -408,6 +502,36 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
         && res.content_length().map_or(true, |n| n <= REWRITE_BUFFER_LIMIT)
     {
         return rewrite_html_document(res).await;
+    }
+    // 透传路径的代理侧 gzip：dsh 不压缩任何响应，远程首连 ~5MB 文本资产全走
+    // identity（0.5.5 手机实拍白屏几十秒的根因之一）。仅 GET 成功响应 + 客户端
+    // 宣告接受 + 无 Range + 文本类型 + 未编码 + 已知长度在门槛内才缓冲压缩；
+    // 压缩失败/读取失败回退 identity 缓冲体或 502，绝不发半包
+    if client_gzip
+        && method == reqwest::Method::GET
+        && !has_range
+        && res.status() == StatusCode::OK
+        && res.headers().get(header::CONTENT_ENCODING).is_none()
+        && gzip_eligible_content_type(res.headers())
+        && res
+            .content_length()
+            .is_some_and(|n| (GZIP_MIN_SIZE..=REWRITE_BUFFER_LIMIT).contains(&n))
+    {
+        let builder = buffered_builder(&res);
+        return match res.bytes().await {
+            Ok(bytes) => match gzip_bytes(bytes.to_vec()).await {
+                Some(gz) => builder
+                    .header(header::CONTENT_ENCODING, "gzip")
+                    .header(header::VARY, "accept-encoding")
+                    .body(Body::from(gz))
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+                // 压缩失败：identity 缓冲体兜底（客户端没收到压缩承诺，语义一致）
+                None => builder
+                    .body(Body::from(bytes))
+                    .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response()),
+            },
+            Err(_) => (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
+        };
     }
     let mut builder = Response::builder().status(res.status());
     for (name, value) in res.headers() {
@@ -494,12 +618,25 @@ async fn send_forwarded(
 
 /// 缓冲插件 bundle 响应并改写内测声明三元式。content-length/etag 作废（改写后长度与
 /// 内容都变）；needle 不存在时原样返回（dsh 改版换了写法就静默失效，声明照弹但不破坏页面）。
-async fn rewrite_plugin_bundle(res: reqwest::Response) -> Response {
+/// client_gzip（浏览器宣告接受 gzip）且产物越过 GZIP_MIN_SIZE 时在代理侧补回
+/// gzip——改写路径向 dsh 求的是 identity（剥了 accept-encoding），不补则 3.7MB
+/// bundle 在隧道里裸奔（0.5.5 手机实拍首连白屏几十秒）
+async fn rewrite_plugin_bundle(res: reqwest::Response, client_gzip: bool) -> Response {
     let builder = buffered_builder(&res);
     match res.bytes().await {
         Ok(bytes) if bytes.len() as u64 <= REWRITE_BUFFER_LIMIT => {
             let body = replace_all(&bytes, crate::upstream::WELCOME_NOTICE_NEEDLE, WELCOME_NOTICE_REPL)
                 .unwrap_or_else(|| bytes.to_vec());
+            if client_gzip && body.len() as u64 >= GZIP_MIN_SIZE {
+                // 克隆一份进压缩线程：压缩失败时原件还要回退 identity 服务
+                if let Some(gz) = gzip_bytes(body.clone()).await {
+                    return builder
+                        .header(header::CONTENT_ENCODING, "gzip")
+                        .header(header::VARY, "accept-encoding")
+                        .body(Body::from(gz))
+                        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+                }
+            }
             builder
                 .body(Body::from(body))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
@@ -520,13 +657,13 @@ fn is_html_document(headers: &HeaderMap) -> bool {
 }
 
 /// 缓冲改写响应的公共头部构造：逐跳头之外再剥 content-length/etag（缓冲改写后
-/// 长度与摘要都作废）
+/// 长度与摘要都作废）与 accept-ranges（变换后的体无法按原字节区间服务）
 fn buffered_builder(res: &reqwest::Response) -> axum::http::response::Builder {
     let mut builder = Response::builder().status(res.status());
     for (name, value) in res.headers() {
         if matches!(
             name.as_str(),
-            "connection" | "transfer-encoding" | "keep-alive" | "upgrade" | "content-length" | "etag"
+            "connection" | "transfer-encoding" | "keep-alive" | "upgrade" | "content-length" | "etag" | "accept-ranges"
         ) {
             continue;
         }
@@ -541,6 +678,9 @@ fn buffered_builder(res: &reqwest::Response) -> axum::http::response::Builder {
 /// 聚焦 font-size<16px 的输入框（composer 实测 14px）自动放大整页且收键盘
 /// 不复原，标签栏/输入框被推出可视区（0.5.4 手机实拍实踩）；needle 未命中
 /// 原样透传，上游改版由契约探针翻红。
+/// 加载过渡页（splash）：React 挂载点 needle（SPA_ROOT_MOUNT_NEEDLE）命中时，
+/// 挂载点后注入 splash 覆盖层+卸载脚本、head 注入补 splash 样式；needle 漂移
+/// 则 splash 整体不注入（回到白屏等待，功能不损），契约探针守门。
 async fn rewrite_html_document(res: reqwest::Response) -> Response {
     let builder = buffered_builder(&res);
     match res.bytes().await {
@@ -551,14 +691,27 @@ async fn rewrite_html_document(res: reqwest::Response) -> Response {
                 crate::upstream::VIEWPORT_META_REPLACEMENT,
             )
             .unwrap_or_else(|| bytes.to_vec());
+            let (doc, splash) = match replace_all(
+                &doc,
+                crate::upstream::SPA_ROOT_MOUNT_NEEDLE,
+                &splash_replacement(),
+            ) {
+                Some(doc) => (doc, true),
+                None => (doc, false),
+            };
             let body = match find_subslice_ci(&doc, b"</head>") {
                 Some(pos) => {
-                    let mut out =
-                        Vec::with_capacity(doc.len() + MOBILE_CSS.len() + MOBILE_JS.len() + 96);
+                    let mut out = Vec::with_capacity(
+                        doc.len() + MOBILE_CSS.len() + MOBILE_JS.len() + SPLASH_CSS.len() + 96,
+                    );
                     out.extend_from_slice(&doc[..pos]);
                     out.extend_from_slice(MOBILE_INJECT_MARKER.as_bytes());
                     out.extend_from_slice(b"<style>");
                     out.extend_from_slice(MOBILE_CSS.as_bytes());
+                    if splash {
+                        out.extend_from_slice(b"\n");
+                        out.extend_from_slice(SPLASH_CSS.as_bytes());
+                    }
                     out.extend_from_slice(b"</style><script>");
                     out.extend_from_slice(MOBILE_JS.as_bytes());
                     out.extend_from_slice(b"</script>");
@@ -790,6 +943,69 @@ mod tests {
             &req("GET", "/plugins/fake/icon.png", false),
             "/plugins/fake/icon.png"
         ));
+    }
+
+    #[test]
+    fn client_accepts_gzip_parses_tokens() {
+        let h = |v: &str| {
+            let mut m = HeaderMap::new();
+            m.insert(header::ACCEPT_ENCODING, v.parse().unwrap());
+            m
+        };
+        assert!(client_accepts_gzip(&h("gzip, br")));
+        assert!(client_accepts_gzip(&h("br, gzip")));
+        assert!(client_accepts_gzip(&h("gzip")));
+        // 子串误伤："xgzip" 不含独立 gzip token
+        assert!(!client_accepts_gzip(&h("xgzip, br")));
+        assert!(!client_accepts_gzip(&h("br")));
+        assert!(!client_accepts_gzip(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn gzip_content_type_allowlist() {
+        let h = |v: &str| {
+            let mut m = HeaderMap::new();
+            m.insert(header::CONTENT_TYPE, v.parse().unwrap());
+            m
+        };
+        assert!(gzip_eligible_content_type(&h("text/javascript")));
+        assert!(gzip_eligible_content_type(&h("application/javascript; charset=utf-8")));
+        assert!(gzip_eligible_content_type(&h("text/css; charset=utf-8")));
+        assert!(gzip_eligible_content_type(&h("application/json")));
+        assert!(gzip_eligible_content_type(&h("image/svg+xml")));
+        assert!(gzip_eligible_content_type(&h("text/html; charset=utf-8")));
+        // 自带压缩/二进制格式与缺失头不压
+        assert!(!gzip_eligible_content_type(&h("image/png")));
+        assert!(!gzip_eligible_content_type(&h("font/woff2")));
+        assert!(!gzip_eligible_content_type(&h("application/octet-stream")));
+        assert!(!gzip_eligible_content_type(&HeaderMap::new()));
+    }
+
+    #[test]
+    fn gzip_compress_round_trip() {
+        use flate2::read::GzDecoder;
+        use std::io::Read;
+        let body: Vec<u8> = (0..5000)
+            .map(|i| format!("export const v{i} = {i};\n"))
+            .collect::<String>()
+            .into_bytes();
+        let gz = gzip_compress(body.clone()).expect("压缩应成功");
+        assert!(gz.len() < body.len() / 3, "重复文本应显著压缩");
+        // gzip magic
+        assert_eq!(&gz[..2], &[0x1f, 0x8b]);
+        let mut out = Vec::new();
+        GzDecoder::new(&gz[..]).read_to_end(&mut out).unwrap();
+        assert_eq!(out, body, "解压应还原原文");
+    }
+
+    #[test]
+    fn splash_replacement_keeps_mount_and_carries_assets() {
+        let repl = splash_replacement();
+        let s = String::from_utf8(repl).unwrap();
+        assert!(s.starts_with(r#"<div id="root"></div>"#), "挂载点原样保留：{s}");
+        assert!(s.contains(r#"<div id="dsh-splash""#), "含 splash 覆盖层：{s}");
+        assert!(s.contains("<script>"), "含卸载脚本：{s}");
+        assert!(s.contains("dsh-splash-done"), "脚本含淡出类名：{s}");
     }
 }
 

@@ -1,6 +1,6 @@
 [package]
 name = "dshdesktop"
-version = "0.5.5"
+version = "0.5.6"
 edition = "2021"
 description = "Desktop shell for deepseek-harness (dsh)"
 repository = "https://github.com/LBurny/deepseek-harness-desktop"
@@ -27,6 +27,9 @@ dirs = "6"
 thiserror = "2"
 fs_extra = "1"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+# 远程代理对大体积文本资产（插件 bundle/SPA JS）做 gzip：dsh 服务端不压缩。
+# 版本与 zip 传递依赖同树（flate2 1.1，miniz_oxide 纯 Rust，不新增编译单元）
+flate2 = "1"
 regex = "1"
 futures = "0.3"
 url = "2"

@@ -737,7 +737,22 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         format!("path={index_html:?}"),
         "dsh 改了 viewport meta：proxy.rs 禁缩放改写失效（iOS 聚焦输入框整页放大），改 upstream::VIEWPORT_META_NEEDLE",
     );
-    // mobile.css 缩小 Session log 药丸的锚点：CSS Modules 本地名仍在插件包内
+    // splash 注入前提：入口文档的 React 挂载点仍是 Vite 模板原值
+    // （变了则 proxy.rs 跳过 splash 注入，远程首连回到白屏等待）
+    let hit = std::fs::read(&index_html)
+        .ok()
+        .map(|b| {
+            b.windows(upstream::SPA_ROOT_MOUNT_NEEDLE.len())
+                .any(|w| w == upstream::SPA_ROOT_MOUNT_NEEDLE)
+        })
+        .unwrap_or(false);
+    c.check(
+        "入口文档仍含 React 挂载点 <div id=\"root\"></div>",
+        hit,
+        format!("path={index_html:?}"),
+        "dsh 改了挂载点结构：proxy.rs splash 注入整体跳过（远程首连回到白屏），改 upstream::SPA_ROOT_MOUNT_NEEDLE",
+    );
+    // mobile.css 隐藏 Session log 药丸的锚点：CSS Modules 本地名仍在插件包内
     // （实测落盘：@deepseek-ai/dsh-session-log-export/lib/client.js）
     let hit = tree_find(
         &nm,
@@ -750,7 +765,7 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         "插件 client.js 仍含 sessionLogButton 本地名",
         hit.is_some(),
         format!("hit={hit:?}"),
-        "上游改了类名：mobile.css 的 [class*=\"_sessionLogButton\"] 规则静默失效（药丸回原生尺寸），改 upstream::SESSION_LOG_BUTTON_NEEDLE 与 mobile.css 的选择器",
+        "上游改了类名：mobile.css 的 [class*=\"_sessionLogButton\"] 隐藏规则静默失效（按钮复原显示），改 upstream::SESSION_LOG_BUTTON_NEEDLE 与 mobile.css 的选择器",
     );
     // mobile.css 模型选择器图标化的三个锚点：data-slot 语义钩子
     // （dsh-client-ui-conversation/lib/client.js）+ 触发器两段文案的

@@ -180,7 +180,8 @@ pub struct ShellSettings {
     pub close_behavior: CloseBehavior,
     pub notify: NotifySettings,
     pub completion_sound: CompletionSound,
-    /// 启动时自动检查更新（默认关）：开启后每次启动后台查 GitHub releases，有新版弹 toast
+    /// 启动时自动检查更新（默认开；公开发布仓匿名可读后老配置升级即获得）：
+    /// 开启后每次启动后台查 GitHub releases，有新版弹 toast
     pub check_update_on_launch: bool,
     /// 旧版字段（≤0.1.7）：读取时迁移进 notify.turn_done.enabled，保存时不再写出
     #[serde(skip_serializing)]
@@ -208,7 +209,7 @@ impl Default for ShellSettings {
             close_behavior: CloseBehavior::Background,
             notify: NotifySettings::default(),
             completion_sound: CompletionSound::Staplebops02,
-            check_update_on_launch: false,
+            check_update_on_launch: true,
             notify_on_completion: None,
         }
     }
@@ -561,18 +562,18 @@ mod tests {
     }
 
     #[test]
-    fn check_update_on_launch_defaults_off_and_roundtrips() {
+    fn check_update_on_launch_defaults_on_and_roundtrips() {
         let dir = tempfile::tempdir().unwrap();
-        // 旧版文件没有该字段 → 默认关
+        // 公开发布仓匿名可读后默认开：旧版文件没有该字段 → 升级用户获得启动检查
         std::fs::write(dir.path().join("settings.json"), r#"{ "zoom_step": 0.05 }"#).unwrap();
-        assert!(!ShellSettings::load(dir.path()).check_update_on_launch);
-        // 开启后保存/读取往返一致
+        assert!(ShellSettings::load(dir.path()).check_update_on_launch);
+        // 显式关闭的用户不受默认值翻转影响：保存/读取往返保持关
         let mut s = ShellSettings::default();
-        s.check_update_on_launch = true;
+        s.check_update_on_launch = false;
         s.save(dir.path()).unwrap();
         let text = std::fs::read_to_string(dir.path().join("settings.json")).unwrap();
-        assert!(text.contains(r#""check_update_on_launch": true"#), "实际文件：{text}");
-        assert!(ShellSettings::load(dir.path()).check_update_on_launch);
+        assert!(text.contains(r#""check_update_on_launch": false"#), "实际文件：{text}");
+        assert!(!ShellSettings::load(dir.path()).check_update_on_launch);
     }
 
     #[test]

@@ -14,6 +14,7 @@
     "allow-get-status",
     "allow-restart-dsh",
     "allow-get-recent-logs",
+    "allow-get-last-boot-timing",
     "allow-open-log-file",
     "allow-get-autostart",
     "allow-set-autostart",

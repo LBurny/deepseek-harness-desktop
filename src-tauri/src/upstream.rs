@@ -253,6 +253,14 @@ pub const VIEWPORT_META_NEEDLE: &[u8] = br#"content="width=device-width, initial
 pub const VIEWPORT_META_REPLACEMENT: &[u8] =
     br#"content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no""#;
 
+/// dsh Web UI 入口文档的 React 挂载点（Vite 模板原样，独占一行前的完整元素）。
+/// 实测落盘：@deepseek-ai/dsh-web-frontend/dist/index.html。
+/// 影响：proxy.rs 在它之后注入远程加载过渡页（splash）——隧道首连要下载
+/// ~5MB（SPA ~1.2MB + 插件 bundle ~3.7MB），白屏几十秒观感如卡死；React
+/// 挂载完成（#root 出现子节点）后 splash 自动淡出移除。needle 漂移则
+/// splash 整体不注入（页面回到白屏等待，功能不损）；契约探针守门。
+pub const SPA_ROOT_MOUNT_NEEDLE: &[u8] = br#"<div id="root"></div>"#;
+
 // ── 插件管理（plugins.rs；dsh plugin 官方入口 + 壳内置 pnpm）────────
 /// plugin 子命令与 profile 参数。上游出处：bin.js command("plugin") +
 /// requiredOption("--profile <name>")，参数原样透传给 pnpm。
@@ -292,10 +300,10 @@ pub const WORKSPACE_SCHEMA_NEEDLE: &str = "sessionIds";
 
 // ── 移动端注入样式锚点（remote/mobile.css）─────────────────────────
 /// 会话头部"Session log"下载按钮的 CSS Modules 本地名。实测落盘：
-/// @deepseek-ai/dsh-session-log-export/lib/client.js（按钮 CSS 文本内必现，
-/// 且 height:32px/min-width:111px 写死）。影响面：mobile.css 的
-/// [class*="_sessionLogButton"] 缩小规则——上游改名则规则静默失效
-/// （药丸回原生尺寸，功能不损）；契约套件 tree_find 守门。
+/// @deepseek-ai/dsh-session-log-export/lib/client.js（按钮 CSS 文本内必现）。
+/// 影响面：mobile.css 的 [class*="_sessionLogButton"] 隐藏规则（手机端不看
+/// 日志，且药丸悬浮盖住"N 个后台任务运行中"文案）——上游改名则规则静默
+/// 失效（按钮复原显示，功能不损）；契约套件 tree_find 守门。
 pub const SESSION_LOG_BUTTON_NEEDLE: &str = "sessionLogButton";
 
 /// 输入栏模型槽位的 data-slot 语义钩子。实测落盘：

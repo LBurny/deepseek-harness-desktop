@@ -46,7 +46,7 @@
     close_behavior: 'background',
     notify: { approval: { ...DEFAULT_RULE }, question: { ...DEFAULT_RULE }, turn_done: { ...DEFAULT_RULE }, answer_done: { ...DEFAULT_RULE } },
     completion_sound: 'staplebops-02',
-    check_update_on_launch: false,
+    check_update_on_launch: true,
   }
 
   // label 存中文原文，模板里经 t() 渲染——locale 切换时选项文字同步更新

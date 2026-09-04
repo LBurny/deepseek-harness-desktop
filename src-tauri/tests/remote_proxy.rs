@@ -516,6 +516,26 @@ async fn injects_mobile_css_into_html_documents() {
         !body.contains("content=\"width=device-width, initial-scale=1\""),
         "原始 viewport meta 不应残留：{body}"
     );
+    // 加载过渡页（splash）：挂载点原样保留、splash 紧随其后（隧道首连 ~5MB
+    // 白屏几十秒的观感对策，React 挂载后 splash.js 自动淡出移除）
+    assert!(
+        body.contains(r#"<div id="root"></div><div id="dsh-splash""#),
+        "splash 覆盖层应紧随挂载点注入：{body}"
+    );
+    assert!(
+        body.contains("dsh-splash-spin") && body.contains("dsh-splash-done"),
+        "splash 样式与卸载脚本应就位：{body}"
+    );
+    assert!(
+        body.contains("DeepSeek Harness"),
+        "splash 标题应就位：{body}"
+    );
+    // 手机端隐藏 Session 日志下载按钮（药丸悬浮盖住"N 个后台任务运行中"文案）
+    assert!(
+        body.contains(r#"_sessionLogButton"][class*="_sessionLogButton"]"#)
+            && body.contains("display: none;"),
+        "移动端适配应含 sessionLog 按钮隐藏规则：{body}"
+    );
 
     // 2. 无 </head> 的 HTML：原文透传
     let r = http
@@ -539,6 +559,134 @@ async fn injects_mobile_css_into_html_documents() {
         .unwrap();
     assert_eq!(r.status(), 200);
     assert!(r.text().await.unwrap().contains("<html>"));
+
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 代理侧 gzip：dsh 服务端不做任何压缩，远程首连 ~5MB 文本资产全走 identity
+/// （0.5.5 手机实拍白屏几十秒的根因之一）。对 ≥4KB 文本资产（含插件 bundle
+/// 改写产物）在代理侧缓冲 gzip；小体积/二进制/Range 请求/客户端未宣告接受的
+/// 一律 identity 透传。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn gzip_compresses_large_text_assets() {
+    use flate2::read::GzDecoder;
+    use std::io::Read;
+    let gunzip = |bytes: &[u8]| {
+        let mut out = Vec::new();
+        GzDecoder::new(bytes).read_to_end(&mut out).unwrap();
+        out
+    };
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
+    let base = format!("http://127.0.0.1:{}", proxy.port);
+    let http = client();
+    let cookie = format!("{COOKIE_NAME}={token}");
+    let expect: Vec<u8> = (0..5000)
+        .map(|i| format!("export const v{i} = {i};\n"))
+        .collect::<String>()
+        .into_bytes();
+
+    // 1. 大 JS 资产 + 客户端接受 gzip → 压缩，解压还原 dsh 原文
+    let r = http
+        .get(format!("{base}/assets/big.js"))
+        .header("cookie", &cookie)
+        .header("accept-encoding", "gzip, br")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.headers().get("content-encoding").unwrap(),
+        "gzip",
+        "大文本资产应压缩"
+    );
+    assert_eq!(
+        r.headers().get("vary").map(|v| v.to_str().unwrap()),
+        Some("accept-encoding")
+    );
+    let gz = r.bytes().await.unwrap();
+    assert!(
+        gz.len() < expect.len() / 3,
+        "重复文本应显著压缩（{} < {}）",
+        gz.len(),
+        expect.len()
+    );
+    assert_eq!(gunzip(&gz), expect, "解压应还原 dsh 原文");
+
+    // 2. 同资产、客户端未宣告接受 → identity 原文透传
+    let r = http
+        .get(format!("{base}/assets/big.js"))
+        .header("cookie", &cookie)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert!(r.headers().get("content-encoding").is_none());
+    assert_eq!(r.bytes().await.unwrap().as_ref(), expect.as_slice());
+
+    // 3. Range 请求不做变换（压缩后区间语义会破）
+    let r = http
+        .get(format!("{base}/assets/big.js"))
+        .header("cookie", &cookie)
+        .header("accept-encoding", "gzip")
+        .header("range", "bytes=0-99")
+        .send()
+        .await
+        .unwrap();
+    assert!(r.headers().get("content-encoding").is_none(), "Range 请求不应压缩");
+
+    // 4. 小体积文本（<4KB）低于门槛 → identity
+    let r = http
+        .get(format!("{base}/assets/small.js"))
+        .header("cookie", &cookie)
+        .header("accept-encoding", "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        r.headers().get("content-encoding").is_none(),
+        "小资产不应压缩"
+    );
+
+    // 5. 二进制资产（自带压缩格式）不在白名单 → identity
+    let r = http
+        .get(format!("{base}/assets/logo.png"))
+        .header("cookie", &cookie)
+        .header("accept-encoding", "gzip")
+        .send()
+        .await
+        .unwrap();
+    assert!(
+        r.headers().get("content-encoding").is_none(),
+        "图片不应压缩"
+    );
+    assert_eq!(r.bytes().await.unwrap().len(), 8192);
+
+    // 6. 插件 bundle 改写路径：产物同样补回 gzip（带 buster 模拟击穿后的重取），
+    //    且解压后三元式已改写
+    let r = http
+        .get(format!(
+            "{base}/plugins/big/client.js?rev=1&dshv={}",
+            env!("CARGO_PKG_VERSION")
+        ))
+        .header("cookie", &cookie)
+        .header("accept-encoding", "gzip, br")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.headers().get("content-encoding").unwrap(),
+        "gzip",
+        "bundle 改写产物应压缩"
+    );
+    let body = String::from_utf8(gunzip(&r.bytes().await.unwrap())).unwrap();
+    assert!(
+        body.contains(r#"ctx.remote.$host, "host""#),
+        "解压后三元式应已改写：{body}"
+    );
+    assert!(!body.contains("isLoopback"), "解压后不应残留三元式：{body}");
 
     fake.shutdown.notify_one();
     proxy.shutdown().await;
