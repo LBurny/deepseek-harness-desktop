@@ -512,7 +512,7 @@ pub fn run() {
                 first_launch,
             });
             // 远程访问管理器：托盘/命令驱动 start/stop；状态变更广播给前端并记事件日志
-            handle.manage(remote::RemoteManager::new(
+            let remote_mgr = remote::RemoteManager::new(
                 platform.clone(),
                 cloudflared_exe,
                 vec![],
@@ -537,13 +537,29 @@ pub fn run() {
                         // toast 会留在系统通知中心，正文不带链接，只提示去托盘复制
                         match st.phase.as_str() {
                             "up" => {
+                                // resumed=收养复活（链接未变，无需重新复制）；
+                                // 全新开启/重生换域名=链接已变，引导去托盘复制
+                                let (title, body) = if st.resumed {
+                                    (
+                                        i18n::pick("远程访问已自动恢复", "Remote access restored"),
+                                        i18n::pick(
+                                            "链接未变，可直接使用",
+                                            "Link unchanged — keep using it",
+                                        ),
+                                    )
+                                } else {
+                                    (
+                                        i18n::pick("远程访问已开启", "Remote access is on"),
+                                        i18n::pick(
+                                            "链接已就绪，请从托盘菜单复制",
+                                            "Link ready — copy it from the tray menu",
+                                        ),
+                                    )
+                                };
                                 let _ = notify::toast::show(
                                     &remote_handle,
-                                    &i18n::pick("远程访问已开启", "Remote access is on"),
-                                    &i18n::pick(
-                                        "链接已就绪，请从托盘菜单复制",
-                                        "Link ready — copy it from the tray menu",
-                                    ),
+                                    &title,
+                                    &body,
                                     notify::toast::ToastSound::Silent,
                                     None,
                                 );
@@ -562,7 +578,18 @@ pub fn run() {
                         let _ = remote_handle.emit("remote-status", st);
                     }
                 }),
-            ));
+            );
+            // 会话持久化：上次退出时远程开着 → 原地复活（收养存活隧道，链接不变）；
+            // 复活失败内部回退全新开（域名换、token 沿用）。begin_resume 先同步
+            // 占 Starting 并发事件，用户此刻手动点"开启"也只会幂等返回不双开
+            if remote_mgr.has_session() {
+                remote_mgr.begin_resume();
+                let rm = remote_mgr.clone();
+                tauri::async_runtime::spawn(async move {
+                    rm.resume_or_start().await;
+                });
+            }
+            handle.manage(remote_mgr);
             // 启动时检查更新（设置默认开）：异步查 GitHub，有新版弹 toast 指向
             // 其它设置页；失败只记 events.log，不打断启动流程
             if handle

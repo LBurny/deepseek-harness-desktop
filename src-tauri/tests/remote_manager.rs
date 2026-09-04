@@ -96,6 +96,33 @@ fn make_manager(
     work: &Path,
     dsh_port: Option<u16>,
 ) -> (RemoteManager, Arc<Mutex<Vec<RemoteStatus>>>) {
+    make_manager_with_platform(Arc::new(TestPlatform), tunnel_exe, tunnel_prefix, work, dsh_port)
+}
+
+/// 收养/复活路径必须用真平台：TestPlatform 桩的 process_alive 恒 false，
+/// 会把存活的被收养隧道误判死
+fn make_manager_real(
+    tunnel_exe: PathBuf,
+    tunnel_prefix: Vec<String>,
+    work: &Path,
+    dsh_port: Option<u16>,
+) -> (RemoteManager, Arc<Mutex<Vec<RemoteStatus>>>) {
+    make_manager_with_platform(
+        Arc::from(dshdesktop_lib::platform::current()),
+        tunnel_exe,
+        tunnel_prefix,
+        work,
+        dsh_port,
+    )
+}
+
+fn make_manager_with_platform(
+    platform: Arc<dyn Platform>,
+    tunnel_exe: PathBuf,
+    tunnel_prefix: Vec<String>,
+    work: &Path,
+    dsh_port: Option<u16>,
+) -> (RemoteManager, Arc<Mutex<Vec<RemoteStatus>>>) {
     // 0.1.2 起 RemoteManager 拿的是 DshCreds（端口+token）：fixture dsh 无鉴权门，
     // token 随便给（cookie 交换失败只影响注入，不影响转发）
     let creds = dsh_port.map(|port| {
@@ -108,7 +135,7 @@ fn make_manager(
     let statuses: Arc<Mutex<Vec<RemoteStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let st = statuses.clone();
     let mgr = RemoteManager::new(
-        Arc::new(TestPlatform),
+        platform,
         tunnel_exe,
         tunnel_prefix,
         work.to_path_buf(),
@@ -121,6 +148,20 @@ fn make_manager(
         }),
     );
     (mgr, statuses)
+}
+
+/// 等 fixture dsh 就绪（15s 超时）
+async fn wait_dsh_ready(dsh_port: u16) {
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
+            if r.status().is_success() {
+                return;
+            }
+        }
+        assert!(Instant::now() < deadline, "fixture dsh 15s 内未就绪");
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
 }
 
 async fn wait_phase(mgr: &RemoteManager, phase: &str, timeout: Duration) -> RemoteStatus {
@@ -171,16 +212,7 @@ async fn full_chain_up_then_off() {
     let dsh_port = free_port().unwrap();
     let work = tempfile::tempdir().unwrap();
     let mut dsh = spawn_fixture_dsh(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture dsh 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    wait_dsh_ready(dsh_port).await;
 
     let (mgr, _statuses) = make_manager(
         system_node(),
@@ -198,7 +230,6 @@ async fn full_chain_up_then_off() {
         "链接形态不对：{link}"
     );
     let proxy_port = s.proxy_port.expect("Up 时应有代理端口");
-
     // 复现浏览器首次点击：带 token 访问代理 → 302 + cookie → 带 cookie 拿到 dsh 内容
     let token = link.rsplit("?token=").next().unwrap();
     let http = reqwest::Client::builder()
@@ -276,16 +307,7 @@ async fn reset_link_rotates_token_keeps_url() {
     let dsh_port = free_port().unwrap();
     let work = tempfile::tempdir().unwrap();
     let mut dsh = spawn_fixture_dsh(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture dsh 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    wait_dsh_ready(dsh_port).await;
 
     let (mgr, _statuses) = make_manager(
         system_node(),
@@ -334,6 +356,193 @@ async fn reset_link_rotates_token_keeps_url() {
         .unwrap();
     assert_eq!(r.status(), 302, "新 token 应正常种 cookie");
 
+    mgr.stop().await;
+    let _ = dsh.kill();
+}
+
+/// 会话文件生命周期：start→up 落盘（字段与 status 一致）→ reset_link 更新 token
+/// （url/pid 不变）→ stop 删除文件。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn session_file_lifecycle() {
+    use dshdesktop_lib::remote::session::{self, SessionState};
+    let dsh_port = free_port().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut dsh = spawn_fixture_dsh(dsh_port, work.path());
+    wait_dsh_ready(dsh_port).await;
+
+    let (mgr, _statuses) = make_manager(
+        system_node(),
+        vec![fixture("fake-cloudflared.cjs")
+            .to_string_lossy()
+            .into_owned()],
+        work.path(),
+        Some(dsh_port),
+    );
+    let session_path = work.path().join("remote-session.json");
+    assert!(!mgr.has_session(), "未开启前不应有会话文件");
+
+    mgr.start().await;
+    let s = wait_phase(&mgr, "up", Duration::from_secs(30)).await;
+    let st: SessionState = session::load(&session_path).expect("Up 后状态文件应落盘");
+    let link = s.link.as_deref().unwrap();
+    let token = link.rsplit("?token=").next().unwrap();
+    assert_eq!(st.token, token, "落盘 token 与链接一致");
+    assert_eq!(st.tunnel_url, s.url.unwrap());
+    assert_eq!(st.proxy_port, s.proxy_port.unwrap());
+    assert_ne!(st.tunnel_pid, 0, "落盘应有隧道 PID");
+    assert!(st.cloudflared_exe.is_file(), "落盘的常驻副本应存在");
+    assert!(mgr.has_session());
+
+    // 重置链接：状态文件 token 跟随轮换，url/pid 不变
+    let s2 = mgr.reset_link().expect("Up 态重置应成功");
+    let new_token = s2.link.unwrap().rsplit("?token=").next().unwrap().to_string();
+    let st2 = session::load(&session_path).unwrap();
+    assert_eq!(st2.token, new_token, "重置后落盘 token 应更新");
+    assert_eq!(st2.tunnel_url, st.tunnel_url, "重置不动域名");
+    assert_eq!(st2.tunnel_pid, st.tunnel_pid, "重置不动隧道进程");
+
+    mgr.stop().await;
+    assert!(!session_path.exists(), "stop 后状态文件应删除");
+    let _ = dsh.kill();
+}
+
+/// 应用重启复活：手工 spawn 假隧道（模拟上个应用进程遗留的存活常驻隧道）+
+/// 手写状态文件 → resume_or_start 收养 → phase=up、resumed=true、链接与落盘
+/// 状态逐字节一致、门岗真实可用。stop 收尾会杀收养隧道并删文件。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_adopts_surviving_tunnel() {
+    use dshdesktop_lib::remote::session::{self, SessionState};
+    let dsh_port = free_port().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut dsh = spawn_fixture_dsh(dsh_port, work.path());
+    wait_dsh_ready(dsh_port).await;
+
+    let mut tunnel = std::process::Command::new(system_node())
+        .arg(fixture("fake-cloudflared.cjs"))
+        .current_dir(work.path())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let tunnel_pid = tunnel.id();
+    // exe 必须填 node.exe 真实路径：resume 镜像校验比对的是进程镜像
+    let token = "deadbeef".repeat(8);
+    session::save(
+        &work.path().join("remote-session.json"),
+        &SessionState {
+            token: token.clone(),
+            proxy_port: free_port().unwrap(),
+            tunnel_pid,
+            tunnel_url: "https://abc-def-123.trycloudflare.com".into(),
+            cloudflared_exe: system_node(),
+        },
+    )
+    .unwrap();
+
+    let (mgr, _statuses) = make_manager_real(
+        system_node(),
+        vec![fixture("fake-cloudflared.cjs")
+            .to_string_lossy()
+            .into_owned()],
+        work.path(),
+        Some(dsh_port),
+    );
+    assert!(mgr.has_session());
+    mgr.begin_resume();
+    let s = mgr.resume_or_start().await;
+    assert_eq!(s.phase, "up", "复活应直接 up：{:?}", s.error);
+    assert!(s.resumed, "复活 resumed=true");
+    let link = s.link.unwrap();
+    assert_eq!(
+        link,
+        format!("https://abc-def-123.trycloudflare.com/?token={token}"),
+        "链接应与落盘状态逐字节一致"
+    );
+    // 门岗真实可用：带 token 访问代理 → 302 播种
+    let http = reqwest::Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .no_proxy()
+        .build()
+        .unwrap();
+    let r = http
+        .get(format!(
+            "http://127.0.0.1:{}/?token={token}",
+            s.proxy_port.unwrap()
+        ))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 302);
+
+    mgr.stop().await;
+    assert!(!work.path().join("remote-session.json").exists());
+    let _ = tunnel.kill();
+    let _ = dsh.kill();
+}
+
+/// resume 回退：状态文件指向已死 PID → 全新开隧道（域名经 URL 覆写换新）、
+/// token 沿用（只有手动重置才换）、resumed=false；新 Up 后状态文件重写。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn resume_falls_back_when_tunnel_dead() {
+    use dshdesktop_lib::remote::session::{self, SessionState};
+    let dsh_port = free_port().unwrap();
+    let work = tempfile::tempdir().unwrap();
+    let mut dsh = spawn_fixture_dsh(dsh_port, work.path());
+    wait_dsh_ready(dsh_port).await;
+
+    // 已死 PID（真实存在过但已退出）
+    let mut tmp = std::process::Command::new(system_node())
+        .arg("-e")
+        .arg("0")
+        .spawn()
+        .unwrap();
+    let dead_pid = tmp.id();
+    tmp.wait().unwrap();
+    let token = "cafe01".repeat(8);
+    session::save(
+        &work.path().join("remote-session.json"),
+        &SessionState {
+            token: token.clone(),
+            proxy_port: free_port().unwrap(),
+            tunnel_pid: dead_pid,
+            tunnel_url: "https://dead-link-000.trycloudflare.com".into(),
+            cloudflared_exe: system_node(),
+        },
+    )
+    .unwrap();
+    // 重生换域名模拟（真实 quick tunnel 每次 spawn 域名都变）
+    std::fs::write(
+        work.path().join("fake-cloudflared.url"),
+        "https://fresh-999.trycloudflare.com",
+    )
+    .unwrap();
+
+    let (mgr, _statuses) = make_manager_real(
+        system_node(),
+        vec![fixture("fake-cloudflared.cjs")
+            .to_string_lossy()
+            .into_owned()],
+        work.path(),
+        Some(dsh_port),
+    );
+    mgr.begin_resume();
+    let s0 = mgr.resume_or_start().await;
+    assert_eq!(s0.phase, "starting", "回退全新开是异步的，先 starting");
+    let s = wait_phase(&mgr, "up", Duration::from_secs(30)).await;
+    let link = s.link.unwrap();
+    assert!(
+        link.starts_with("https://fresh-999.trycloudflare.com/"),
+        "域名应换新：{link}"
+    );
+    assert!(
+        link.ends_with(&format!("?token={token}")),
+        "token 应沿用：{link}"
+    );
+    assert!(!s.resumed, "回退全新开 resumed=false");
+    // 新 Up 已重写状态文件（新域名新 PID）
+    let st = session::load(&work.path().join("remote-session.json")).unwrap();
+    assert_eq!(st.tunnel_url, "https://fresh-999.trycloudflare.com");
+    assert_eq!(st.token, token);
     mgr.stop().await;
     let _ = dsh.kill();
 }

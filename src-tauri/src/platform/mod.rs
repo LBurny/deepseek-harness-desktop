@@ -29,6 +29,17 @@ pub trait Platform: Send + Sync {
     fn system_dark_mode(&self) -> bool;
     /// 系统 UI 语言是否中文（dsh locale.preference 缺省时用来解析，对齐 dsh 的"跟随浏览器"）
     fn system_prefers_chinese(&self) -> bool;
+    /// 进程是否存活（按 PID；用于收养跨重启存活的常驻隧道进程——远程会话持久化
+    /// 的 resume 校验与看门狗都靠它）。默认 false（桩平台）；Windows 用
+    /// OpenProcess + GetExitCodeProcess（STILL_ACTIVE）。
+    fn process_alive(&self, _pid: u32) -> bool {
+        false
+    }
+    /// 进程镜像路径（防 PID 复用误判：收养前比对目标是不是记录中的 cloudflared
+    /// 副本）。默认 None（桩平台）；Windows 用 QueryFullProcessImageNameW。
+    fn process_image_path(&self, _pid: u32) -> Option<PathBuf> {
+        None
+    }
     /// 播放一个 wav 文件（柔和通知提示音，全部通知类型共用）：文件缺失立即返回
     /// Err（调用侧降级 toast 系统默认音）；真实播放结果（含失败原因/重试）经
     /// diag 上报。非阻塞：派发后立即返回，不卡调用线程。
@@ -105,5 +116,31 @@ mod tests {
         let t0 = std::time::Instant::now();
         p.bring_to_front(0);
         assert!(t0.elapsed().as_millis() < 100);
+    }
+
+    /// 收养驻留进程的两项探测：存活判定 + 镜像路径（防 PID 复用误判）。
+    /// 远程会话持久化 resume 的根基，红在这层先别查隧道。
+    #[test]
+    fn process_alive_and_image_path() {
+        let p = current();
+        let mut child = std::process::Command::new("node")
+            .args(["-e", "setTimeout(()=>{},30000)"])
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(p.process_alive(pid), "驻留进程应探活");
+        let img = p.process_image_path(pid).expect("应取到镜像路径");
+        assert!(
+            img.to_string_lossy().to_lowercase().ends_with("node.exe"),
+            "镜像路径应为 node.exe，实际 {img:?}"
+        );
+        child.kill().unwrap();
+        child.wait().unwrap();
+        // 进程对象销毁到 PID 不可用有一瞬，轮询最多 3s
+        let t0 = std::time::Instant::now();
+        while p.process_alive(pid) && t0.elapsed() < std::time::Duration::from_secs(3) {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        assert!(!p.process_alive(pid), "杀死后应探死");
     }
 }

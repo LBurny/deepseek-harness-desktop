@@ -1,7 +1,7 @@
 {
   "name": "dshdesktop",
   "private": true,
-  "version": "0.5.7",
+  "version": "0.5.8",
   "type": "module",
   "repository": {
     "type": "git",

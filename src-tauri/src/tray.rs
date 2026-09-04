@@ -447,9 +447,16 @@ pub(crate) fn quit_app(app: &AppHandle) {
     let remote = app.try_state::<RemoteManager>().map(|s| s.inner().clone());
     let handle = app.clone();
     tauri::async_runtime::spawn(async move {
-        // 先关远程访问（杀 cloudflared 进程树 + 停鉴权代理），链接即刻失效
+        // 远程访问会话持久化：Up/Starting 时退出只让代理随进程消亡，常驻隧道
+        // 留活保域名（suspend_for_exit），下次启动 resume 原地复活、链接不变；
+        // Off/Error 走 stop 兜底清理（隧道未起或已死，stop 幂等且删状态文件）
         if let Some(rm) = remote {
-            rm.stop().await;
+            match rm.status().phase.as_str() {
+                "up" | "starting" => rm.suspend_for_exit(),
+                _ => {
+                    rm.stop().await;
+                }
+            }
         }
         proc.stop().await;
         // 给监督循环留出杀进程树的时间，超时兜底强制退出

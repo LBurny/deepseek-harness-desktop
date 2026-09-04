@@ -72,6 +72,7 @@ fn spawn_fake(work: &Path) -> (TunnelProcess, Events) {
         vec![fixture.to_string_lossy().into_owned()],
         "http://127.0.0.1:12345".into(),
         work.to_path_buf(),
+        false,
         move |e| ev.lock().unwrap().push(e),
     );
     (proc, events)
@@ -152,6 +153,123 @@ async fn tunnel_restarts_after_crash() {
     proc.stop().await;
     wait_state(
         &proc,
+        |s| matches!(s, TunnelState::Stopped),
+        Duration::from_secs(15),
+    );
+}
+
+fn fixture_cloudflared() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("fake-cloudflared.cjs")
+}
+
+/// 收养存活隧道：上个应用会话遗留的进程原地复活为 Up，死亡后看门狗退避重生
+/// （重生经 URL 覆写文件模拟真实 quick tunnel 的换域名）。收养/重生都用真平台
+/// （TestPlatform 桩的 process_alive 恒 false，会把活进程误判死）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adopt_live_tunnel_then_respawn_on_death() {
+    let work = tempfile::tempdir().unwrap();
+    let mut orphan = std::process::Command::new(system_node())
+        .arg(fixture_cloudflared())
+        .current_dir(work.path())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = orphan.id();
+
+    let events: Events = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    let tp = TunnelProcess::adopt(
+        Arc::from(dshdesktop_lib::platform::current()),
+        pid,
+        "https://abc-def-123.trycloudflare.com".into(),
+        system_node(),
+        vec![fixture_cloudflared().to_string_lossy().into_owned()],
+        "http://127.0.0.1:12345".into(),
+        work.path().to_path_buf(),
+        true,
+        move |e| ev.lock().unwrap().push(e),
+    );
+    assert!(
+        matches!(tp.state(), TunnelState::Up { ref url } if url == "https://abc-def-123.trycloudflare.com"),
+        "收养即 Up 且 URL 为收养值，实际 {:?}",
+        tp.state()
+    );
+    assert_eq!(tp.current_pid(), pid, "收养后 PID 即被收养进程");
+
+    // 隧道死亡 → 看门狗（≤3s 轮询）探死 → 退避重生出新域名
+    std::fs::write(
+        work.path().join("fake-cloudflared.url"),
+        "https://respawned-444.trycloudflare.com",
+    )
+    .unwrap();
+    orphan.kill().unwrap();
+    orphan.wait().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    loop {
+        if let TunnelState::Up { ref url } = tp.state() {
+            if url.contains("respawned-444") {
+                break;
+            }
+        }
+        assert!(
+            Instant::now() < deadline,
+            "30s 内未重生，状态 {:?}",
+            tp.state()
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    assert_ne!(tp.current_pid(), pid, "重生后应是新 PID");
+    tp.stop().await;
+    wait_state(
+        &tp,
+        |s| matches!(s, TunnelState::Stopped),
+        Duration::from_secs(15),
+    );
+}
+
+/// 收养已死 PID：不得停在假 Up，应立即衔接重生。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn adopt_dead_pid_respawns() {
+    let work = tempfile::tempdir().unwrap();
+    let mut tmp = std::process::Command::new(system_node())
+        .arg("-e")
+        .arg("0")
+        .spawn()
+        .unwrap();
+    let dead_pid = tmp.id();
+    tmp.wait().unwrap();
+    std::fs::write(
+        work.path().join("fake-cloudflared.url"),
+        "https://revived-777.trycloudflare.com",
+    )
+    .unwrap();
+
+    let events: Events = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    let tp = TunnelProcess::adopt(
+        Arc::from(dshdesktop_lib::platform::current()),
+        dead_pid,
+        "https://abc-def-123.trycloudflare.com".into(),
+        system_node(),
+        vec![fixture_cloudflared().to_string_lossy().into_owned()],
+        "http://127.0.0.1:12345".into(),
+        work.path().to_path_buf(),
+        true,
+        move |e| ev.lock().unwrap().push(e),
+    );
+    wait_state(
+        &tp,
+        |s| matches!(s, TunnelState::Up { url } if url.contains("revived-777")),
+        Duration::from_secs(30),
+    );
+    assert_ne!(tp.current_pid(), dead_pid, "重生后应是新 PID");
+    tp.stop().await;
+    wait_state(
+        &tp,
         |s| matches!(s, TunnelState::Stopped),
         Duration::from_secs(15),
     );

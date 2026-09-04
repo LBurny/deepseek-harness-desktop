@@ -122,6 +122,50 @@ impl Platform for WindowsPlatform {
         unsafe { job::assign_pid_to_job(job::global_job(), pid) };
     }
 
+    fn process_alive(&self, pid: u32) -> bool {
+        use windows_sys::Win32::System::Threading::{
+            GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        const STILL_ACTIVE: u32 = 259;
+        unsafe {
+            // 别开 SYNCHRONIZE 走 WaitForSingleObject：死去的子进程对象会被父进程
+            // 持有的句柄拖着不销毁，WFSO 在无 SYNCHRONIZE 的句柄上恒 WAIT_FAILED，
+            // 表现为"永远活着"（单元测试实踩）。GetExitCodeProcess 只需
+            // QUERY_LIMITED_INFORMATION，对象还在就回真实退出码。
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return false;
+            }
+            let mut code: u32 = 0;
+            let ok = GetExitCodeProcess(h, &mut code);
+            CloseHandle(h);
+            ok != 0 && code == STILL_ACTIVE
+        }
+    }
+
+    fn process_image_path(&self, pid: u32) -> Option<PathBuf> {
+        use windows_sys::Win32::System::Threading::{
+            OpenProcess, QueryFullProcessImageNameW, PROCESS_NAME_WIN32,
+            PROCESS_QUERY_LIMITED_INFORMATION,
+        };
+        unsafe {
+            let h = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if h.is_null() {
+                return None;
+            }
+            let mut buf = [0u16; 1024];
+            let mut len = buf.len() as u32;
+            let ok = QueryFullProcessImageNameW(h, PROCESS_NAME_WIN32, buf.as_mut_ptr(), &mut len);
+            CloseHandle(h);
+            if ok == 0 {
+                return None;
+            }
+            Some(PathBuf::from(String::from_utf16_lossy(
+                &buf[..len as usize],
+            )))
+        }
+    }
+
     fn system_dark_mode(&self) -> bool {
         winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER)
             .open_subkey("Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize")

@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.8] - 2026-09-05
+
+### Added
+
+- **远程访问会话跨应用重启保持，链接不再因退出/更新而失效**（用户反馈："关闭后又要重新取一次链接，很麻烦。除非主动重置，不然链接不该失效"）：开启远程后 cloudflared 改从数据目录常驻副本（`%LOCALAPPDATA%\DSHDesktop\tunnel\`）运行且**刻意不挂 KILL_ON_JOB_CLOSE Job Object**（防孤儿原则唯一例外——应用退出时内核不连带回收，隧道留活保域名）；会话状态（token/域名/代理端口/隧道 PID/副本路径）落盘 `remote-session.json`。托盘退出/覆盖更新只死代理、隧道留活；下次启动见状态文件即自动复活：核进程映像路径防 PID 复用冒认 → 收养存活隧道 + 同端口重起代理——**链接字节级不变，手机端收藏直接用**，复活 toast 单独文案（"远程访问已自动恢复，链接未变"）。复活校验不过（隧道已死/副本缺失/持久化端口被占）回退全新开隧道：域名换、token 沿用，状态文件重写。注意 token 随状态文件落盘（纯本地、不同步、不落日志），单设备泄露窗口相应从"本次开启期间"放宽到"直到手动重置/关闭"——这是"链接不轻易失效"语义的自然代价，吊销手段不变（重置链接一键掐断现有会话）
+- **链接从此只有三个失效时刻**：①手动"关闭远程访问"再开（全新会话，token+域名都换）；②手动"重置链接"（token 轮换，域名不变）；③Windows 重启/断电或 Cloudflare 掐断长连接致隧道进程死亡（域名必换、token 沿用——quick tunnel 无账号模式下域名随机是结构性限制，要永久固定链接只能上命名隧道+自有域名）。应用退出、崩溃重启、覆盖更新都不再换链接
+
+### Changed
+
+- **托盘退出不再杀远程隧道**：远程开启期间退出应用走 suspend（代理随进程消亡、隧道留活保域名），此前退出即整体作废链接；手动"关闭远程访问"语义不变（杀隧道 + 删状态文件 = 会话作废）
+- **卸载清场补齐远程残留**：NSIS postuninstall 在 `$UpdateMode <> 1`（非覆盖更新）时杀数据目录常驻隧道副本进程并删除 `tunnel\` 目录与 `remote-session.json`；覆盖安装不动（否则更新后链接失效，违背持久化语义）
+
 ## [0.5.7] - 2026-09-05
 
 ### Changed

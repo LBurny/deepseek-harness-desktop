@@ -55,4 +55,16 @@
   ; 清完，这里强删整个 runtime 树兜底；之后模板自带的空目录 RMDir 才能收掉
   ; $INSTDIR。/UPDATE 模式同样安全：新版安装器随后会重新解出完整 runtime。
   RMDir /r /REBOOTOK "$INSTDIR\runtime"
+
+  ; 0.5.8 起远程会话持久化：常驻隧道副本与状态文件在 $INSTDIR 之外
+  ; （%LOCALAPPDATA%\DSHDesktop\），上面的 $INSTDIR 清扫碰不到。
+  ; /UPDATE 模式（覆盖安装时新版安装器原地调用旧卸载器）必须留活——
+  ; 杀了则更新后链接失效，违背持久化语义；真卸载才连锅端。
+  ${If} $UpdateMode <> 1
+    nsExec::ExecToStack "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$LOCALAPPDATA\DSHDesktop\tunnel\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }$\""
+    Pop $0
+    Pop $1
+    RMDir /r /REBOOTOK "$LOCALAPPDATA\DSHDesktop\tunnel"
+    Delete /REBOOTOK "$LOCALAPPDATA\DSHDesktop\remote-session.json"
+  ${EndIf}
 !macroend

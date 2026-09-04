@@ -117,8 +117,14 @@ src-tauri/src/
                     比较、下载 *_x64-setup.exe（.part→rename，节流 emit 进度）；
                     install_update 起 NSIS 后 quit_app 自行退出（本进程先死，旧钩子
                     taskkill /T 杀树成空操作——否则安装器被连杀装不上）
-  remote/           mod.rs=RemoteManager（生命周期/token/6 命令；reset_link 原地轮换
-                    token，域名不变）；proxy.rs=axum token 门岗反向代理（覆盖全 Router
+  remote/           mod.rs=RemoteManager（会话持久化生命周期/token/6 命令：start=
+                    全新会话新 token；resume_or_start=启动复活——收养存活隧道+同端口
+                    重起代理，链接字节级不变，校验不过回退全新开（域名换、token 沿用，
+                    只有手动关闭重开/重置才换 token）；suspend_for_exit=应用退出只
+                    死代理、隧道留活；reset_link 原地轮换 token 同步状态文件，域名
+                    不变）；session.rs=remote-session.json 状态落盘（token/域名/端口/
+                    PID/副本路径；含 token 敏感凭据，绝不落 events.log）+ 常驻副本
+                    ensure_tunnel_copy（尺寸不符才刷新）；proxy.rs=axum token 门岗反向代理（覆盖全 Router
                     的中间件；HTTP 流式转发+WS 帧桥接；转发剥 origin/referer/sec-fetch-*
                     否则 dsh 403；.no_proxy() 防系统代理劫持回环；门岗 cookie 30 天
                     长效（Max-Age=2592000——会话 cookie 会被手机浏览器进程回收丢弃，
@@ -132,14 +138,20 @@ src-tauri/src/
                     /plugins/*/client.js 缓冲改写修远程内测声明重复弹）；project.rs=
                     手机端"项目"标签后端（自包含 project.html + resolve/list/file 四条
                     只读路由，canonicalize 前缀禁锢防逃逸/junction）；tunnel.rs=
-                    cloudflared quick tunnel 监督（退避重启后域名变 token 不变）
+                    cloudflared quick tunnel 监督（退避重启后域名变 token 不变；
+                    persistent 常驻模式：从数据目录副本 tunnel/cloudflared.exe 运行、
+                    **刻意不挂 Job Object**——防孤儿原则唯一例外，死了内核不连带回收；
+                    adopt() 按 PID 收养上个会话遗留隧道+3s 轮询看门狗，死后衔接
+                    监督循环退避重生换新域名）
 src/                splash/diagnostics/settings/plugins/skills/mcp/remote 七个本地页面
                     + App.svelte(hash 路由) + i18n.ts
 src-tauri/windows/  nsis-hooks.nsh：安装/卸载钩子；preinstall/preuninstall 先
                     taskkill /F /IM 杀主程序（绝不带 /T），再按路径清扫 $INSTDIR
                     残留进程（必须排除调用方自身父 PID——否则覆盖安装误杀原地运行的
                     旧卸载器，弹 "Unable to uninstall!"）；杀后轮询等退净；
-                    postuninstall RMDir /r runtime 兜底清单外残留
+                    postuninstall RMDir /r runtime 兜底清单外残留 + **$UpdateMode<>1
+                    才清扫常驻隧道副本与 remote-session.json**（/UPDATE=覆盖安装，
+                    杀了则更新后链接失效，违背会话持久化语义）
 scripts/            follow-upstream.ps1(一键跟版)、fetch-runtime.ps1(下载
                     Node+dsh+cloudflared+精简)、prune-runtime.ps1、
                     acceptance.ps1(端到端验收)、release-local.ps1(本地发版直接
@@ -167,7 +179,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
-  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.6，下一版 0.5.7。
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.8，下一版 0.5.9。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起公开仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
   bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→
   CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 →
@@ -229,7 +241,9 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **fixture 用 .cjs**（根 package.json 是 type:module）；`#[tokio::test]` 涉及 std::thread::sleep 时须 `flavor="multi_thread"`。use-fixture-runtime.ps1 会在 @deepseek-ai/dsh 下铺 CJS 桩 package.json——fetch-runtime 抓过的树带真实 `"type":"module"`，不铺桩 mock bin.js 会按 ESM 加载崩溃
 - **dev 模式 tauri 不拷贝 bundle.resources**：内置音效在 dev 下要手动复制到 `src-tauri/target/debug/sounds/`，否则静默降级系统默认；另外真实运行时放 src-tauri/runtime 下跑 dev 会被 dsh 自更新触发 watcher 重建循环——复制到 src-tauri 外用 DSHDESKTOP_RUNTIME_DIR 指向
 - **NSIS 离线**：github 直连不稳时用 ghproxy.net 预置 `%LOCALAPPDATA%\tauri\NSIS`（含 nsis_tauri_utils.dll，SHA1 须匹配 bundler 常量）
-- **托盘 quit 顺序**：先 stop dsh 等 1.5s 再 exit；杀子进程树用 `taskkill /T /F`
+- **托盘 quit 顺序**：远程开着时**不杀隧道**（suspend_for_exit：代理随进程消亡，
+  常驻隧道留活保域名，下次启动 resume 复活链接不变；0.5.8 起），只 stop dsh
+  等 1.5s 再 exit；杀子进程树用 `taskkill /T /F`
 - **安装器只杀主程序**：Tauri NSIS 模板的 CheckIfAppIsRunning 仅 TerminateProcess 主 exe，
   关窗默认隐藏到托盘也挡不住强杀——子进程全靠 Job Object 随父死亡被内核回收，
   外加 nsis-hooks.nsh 安装/卸载前杀树+按路径清扫旧版孤儿；缺了这两层，运行中重装必现
