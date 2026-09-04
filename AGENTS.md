@@ -165,12 +165,13 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
   不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.6，下一版 0.5.7。
-- **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起发布目标切到公开发布仓）**：bump 三处版本号（`package.json` /
-  `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→ CHANGELOG 把 Unreleased 收编进新版节
-  → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 → commit → `git tag v0.y.z`
-  推送（tag 不再触发发布，源码仓只留 tag 不建 Release）→ `powershell -File scripts/release-local.ps1`
-  用本地安装包在**公开发布仓** `LBurny/deepseek-harness-desktop-releases` 建/更新 Release
-  （需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑）。
+- **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起公开仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
+  bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→
+  CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 →
+  commit → `git tag v0.y.z` 推送（tag 不再触发发布）→ `powershell -File scripts/release-local.ps1`
+  用本地安装包在**公开仓**（`deepseek-harness-desktop-releases`，对外分发）与**私有仓**
+  （`deepseek-harness-desktop`，exe 存档）各建/更新 Release
+  （需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑；公开仓资产红线见 §GitHub 访问）。
   github 直连被拦时 push 走 §GitHub 访问的代理（openssl 被掐就加 `-c http.sslBackend=schannel`）。
 - **弃用 CI 发布的原因（0.4.9 实踩）**：私有仓库 tag 触发的 release run 跑满 30~70 分钟
   （Actions 缓存按 ref 隔离，tag run 读不到自己存的缓存、只能等 main 预热），而本地构建
@@ -180,11 +181,19 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 ## GitHub 访问
 
-- 仓库 **已转私有**：`LBurny/deepseek-harness-desktop`（origin 指向它，只存源码与 tag，不建 Release）
+- 仓库 **已转私有**：`LBurny/deepseek-harness-desktop`（origin 指向它）——存**源码 + tag + Release**
+  （exe+sha256 双份存档）：v0.1.0~v0.5.2 是旧 CI 时代资产，0.5.3~0.5.6 缺口已于 2026-09-04
+  用本地原件补齐（回拉哈希逐一核对过），此后 release-local.ps1 每版双仓上传
 - **公开发布仓（0.5.3 起）**：`LBurny/deepseek-harness-desktop-releases`（public，匿名可读）——
-  只发 exe+sha256 与双语 README，源码闭源。应用的检查更新/手动更新/"GitHub 下载"全部指向它
-  （update.rs 常量，有锚定测试防指回私有仓）；release-local.ps1 的 $repo 也指向它。
+  **只发 exe+sha256**，仓库内仅 README/LICENSE/界面截图作门面。应用的检查更新/手动更新/
+  "GitHub 下载"全部指向它（update.rs 常量，有锚定测试防指回私有仓）。
   本地镜像在 `H:\My_Software\deepseek-harness-desktop-releases`（repo-local 身份同主仓 DSHDesktop）
+- **红线（重大事故级，2026-09-04）**：公开仓**严禁上传源码或任何非 `*_x64-setup.exe(+.sha256)` 资产**
+  （release-local.ps1 有守卫，违规直接拒发）。公开仓 Release 页的 "Source code (zip)/(tar.gz)"
+  是 GitHub 按 tag 自动生成的**仓内文件归档**（内容只有 README/LICENSE/截图，无应用源码）——
+  删不掉也别去删 tag：删 tag 会把已发布 Release 转成草稿（2026-09-04 API 实测：删 ref →
+  draft:true，匿名 `releases/latest` 即断、应用内检查更新死；草稿 PATCH draft:false 重发布会
+  把 tag 复活回来。试验用临时 Release 已清理）
 - 本机**没装 gh CLI**；访问 GitHub API 用环境变量 **`GH_TOKEN`**（属主 LBurny，已验证对私有仓库返回 200）：
   `curl -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/LBurny/deepseek-harness-desktop`
 - git fetch/push 走凭据管理器 `manager-core`，不受私有化影响
