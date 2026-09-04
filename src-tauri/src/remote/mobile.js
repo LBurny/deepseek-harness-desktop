@@ -259,12 +259,15 @@
         const card = targetCard
         targetCard = null
         if (files.length === 0 || !card || !card.isConnected) return
-        const textarea = card.querySelector('textarea')
-        if (!textarea) return
+        // 0.1.2 起输入框从 textarea 换成 contenteditable——两形态都要认
+        const editor = card.querySelector(
+          'textarea, [contenteditable="true"], [role="textbox"]',
+        )
+        if (!editor) return
         try {
           const dt = new DataTransfer()
           for (const f of files) dt.items.add(f)
-          textarea.dispatchEvent(
+          editor.dispatchEvent(
             new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }),
           )
         } catch {
@@ -278,7 +281,10 @@
     const setup = (tools) => {
       const addBtn = tools.querySelector('button[class*="_add"]')
       const card = tools.closest('[class*="_card"]')
-      if (!addBtn || !card || !card.querySelector('textarea')) return
+      if (!addBtn || !card) return
+      // 输入体存在性：textarea（≤0.1.1）或 contenteditable（0.1.2 起）
+      if (!card.querySelector('textarea, [contenteditable="true"], [role="textbox"]'))
+        return
       // "+" 可能包在 Tooltip 的 wrapper 里：锚定它在 tools 行的直接子代
       let anchor = addBtn
       while (anchor.parentElement && anchor.parentElement !== tools) anchor = anchor.parentElement

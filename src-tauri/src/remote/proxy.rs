@@ -5,10 +5,13 @@
 //!      （token 只出现在首次点击的链接里，不留在地址栏/历史，后续 WS 也凭同源 cookie）
 //!   3. ?token= 存在但不匹配 → 固定延迟 500ms 后 403（防在线爆破）
 //!   4. 无任何凭据 → 403 门页
-//! dsh 端口经 watch 通道动态读取：dsh 重启换端口时代理不需要重启。
-//! WS 升级请求（/api/events.*）不走 HTTP 转发：握手在代理终结（cookie 门岗对握手生效），
-//! 与 dsh 另建 WS 后逐帧双向搬运（bridge_upgrade/bridge）。
+//! dsh 凭据经 creds watch 通道动态读取（0.1.2 BrowserAuth：cookie 由 launch token
+//! 现换，缓存代持 + 401 失效重换重放一次）：dsh 重启换端口时代理不需要重启。
+//! WS 升级请求（/api/remote.mux）不走 HTTP 转发：握手在代理终结（cookie 门岗对
+//! 握手生效），与 dsh 另建 WS 后逐帧双向搬运（bridge_upgrade/bridge，dsh 侧
+//! 升级同样须带 dsh-auth cookie——漏注入手机端表现为"页面开但全断"）。
 
+use crate::dsh_session::{self, DshCreds};
 use super::token_eq;
 use axum::body::Body;
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -21,14 +24,19 @@ use axum::Router;
 use futures::{SinkExt, StreamExt};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 use tokio::sync::{watch, Notify};
+use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::Message as DshMessage;
 
 pub const COOKIE_NAME: &str = "__dsh_remote";
 /// 错误 token 的固定响应延迟，拖慢在线猜测
 const WRONG_TOKEN_DELAY: Duration = Duration::from_millis(500);
+/// 请求体缓冲上限：重放（401 换 cookie 后重发一次）需要整读请求体；超过该
+/// 体积的上传类请求不重放（cookie 失效表现为一次 401，刷新页面即恢复）
+const REPLAY_BODY_LIMIT: usize = 64 * 1024 * 1024;
 
 const GATE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>DSHDesktop</title></head>\
 <body style=\"font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0\">\
@@ -76,7 +84,10 @@ pub(crate) struct ProxyState {
     pub(crate) token: TokenCell,
     /// 重置链接时 notify_waiters 掐断所有已建立的 WS 桥接
     pub(crate) drain: Arc<Notify>,
-    pub(crate) dsh_port: watch::Receiver<Option<u16>>,
+    /// dsh 凭据（端口 + launch token；0.1.2 起 cookie 由 token 现换）
+    pub(crate) creds: watch::Receiver<Option<Arc<DshCreds>>>,
+    /// 代持的 dsh-auth cookie（端口绑定；401 失效即清缓存重换）
+    pub(crate) dsh_cookie: Arc<Mutex<Option<String>>>,
     pub(crate) client: reqwest::Client,
     /// dsh-home（project.rs 解析 storages/workspace.json 用），与 skills/mcp 同源
     pub(crate) dsh_home: PathBuf,
@@ -110,7 +121,7 @@ impl ProxyHandle {
 
 pub async fn spawn_proxy(
     token: Arc<str>,
-    dsh_port: watch::Receiver<Option<u16>>,
+    creds: watch::Receiver<Option<Arc<DshCreds>>>,
     dsh_home: PathBuf,
     bind: SocketAddr,
 ) -> std::io::Result<ProxyHandle> {
@@ -125,7 +136,8 @@ pub async fn spawn_proxy(
     let state = ProxyState {
         token: token_cell.clone(),
         drain: drain.clone(),
-        dsh_port,
+        creds,
+        dsh_cookie: Arc::new(Mutex::new(None)),
         client: reqwest::Client::builder()
             // 3xx 原样透传给浏览器，不由代理代为跟随
             .redirect(reqwest::redirect::Policy::none())
@@ -224,15 +236,122 @@ async fn handler(State(st): State<ProxyState>, req: Request) -> Response {
     forward(st, req, &path_and_query).await
 }
 
+/// 代持 cookie 的获取：有缓存用缓存；无则从 creds 取 token 现换（0.1.2
+/// BrowserAuth）。creds 未就绪或换取失败 → None（转发不带 cookie，dsh 会回
+/// 401，由调用方决定透传或重放）。cookie 只在内存，不落日志。
+async fn ensure_cookie(st: &ProxyState, force_refresh: bool) -> Option<String> {
+    if !force_refresh {
+        let cached = st.dsh_cookie.lock().unwrap().clone();
+        if let Some(c) = cached {
+            return Some(c);
+        }
+    }
+    let Some(c) = st.creds.borrow().clone() else {
+        return None;
+    };
+    match dsh_session::exchange_cookie(c.port, &c.token).await {
+        Ok(k) => {
+            *st.dsh_cookie.lock().unwrap() = Some(k.clone());
+            Some(k)
+        }
+        Err(_) => {
+            // token 未就绪/已轮换：不缓存失败态，下次请求重试
+            *st.dsh_cookie.lock().unwrap() = None;
+            None
+        }
+    }
+}
+
 async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response {
-    let Some(port) = *st.dsh_port.borrow() else {
+    let Some(c) = st.creds.borrow().clone() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "dsh 未就绪").into_response();
     };
-    let url = format!("http://127.0.0.1:{port}{path_and_query}");
+    let url = format!("http://127.0.0.1:{}{}", c.port, path_and_query);
     let rewrite_bundle = is_plugin_client_bundle(path_and_query);
     let wants_html = wants_html_document(req.headers());
-    let mut out = st.client.request(req.method().clone(), &url);
-    for (name, value) in req.headers() {
+    let method = req.method().clone();
+    // 重放（401 换 cookie 后重发一次）需要整读请求体与请求头副本（into_body 消费 req）
+    let req_headers = req.headers().clone();
+    let body_bytes = match axum::body::to_bytes(req.into_body(), REPLAY_BODY_LIMIT).await {
+        Ok(b) => b,
+        Err(_) => return (StatusCode::BAD_GATEWAY, "读取请求体失败").into_response(),
+    };
+    let cookie = ensure_cookie(&st, false).await;
+    let res = send_forwarded(&st, &req_headers, &method, &url, cookie.as_deref(), &body_bytes).await;
+    let mut res = match res {
+        Some(r) => r,
+        None => return (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
+    };
+    // 401：代持 cookie 失效（token 轮换/dsh 重启换端口）→ 清缓存重换一次并
+    // 重放（只重放一次防环）；换不到新 cookie 则把 401 原样透传给浏览器
+    if res.status() == StatusCode::UNAUTHORIZED {
+        st.dsh_cookie.lock().unwrap().take();
+        if let Some(fresh) = ensure_cookie(&st, true).await {
+            if Some(&fresh) != cookie.as_ref() {
+                res = match send_forwarded(
+                    &st,
+                    &req_headers,
+                    &method,
+                    &url,
+                    Some(&fresh),
+                    &body_bytes,
+                )
+                .await
+                {
+                    Some(r) => r,
+                    None => return (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
+                };
+            }
+        }
+    }
+    // 插件 bundle：缓冲改写内测声明持久化三元式（仅 identity + 体积上限内）
+    if rewrite_bundle
+        && res.status().is_success()
+        && res.headers().get(header::CONTENT_ENCODING).is_none()
+        && res.content_length().map_or(true, |n| n <= REWRITE_BUFFER_LIMIT)
+    {
+        return rewrite_plugin_bundle(res).await;
+    }
+    // HTML 文档（dsh 对所有路径回同一 SPA 入口）：缓冲注入移动端适配样式
+    if wants_html
+        && res.status().is_success()
+        && is_html_document(res.headers())
+        && res.headers().get(header::CONTENT_ENCODING).is_none()
+        && res.content_length().map_or(true, |n| n <= REWRITE_BUFFER_LIMIT)
+    {
+        return rewrite_html_document(res).await;
+    }
+    let mut builder = Response::builder().status(res.status());
+    for (name, value) in res.headers() {
+        if matches!(
+            name.as_str(),
+            "connection" | "transfer-encoding" | "keep-alive" | "upgrade"
+        ) {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Body::from_stream(res.bytes_stream()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// 按剥头规则构造并发出转发请求（cookie 由调用方注入；body 整读以便 401 重放）
+async fn send_forwarded(
+    st: &ProxyState,
+    headers: &HeaderMap,
+    method: &reqwest::Method,
+    url: &str,
+    cookie: Option<&str>,
+    body_bytes: &[u8],
+) -> Option<reqwest::Response> {
+    let rewrite_bundle = is_plugin_client_bundle(url.split('?').next().unwrap_or(url));
+    let wants_html = headers
+        .get(header::ACCEPT)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| v.contains("text/html"));
+    let mut out = st.client.request(method.clone(), url);
+    for (name, value) in headers {
         // host/content-length 由 reqwest 按目标与 body 重算；逐跳头不透传。
         // origin/referer/sec-fetch-* 必须剥掉：dsh 有浏览器信任栅栏
         // （dsh-client-connection isTrustedApiRequest），Origin.host ≠ Host 头
@@ -256,6 +375,9 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
                 | "sec-fetch-mode"
                 | "sec-fetch-dest"
                 | "sec-fetch-user"
+                // 代持 cookie 只能由本函数注入：转发浏览器自带的同名头会顶掉
+                // dsh-auth cookie（0.1.2 起手机端必须靠代理代持的 cookie 过门）
+                | "cookie"
         ) {
             continue;
         }
@@ -270,44 +392,13 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
         }
         out = out.header(name, value);
     }
-    let out = out.body(reqwest::Body::wrap_stream(
-        req.into_body().into_data_stream(),
-    ));
-    match out.send().await {
-        Ok(res) => {
-            // 插件 bundle：缓冲改写内测声明持久化三元式（仅 identity + 体积上限内）
-            if rewrite_bundle
-                && res.status().is_success()
-                && res.headers().get(header::CONTENT_ENCODING).is_none()
-                && res.content_length().map_or(true, |n| n <= REWRITE_BUFFER_LIMIT)
-            {
-                return rewrite_plugin_bundle(res).await;
-            }
-            // HTML 文档（dsh 对所有路径回同一 SPA 入口）：缓冲注入移动端适配样式
-            if wants_html
-                && res.status().is_success()
-                && is_html_document(res.headers())
-                && res.headers().get(header::CONTENT_ENCODING).is_none()
-                && res.content_length().map_or(true, |n| n <= REWRITE_BUFFER_LIMIT)
-            {
-                return rewrite_html_document(res).await;
-            }
-            let mut builder = Response::builder().status(res.status());
-            for (name, value) in res.headers() {
-                if matches!(
-                    name.as_str(),
-                    "connection" | "transfer-encoding" | "keep-alive" | "upgrade"
-                ) {
-                    continue;
-                }
-                builder = builder.header(name, value);
-            }
-            builder
-                .body(Body::from_stream(res.bytes_stream()))
-                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
-        }
-        Err(_) => (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
+    if let Some(c) = cookie {
+        out = out.header(header::COOKIE, dsh_session::cookie_header(c));
     }
+    out.body(reqwest::Body::from(body_bytes.to_vec()))
+        .send()
+        .await
+        .ok()
 }
 
 /// 缓冲插件 bundle 响应并改写内测声明三元式。content-length/etag 作废（改写后长度与
@@ -436,11 +527,24 @@ async fn bridge(client: WebSocket, st: ProxyState, path_and_query: String) {
     tokio::pin!(drained);
     drained.as_mut().enable();
 
-    let Some(port) = *st.dsh_port.borrow() else {
+    let Some(c) = st.creds.borrow().clone() else {
         return;
     };
-    let url = format!("ws://127.0.0.1:{port}{path_and_query}");
-    let Ok((dsh, _resp)) = tokio_tungstenite::connect_async(url).await else {
+    let url = format!("ws://127.0.0.1:{}{}", c.port, path_and_query);
+    // 0.1.2 起 dsh 侧 WS 升级也须带 dsh-auth cookie（BrowserAuth 门内）——
+    // 漏注入手机端表现为"页面开但全断"（prep §八.3）。cookie 现换不缓存
+    // （桥接生命周期长，dsh 重启换端口后旧桥已由 drain/断线终结，新桥用新值）
+    let cookie = ensure_cookie(&st, false).await;
+    let mut req = match url.into_client_request() {
+        Ok(r) => r,
+        Err(_) => return,
+    };
+    if let Some(c) = &cookie {
+        if let Ok(v) = HeaderValue::from_str(&dsh_session::cookie_header(c)) {
+            req.headers_mut().insert("cookie", v);
+        }
+    }
+    let Ok((dsh, _resp)) = tokio_tungstenite::connect_async(req).await else {
         return;
     };
     let (mut client_tx, mut client_rx) = client.split();

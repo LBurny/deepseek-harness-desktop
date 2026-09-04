@@ -93,6 +93,10 @@ struct Dsh {
     port: u16,
     home: tempfile::TempDir,
     client: reqwest::Client,
+    /// stdout 就绪行解析出的 launch token（0.1.2 BrowserAuth：无它 GET / 恒 401）
+    token: String,
+    /// token 交换来的会话 cookie（"dsh-auth-…=v1.…"），后续 HTTP/WS 请求都要带
+    cookie: String,
 }
 
 impl Dsh {
@@ -111,41 +115,91 @@ impl Drop for Dsh {
 async fn spawn_dsh(rt: &Path) -> Result<Dsh, String> {
     let home = tempfile::tempdir().map_err(|e| e.to_string())?;
     let port = dshdesktop_lib::port::free_port().map_err(|e| e.to_string())?;
-    let child = Command::new(rt.join("node.exe"))
+    let mut child = Command::new(rt.join("node.exe"))
         .arg(upstream::dsh_bin(rt))
         .arg(upstream::DSH_WEB_SUBCOMMAND)
         .arg(upstream::DSH_PORT_FLAG)
         .arg(port.to_string())
         // 与 process.rs 的 spawn 形一致：抑制 dsh 默认弹系统浏览器
-        // （dsh-web-app rc.8 起 openBrowser 默认 true，不探它契约套件每跑一次弹一次浏览器）
+        //（dsh-web-app rc.8 起 openBrowser 默认 true，不探它契约套件每跑一次弹一次浏览器）
         .arg(upstream::DSH_NO_OPEN_FLAG)
         .env("DSH_HOME", home.path())
         .current_dir(home.path())
-        .stdout(Stdio::null())
+        // 0.1.2 起 stdout 是 launch token 的唯一来源，必须 piped 持续 pump
+        //（就绪行晚于 HTTP 绑定——Loader 树装配完才打印，先探测到的是 401）
+        .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .map_err(|e| format!("spawn: {e}"))?;
-    // 系统代理（Clash 等）会劫持 127.0.0.1——回环请求必须 no_proxy
-    let client = reqwest::Client::builder()
-        .no_proxy()
-        .build()
-        .map_err(|e| e.to_string())?;
-    let dsh = Dsh {
-        child,
-        port,
-        home,
-        client,
-    };
-    let deadline = Instant::now() + DSH_READY_TIMEOUT;
-    while Instant::now() < deadline {
-        if let Ok(r) = dsh.client.get(dsh.url("/")).send().await {
-            if r.status().is_success() {
-                return Ok(dsh);
+    let stdout = child.stdout.take().ok_or("stdout 应已 piped")?;
+    let (line_tx, line_rx) = std::sync::mpsc::channel::<String>();
+    std::thread::spawn(move || {
+        use std::io::{BufRead, BufReader};
+        for line in BufReader::new(stdout).lines() {
+            match line {
+                Ok(l) => {
+                    if line_tx.send(l).is_err() {
+                        break;
+                    }
+                }
+                Err(_) => break,
             }
         }
-        tokio::time::sleep(Duration::from_millis(500)).await;
+    });
+    // 系统代理（Clash 等）会劫持 127.0.0.1——回环请求必须 no_proxy；
+    // 303 不跟随（token 交换要亲手校验状态码与 Set-Cookie）
+    let client = reqwest::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
+        .build()
+        .map_err(|e| e.to_string())?;
+    // 就绪判定 = 拿到 token → 换到 cookie → 带 cookie GET / 得 200。
+    // 探针复用生产解析器/交换器（dsh_session）：壳用同一条代码路径，漂移一并红。
+    let deadline = Instant::now() + DSH_READY_TIMEOUT;
+    let mut token: Option<String> = None;
+    let mut tail: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    while Instant::now() < deadline {
+        while let Ok(l) = line_rx.try_recv() {
+            if token.is_none() {
+                if let Some((p, t)) = dshdesktop_lib::dsh_session::parse_ready_line(&l) {
+                    if p != port {
+                        eprintln!("[note] 就绪行端口 {p} 与已选端口 {port} 不符，沿用已选");
+                    }
+                    token = Some(t);
+                }
+            }
+            tail.push_back(l);
+            if tail.len() > 50 {
+                tail.pop_front();
+            }
+        }
+        if let Some(t) = &token {
+            if let Ok(cookie) = dshdesktop_lib::dsh_session::exchange_cookie(port, t).await {
+                let authed = client
+                    .get(format!("http://127.0.0.1:{port}/"))
+                    .header(reqwest::header::COOKIE, &cookie)
+                    .send()
+                    .await;
+                if matches!(&authed, Ok(r) if r.status().is_success()) {
+                    let dsh = Dsh {
+                        child,
+                        port,
+                        home,
+                        client,
+                        token: t.clone(),
+                        cookie,
+                    };
+                    return Ok(dsh);
+                }
+            }
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
     }
-    Err(format!("dsh web {DSH_READY_TIMEOUT:?} 未就绪"))
+    Err(format!(
+        "dsh web {DSH_READY_TIMEOUT:?} 未就绪（token={}；stdout 尾：{}）",
+        token.is_some(),
+        tail.into_iter().collect::<Vec<_>>().join(" | ").chars().take(300).collect::<String>()
+    ))
 }
 
 /// 入口形态探测（不需起 dsh）；返回 dsh 版本号供报告用。
@@ -255,15 +309,71 @@ fn probe_entry(rt: &Path, c: &mut Checker) -> String {
 }
 
 async fn probe_http(dsh: &Dsh, c: &mut Checker) {
+    // 1) 无凭证 GET / → 401 + 提示文案（0.1.2 BrowserAuth 无关闭开关，回环也在门内）
     match dsh.client.get(dsh.url("/")).send().await {
         Ok(resp) => {
             let status = resp.status();
             let body = resp.text().await.unwrap_or_default();
             c.check(
-                "GET / 返回 200",
+                "无凭证 GET / → 401（BrowserAuth 门）",
+                status.as_u16() == 401 && body.contains("dsh web authentication required"),
+                format!("status={status}, body {} bytes", body.len()),
+                "鉴权门形态变了：查 upstream::READY_URL_PREFIX/DSH_AUTH_COOKIE_PREFIX 与 prep §二（影响 dsh_session/process/notify/proxy 全链路）",
+            );
+        }
+        Err(e) => c.check("GET / 可达", false, e.to_string(), "dsh 服务形态变了"),
+    }
+    // 2) token 交换：303 + Set-Cookie(dsh-auth-*，HttpOnly，SameSite=Strict)
+    match dsh
+        .client
+        .get(dsh.url(&format!("/?token={}", dsh.token)))
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            let cookies: Vec<String> = resp
+                .headers()
+                .get_all(reqwest::header::SET_COOKIE)
+                .iter()
+                .filter_map(|v| v.to_str().ok().map(String::from))
+                .collect();
+            let hit = cookies
+                .iter()
+                .find(|s| s.starts_with(upstream::DSH_AUTH_COOKIE_PREFIX));
+            c.check(
+                "GET /?token= → 303 + dsh-auth cookie（HttpOnly/SameSite=Strict）",
+                status == 303
+                    && hit.is_some_and(|s| s.contains("HttpOnly") && s.contains("SameSite=Strict")),
+                format!(
+                    "status={status}, set-cookie={:?}",
+                    cookies
+                        .iter()
+                        .map(|s| s.chars().take(20).collect::<String>())
+                        .collect::<Vec<_>>()
+                ),
+                "token 交换形态变了：prep §2.2（影响 dsh_session::exchange_cookie 与壳三条链路）",
+            );
+        }
+        Err(e) => c.check("GET /?token= 可达", false, e.to_string(), "同上"),
+    }
+    // 3) 带 cookie GET / → 200 + </head>（proxy 注入点）；顺带取静态资产路径
+    let mut asset_path: Option<String> = None;
+    match dsh
+        .client
+        .get(dsh.url("/"))
+        .header(reqwest::header::COOKIE, &dsh.cookie)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let body = resp.text().await.unwrap_or_default();
+            c.check(
+                "带 cookie GET / → 200",
                 status.is_success(),
                 format!("status={status}"),
-                "查 DSH_WEB_SUBCOMMAND 与 dsh 服务形态",
+                "cookie 链路失效：查 dsh_session 换取与 Host 栅栏（prep §2.3）",
             );
             c.check(
                 "HTML 含 </head>（proxy 注入点）",
@@ -271,30 +381,74 @@ async fn probe_http(dsh: &Dsh, c: &mut Checker) {
                 format!("body {} bytes", body.len()),
                 "dsh 文档结构变了：remote/proxy.rs 注入要适配",
             );
+            asset_path = body.match_indices("/assets/").next().and_then(|(i, _)| {
+                let tail = &body[i..];
+                tail.find(".js").map(|j| tail[..j + 3].to_string()).filter(|s| {
+                    s.chars()
+                        .all(|ch| ch.is_ascii_alphanumeric() || "._-/".contains(ch))
+                })
+            });
         }
-        Err(e) => c.check("GET / 可达", false, e.to_string(), "dsh 服务形态变了"),
+        Err(e) => c.check("带 cookie GET / 可达", false, e.to_string(), "同上"),
     }
-    // WS 端点仅 WS：无 Origin 的 GET 应得 426（且不被信任栅栏拦）
-    for path in [upstream::EVENTS_MUX_PATH, upstream::EVENTS_HOST_PATH] {
-        match dsh.client.get(dsh.url(path)).send().await {
-            Ok(resp) => c.check(
-                &format!("GET {path} 无 Origin → 426（WS-only 端点）"),
-                resp.status().as_u16() == 426,
-                format!("status={}", resp.status()),
-                "事件端点形态变了：改 upstream::EVENTS_*_PATH（影响 lib.rs/notify）",
+    // 4) 静态资产无门（prep §2.3：仅 index 鉴权，/assets/* 公开）——无 cookie 也应 200
+    match asset_path {
+        Some(a) => match dsh.client.get(dsh.url(&a)).send().await {
+            Ok(r) => c.check(
+                "静态资产无鉴权门（无 cookie GET assets js → 200）",
+                r.status().is_success(),
+                format!("{a} status={}", r.status()),
+                "静态门形态变了：prep §2.3（proxy 静态转发与页面首屏假设要重估）",
             ),
-            Err(e) => c.check(
-                &format!("GET {path} 可达"),
-                false,
-                e.to_string(),
-                "事件端点消失：改 upstream::EVENTS_*_PATH",
-            ),
-        }
+            Err(e) => c.check("静态资产可达", false, e.to_string(), "同上"),
+        },
+        None => c.check(
+            "index HTML 引用 /assets/*.js",
+            false,
+            "未找到资产引用",
+            "前端打包形态变了：找新的资产路径形态再定探针",
+        ),
     }
-    // /api 信任栅栏：错 Origin 必须 403（remote/proxy.rs 剥浏览器标记头的依据）
+    // 5) RPC 信封：带 cookie POST /api/session/list → 恒 200 + server-response + result.ok。
+    // 0.1.2 的 typert 网关按描述符 wire 名传参：session/list 的形参 wire 名是
+    // `_request`（SessionListRequest={cursor?}），不是裸 args（typert.host.js:874）
+    let envelope = serde_json::json!({
+        "type": "client-request",
+        "rpcId": "probe-1",
+        "method": upstream::METHOD_SESSION_LIST,
+        "payload": { "args": { "_request": {} } }
+    });
     match dsh
         .client
-        .get(dsh.url(upstream::EVENTS_MUX_PATH))
+        .post(dsh.url(&format!("/api/{}", upstream::METHOD_SESSION_LIST)))
+        .header(reqwest::header::COOKIE, &dsh.cookie)
+        .json(&envelope)
+        .send()
+        .await
+    {
+        Ok(resp) => {
+            let status = resp.status();
+            let v: serde_json::Value = resp.json().await.unwrap_or_default();
+            let ok = v.get("type").and_then(|t| t.as_str()) == Some("server-response")
+                && v.pointer("/result/ok").and_then(|o| o.as_bool()) == Some(true);
+            c.check(
+                "RPC 信封：POST /api/session/list → server-response + result.ok",
+                status.is_success() && ok,
+                format!(
+                    "status={status}, resp={}",
+                    v.to_string().chars().take(120).collect::<String>()
+                ),
+                "RPC 信封变了：prep §3.1（影响一切 /api 调用；壳 proxy 只转发不组包，但鉴权/栅栏形态即此）",
+            );
+        }
+        Err(e) => c.check("POST /api/session/list 可达", false, e.to_string(), "同上"),
+    }
+    // 6) Host/Origin 栅栏：带 cookie 但错 Origin 的 /api 请求 → 403
+    // （remote/proxy.rs 剥浏览器标记头的依据；栅栏 403 优先于鉴权 401）
+    match dsh
+        .client
+        .get(dsh.url(&format!("/api/{}", upstream::METHOD_SESSION_LIST)))
+        .header(reqwest::header::COOKIE, &dsh.cookie)
         .header("Origin", "http://evil.invalid")
         .send()
         .await
@@ -310,77 +464,199 @@ async fn probe_http(dsh: &Dsh, c: &mut Checker) {
 }
 
 async fn probe_ws(dsh: &Dsh, c: &mut Checker) {
-    use futures::StreamExt;
-    for path in [upstream::EVENTS_MUX_PATH, upstream::EVENTS_HOST_PATH] {
-        let url = format!("ws://127.0.0.1:{}{}", dsh.port, path);
-        // 启动竞态宽限：HTTP 路由先就绪（GET 立即可探 426），WS 升级通道挂载
-        // 可能晚几百毫秒；快机器（CI runner）就绪即探会撞窗（0.3.0 release CI
-        // 实踩，本地慢机从未复现）。5s 内重试，持续失败才算漂移
-        let mut last_err = String::new();
-        let mut stream = None;
-        let connect_deadline = Instant::now() + Duration::from_secs(5);
-        while Instant::now() < connect_deadline {
-            match tokio_tungstenite::connect_async(&url).await {
-                Ok((s, _)) => {
-                    stream = Some(s);
-                    break;
-                }
-                Err(e) => {
-                    last_err = e.to_string();
-                    tokio::time::sleep(Duration::from_millis(200)).await;
-                }
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::client::IntoClientRequest;
+    use tokio_tungstenite::tungstenite::Message;
+    let url = format!("ws://127.0.0.1:{}{}", dsh.port, upstream::DSH_MUX_PATH);
+    // 1) 无 cookie → 握手被拒（401 原始 HTTP 响应 + Connection: close，prep §2.3）
+    let rejected = tokio_tungstenite::connect_async(&url).await.is_err();
+    c.check(
+        "无 cookie 连 remote.mux → 握手被拒",
+        rejected,
+        "",
+        "WS 鉴权门失效或端点消失：改 upstream::DSH_MUX_PATH（影响 notify/mux.rs 与 proxy 桥接）",
+    );
+    // 2) 带 cookie → 101。保留启动竞态宽限：WS 升级通道挂载可能晚于 HTTP 路由
+    //（旧套件在 CI 快机上撞过这个窗），5s 内重试，持续失败才算漂移
+    let mut stream = None;
+    let mut last_err = String::new();
+    let connect_deadline = Instant::now() + Duration::from_secs(5);
+    while Instant::now() < connect_deadline {
+        let mut req = match url.clone().into_client_request() {
+            Ok(r) => r,
+            Err(e) => {
+                last_err = e.to_string();
+                break;
+            }
+        };
+        req.headers_mut()
+            .insert("cookie", dsh.cookie.parse().unwrap());
+        match tokio_tungstenite::connect_async(req).await {
+            Ok((s, _)) => {
+                stream = Some(s);
+                break;
+            }
+            Err(e) => {
+                last_err = e.to_string();
+                tokio::time::sleep(Duration::from_millis(200)).await;
             }
         }
-        let Some(mut stream) = stream else {
-            c.check(
-                &format!("WS {path} 无 Origin 握手"),
-                false,
-                format!("connect 失败（5s 重试后）: {last_err}"),
-                "WS 信任栅栏或端点变了（影响 notify/ws.rs）",
-            );
-            continue;
-        };
-        c.check(&format!("WS {path} 无 Origin 握手"), true, "", "");
-        // 帧观察窗口：空闲 dsh 可能无帧——观察到就断言形状，观察不到不算漂移
-        let deadline = Instant::now() + FRAME_OBSERVE_WINDOW;
-        let mut observed = 0u32;
-        while Instant::now() < deadline {
-            let remain = deadline.saturating_duration_since(Instant::now());
-            match tokio::time::timeout(remain, stream.next()).await {
-                Ok(Some(Ok(tokio_tungstenite::tungstenite::Message::Text(text)))) => {
-                    observed += 1;
-                    let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
-                    let shaped = v.get("method").and_then(|m| m.as_str()).is_some()
-                        && v.get("payload").is_some_and(|p| p.is_object());
+    }
+    let Some(mut stream) = stream else {
+        c.check(
+            "带 cookie 连 remote.mux → 101",
+            false,
+            format!("connect 失败（5s 重试后）: {last_err}"),
+            "WS 端点/鉴权形态变了：改 upstream::DSH_MUX_PATH 与 cookie 注入（notify/mux.rs、proxy.rs）",
+        );
+        return;
+    };
+    c.check("带 cookie 连 remote.mux → 101", true, "", "");
+    // 3) open $events → 首条 item 必须是 ready（clientId + host）；观察窗内
+    //    对 emit/waterfall 帧断言形状（空闲 dsh 可能无帧——观察到才断言）
+    let open_events = serde_json::json!({
+        "type": "open",
+        "streamId": "probe-events",
+        "endpoint": upstream::EVENT_STREAM_ENDPOINT,
+        "payload": { "args": {} }
+    });
+    if stream
+        .send(Message::Text(open_events.to_string().into()))
+        .await
+        .is_err()
+    {
+        c.check("open $events 发送", false, "", "mux 协议变了：prep §3.2");
+        return;
+    }
+    let mut ready_seen = false;
+    let mut observed = 0u32;
+    let deadline = Instant::now() + FRAME_OBSERVE_WINDOW;
+    while Instant::now() < deadline {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remain, stream.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                if v.get("type").and_then(|t| t.as_str()) != Some("item") {
+                    continue;
+                }
+                if v.get("streamId").and_then(|s| s.as_str()) != Some("probe-events") {
+                    continue;
+                }
+                let value = v.get("value").cloned().unwrap_or_default();
+                let vtype = value.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                if !ready_seen && vtype == "ready" {
+                    ready_seen = true;
+                    let shaped = value.get("clientId").and_then(|i| i.as_str()).is_some()
+                        && value.get("host").is_some_and(|h| h.is_object());
                     c.check(
-                        &format!("{path} 帧形状 method+payload"),
+                        "$events 首条 item = ready（clientId + host）",
                         shaped,
                         text.chars().take(120).collect::<String>(),
-                        "帧格式变了：改 upstream 帧常量（影响 notify/mod.rs 分类）",
+                        "ready 帧形状变了：prep §4.1（影响 notify/mux.rs 连接初始化）",
+                    );
+                    continue;
+                }
+                if matches!(vtype, "emit" | "waterfall") {
+                    observed += 1;
+                    let shaped = value.get("event").and_then(|e| e.as_str()).is_some();
+                    c.check(
+                        "$events 下行帧含事件名（emit/waterfall）",
+                        shaped,
+                        format!("type={vtype} event={:?}", value.get("event")),
+                        "帧格式变了：改 upstream 事件词表常量（影响 notify/mod.rs 分类）",
                     );
                     if observed >= 3 {
                         break;
                     }
                 }
-                Ok(Some(Ok(_))) => {} // 二进制/ping-pong 帧：不算
-                _ => break,
             }
+            Ok(Some(Ok(_))) => {} // Ping/Pong/Binary：0.1.2 起服务端 30s 心跳 Ping，不算
+            _ => break,
         }
-        if observed == 0 {
-            eprintln!(
-                "[note] {path} 观察窗口内无文本帧：帧分类正确性仍由 tests/notify_ws.rs（fixture）保障"
-            );
+    }
+    if !ready_seen {
+        c.check(
+            "$events 首条 item = ready",
+            false,
+            "观察窗内未见 ready 帧",
+            "流初始化形态变了：prep §4.1（open 必须空 args；非空 signature-invalid）",
+        );
+    }
+    if observed == 0 {
+        eprintln!("[note] $events 观察窗内无 emit/waterfall 帧（空闲 dsh 正常）：帧分类正确性由 tests/notify_ws.rs 的脚本化假服务器保障");
+    }
+    // 4) open session/follow（不存在的 sessionId）→ 收 error 或 end 帧即形状正确。
+    // 形参 wire 名是 `request`（SessionFollowRequest={address,maxMessages?}，
+    // typert.host.js:822）——args 必须包一层 request，裸 address 会被网关拒为
+    // arguments-invalid（0.1.2-rc.1 实测）。error 帧字段集（alpha.2 RemoteError
+    // 统一封装）：0.1.2-rc.1 实测 = ["code","details","message"]。
+    let open_follow = serde_json::json!({
+        "type": "open",
+        "streamId": "probe-follow",
+        "endpoint": upstream::METHOD_SESSION_FOLLOW,
+        "payload": { "args": { "request": { "address": { "kind": "session", "sessionId": "contract-nonexistent" } } } }
+    });
+    let _ = stream
+        .send(Message::Text(open_follow.to_string().into()))
+        .await;
+    let deadline = Instant::now() + FRAME_OBSERVE_WINDOW;
+    let mut terminated = false;
+    while Instant::now() < deadline && !terminated {
+        let remain = deadline.saturating_duration_since(Instant::now());
+        match tokio::time::timeout(remain, stream.next()).await {
+            Ok(Some(Ok(Message::Text(text)))) => {
+                let v: serde_json::Value = serde_json::from_str(&text).unwrap_or_default();
+                if v.get("streamId").and_then(|s| s.as_str()) != Some("probe-follow") {
+                    continue;
+                }
+                match v.get("type").and_then(|t| t.as_str()) {
+                    Some("error") => {
+                        terminated = true;
+                        let err = v.get("error").cloned().unwrap_or_default();
+                        let fields: Vec<String> = err
+                            .as_object()
+                            .map(|m| m.keys().cloned().collect())
+                            .unwrap_or_default();
+                        eprintln!("[note] follow error 帧字段集（回写 prep §3.2 用）: {err}");
+                        c.check(
+                            "session/follow 不存在会话 → error 帧",
+                            !fields.is_empty(),
+                            format!("error 字段集 {fields:?}"),
+                            "error 帧形状变了：notify/mux.rs 的 follow 错误处理要适配",
+                        );
+                    }
+                    Some("end") => {
+                        terminated = true;
+                        c.check("session/follow 不存在会话 → end 帧", true, "", "");
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Some(Ok(_))) => {}
+            _ => break,
         }
+    }
+    if !terminated {
+        c.check(
+            "session/follow 不存在会话 → error/end 帧",
+            false,
+            "观察窗内未见终结帧",
+            "follow 错误语义变了：prep §5.1（影响 notify/mux.rs 的 follow 重建逻辑）",
+        );
     }
 }
 
 fn probe_presets(rt: &Path, c: &mut Checker) {
-    let dir = upstream::join_segments(&upstream::dsh_pkg_dir(rt), upstream::PRESET_DIR_SEGMENTS);
+    // 0.1.2 起预设独立成包：node_modules/@deepseek-ai/dsh-agent-presets/presets/minimal
+    let dir = upstream::join_segments(
+        &upstream::dsh_node_modules_dir(rt),
+        upstream::PRESET_DIR_SEGMENTS,
+    );
     let state = presets::preset_signature_state(&dir);
     // rc.8 起上游 minimal 预设自带 win32 门控（bash/pwsh 分行按 process.platform
     // 互斥禁用），我方补丁器已退役——此处断言 UpstreamHandled 作回归哨兵
     c.check(
-        "minimal 预设签名 = UpstreamHandled（rc.8 起上游自修 win32）",
+        "minimal 预设签名 = UpstreamHandled（rc.8 起上游自修 win32；0.1.2 起独立成包）",
         matches!(state, SignatureState::UpstreamHandled),
         format!("实际 {state:?}"),
         "NeedsPatch=上游回退了 win32 修复→从 git 历史恢复 presets 补丁器并重评；Missing=预设目录变了→改 PRESET_DIR_SEGMENTS",

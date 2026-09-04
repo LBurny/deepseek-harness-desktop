@@ -30,9 +30,18 @@ src-tauri/src/
                     父进程被强杀时内核连带回收整树，防孤儿锁 runtime）
   process.rs        DshProcess 监督循环：spawn node bin.js web --port N --no-open
                     （rc.8 起 openBrowser 默认 true，不带则额外弹系统浏览器）；
+                    0.1.2 起 stdout 就绪行是 launch token 唯一来源（pump 先捕获
+                    再脱敏转发，Ready 门控保证 token 必在）；
                     子进程 PATH 前置内嵌 node 目录（npx/npm/node 绑定运行时版本，
                     MCP `npx` 命令不落系统旧 node——机器 B 实踩）+ profile 的
                     node_modules/.bin（插件自带 CLI 按名可解析）；指数退避、stop/restart
+                    子进程 PATH 前置内嵌 node 目录（npx/npm/node 绑定运行时版本，
+                    MCP `npx` 命令不落系统旧 node——机器 B 实踩）+ profile 的
+                    node_modules/.bin（插件自带 CLI 按名可解析）；指数退避、stop/restart
+  dsh_session.rs    0.1.2 BrowserAuth 凭证模块：launch token 解析（parse_ready_line）+
+                    token 换 cookie（exchange_cookie，303 + Set-Cookie dsh-auth-*，
+                    绑 127.0.0.1:<port> authority——换端口即失效要重换）；凭证只在内存、
+                    日志脱敏（token 经 remote::redact_token，cookie 不记值）
   runtime.rs        ensure_runtime：安装目录可写则原地运行内嵌运行时，只读则回退部署
                     副本（.version 比对）；原地模式清理旧版 %LOCALAPPDATA% 部署副本
   port.rs           free_port（OS 分配空闲端口，有竞态窗口需重试）+ wait_ready
@@ -40,11 +49,15 @@ src-tauri/src/
   i18n.rs           壳界面语言跟随 dsh locale.preference（zh/en，缺省按系统 UI 语言）；
                     文案经 pick(zh,en) 二选一；theme 关注循环写全局原子值，
                     深层辅助函数免层层透传 locale
-  notify/           WS 事件源（ws.rs 泛化 {path, handler, on_connect}，连 events.mux +
-                    events.host 双下行；空闲 Ping+Pong 超时看门狗防半开连接假死）
-                    + 帧分类（approval/question、turn/start 清痕、tool/call 置痕、
-                    turn/end 按"回合内是否干过活"拆任务完成/回答完成、session/title
-                    台账、子代理经 origin 过滤）；sink 在 lib.rs：前台=任一窗口聚焦，
+  notify/           事件源 mux.rs（0.1.2 单 WS /api/remote.mux 承载 $events 事件桥 +
+                    N 条 session/follow；cookie 鉴权、每次重连现换；空闲 Ping+Pong
+                    超时看门狗防半开连接假死；follow 集重连重播种 fail-open）
+                    + 帧分类（$events: api-session/added 驱动逐会话 follow、
+                    api-session/removed 摘除、approval/request 与 user-questions/
+                    request waterfall 只弹通知**严禁回包 $events/result**；
+                    follow 流: turn/start 清痕、tool/call 置痕、turn/end 按"回合内
+                    是否干过活"拆任务完成/回答完成、session/title 台账、子代理经
+                    origin 过滤）；sink 在 lib.rs：前台=任一窗口聚焦，
                     按 settings.notify 四类规则门控，全部通知统一挂提示音，
                     被抑制/弹失败都写 events.log；toast.rs=WinRT 直连 toast（顶部行
                     小图标经 AUMID IconUri 指向随包 256px PNG，XML 不含 image），
@@ -177,7 +190,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   RegDeleteValueW，Run 值不存在时返回 ERROR_FILE_NOT_FOUND——从未开过自启动的用户
   每次保存设置都弹"系统找不到指定的文件 (os error 2)"。先 is_enabled() 比目标态，
   已达成即 Ok（commands.rs 有锚定测试）
-- **dsh 事实**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只许绑 127.0.0.1 且 **rc.8 起默认把 UI 弹给系统默认浏览器**（spawn 必带 `--no-open`）；事件走 **WebSocket** `/api/events.mux` + `/api/events.host`（GET 返回 426），帧格式 `{"type":"server-request","method":<payload.type>,"payload":{...}}`；完成判定看 `session/event` 里的 `turn/end`（`data.reason.kind=="completed"`），子代理标记看 `host/session-added` 的 `origin`；设置在 `$DSH_HOME/settings.yaml` 的 `ui-theme.preference`（light/dark/system）；**npm 依赖是浮动区间**，跟版靠契约套件守门
+- **dsh 事实（0.1.2）**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只许绑 127.0.0.1 且 spawn 必带 `--no-open`；**0.1.2 起 BrowserAuth 鉴权无关闭开关（回环也在门内）**：每进程 launch token 经 stdout 就绪行 `dsh web: http://127.0.0.1:<port>/?token=<t>` 打印（就绪行晚于 HTTP 绑定，必须持续 pump），`GET /?token=<t>` → 303 + Set-Cookie `dsh-auth-<hash>=v1.…`（HttpOnly/SameSite=Strict，**绑 authority——换端口即失效**），静态资产无门、`/api/*` 与 WS 全在门内；事件走**单 WS `/api/remote.mux`**：客户端发 `{type:"open",streamId,endpoint,payload:{args}}`，服务端回 `{type:"item"|"end"|"error",streamId,…}`，`$events` 端点（open 空 args）首条 item 是 ready，随后 `{type:"emit"|"waterfall",event,args|request}`，会话事件经 `session/follow`（args 包 `{request:{address:{kind:"session",sessionId}}}`——typert wire 名，裸 address 被拒）；完成判定看 follow 流 `event.type=="turn/end"`（`data.reason.kind=="completed"`），子代理标记看 `$events` 的 `api-session/added` `args[0].origin`；**严禁实现 `$events/result` 回包**（任一客户端回 result 即抢先替用户结算审批）；agent 预设独立成包 `@deepseek-ai/dsh-agent-presets`；设置在 `$DSH_HOME/settings.yaml` 的 `ui-theme.preference`（light/dark/system）；**npm 依赖是浮动区间**，跟版靠契约套件守门
 - **运行时布局**：暂存 `src-tauri/runtime/<triplet>/`，tauri.conf `resources` 用映射形式
   `{ "runtime": "runtime", "resources/sounds": "sounds" }`，安装后落 `<install>/runtime/<triplet>/`
   与 `<install>/sounds/*.wav`（列表形式会错落到 `<install>/resources/sounds/` 致提示音探测不到，
@@ -206,8 +219,16 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 - **缩放快捷键匹配**：主匹配 `e.code`，`e.key` 兜底（合成按键/RDP 注入 keydown 的 `e.code` 为空）；zoom_ui 负载是 `direction:"in"/"out"`，步进由命令读设置（不写死在脚本里）；改快捷键须重注入钩子（set_shell_settings 已做，热替换不叠加）
 - **reqwest 在系统代理下会劫持 127.0.0.1**：用户开 Clash 等系统代理时 reqwest 默认走代理且不认 bypass 列表——凡访问本机回环（remote/proxy.rs 转发客户端、测试里访问 fixture/代理端口的客户端）必须 `.no_proxy()`，否则请求被代理软件接管表现为假 502/挂起
 - **手机端适配验证不能直连 dsh 端口**：mobile.css/mobile.js 只由代理注入，直连 `127.0.0.1:<dsh端口>` 的页面与手机看到的不是一回事（没有 项目/信息 标签、没有任何适配样式）——0.4.6 前在直连环境"验证"图标化白忙一轮。复刻手机环境=Playwright 390px 视口 + `addStyleTag/addScriptTag({path})` 注入同目录 mobile.css/mobile.js（mobile.js 挂观察器后有初始 `ensure()` 全量扫描，晚注入等价于 head 注入）；token 仅内存且日志脱敏，真走代理只能从托盘远程页读链接（用户用机期间别动 CUA）
+- **0.1.2 token/cookie 时序三坑**：①就绪行晚于 HTTP 绑定——端口可探通但 401，
+  token 必须从 stdout 持续 pump 捕获，"端口通了"不等于"能登录"；process.rs 的
+  Ready 门控（wait_token）就是为此，超时按未就绪杀树重试而非白屏；②cookie 绑
+  `127.0.0.1:<port>` authority——dsh 重启换端口后旧 cookie 全失效，代理转发遇
+  401 要清缓存重换并重放一次（只重放一次防环），MuxSource/代理每次（重）连
+  现换不缓存跨端口值；③WS upgrade 是独立桥接路径，cookie 注入最易漏（proxy
+  bridge 用 http::Request 手动带 Cookie 头）——漏了手机端表现为"页面开但全断"；
+  假 dsh（tests/support）把这三条全仿真，契约漂移先红在测试里
 - **主窗口由 setup 代码创建（tauri.conf windows 为空）**：on_download 只能挂 WebviewWindowBuilder，conf 声明的窗口无法附加。建窗参数须与原 conf 一致（visible(false)+center()+min 900x600），window-state 对代码创建窗口同样在创建事件排队 restore（托盘按需窗口同款），回归靠 verify-no-size-flash/verify-window-state 两脚本
-- **dsh 预设不能经 profile patch 影子覆盖**：composeProfile 会把 agent-presets 行的 roots 无条件重写为 shipped root（用户层 roots 被丢弃），且 shipped root 先于 $DSH_HOME/.agent-presets（同名 id shipped 优先）——若需重引入补丁，仍旧不能走 patch 影子覆盖，只能原地改写 shipped 预设文件
+- **dsh 预设已独立成包（0.1.2）**：minimal 预设从 dsh 包内 `config/agent-presets/` 迁到 node_modules 的 `@deepseek-ai/dsh-agent-presets/presets/minimal`（PRESET_DIR_SEGMENTS 已随版）；0.1.1-rc.2 时代 composeProfile 重写 roots 的行为上游已删（prep §一），预设如需补丁理论上可走 patch 影子覆盖，但当前无需求——签名哨兵（presets.rs + 契约探针）继续盯着 win32 修复不回退
 - **fs-local 列目录遇 ACL 拒绝项即整列失败**（如 C:\ 根目录撞上 DumpStack.log）：上游 dsh 行为，Windows 上列举系统盘根目录必现；壳侧缓解是让模型知道 cwd 并待在 workspace，别试图在壳里修列目录
 - **提示音播放禁用 PlaySoundW，改自管 waveOut**：PlaySoundW 四轮翻车史——SND_NOSTOP 忙时放弃（0.3.x）、SND_ASYNC 缓冲悬垂（0.4.2）、SND_ASYNC 工作线程首播静默吞错（0.4.2 修后仍复现）、SND_SYNC 下 winmm 缓存设备句柄失效（0.4.5 机器 B：首次有声后续全静默，日志全 ok 播满时长）。现 `play_sound_file` 在专用线程自管 waveOut：每次播放 waveOutOpen 新开设备句柄（WAVE_MAPPER 取当前默认）、播完即关，打开/写入/收尾每步都有真实 MMSYSERR 错误码，日志带实际设备名；打断语义自管（新播放 reset 旧会话）。改回 PlaySound 等于把盲区请回来
 - **toast 点击激活只能走协议激活**：未打包 Win32 应用的 in-process `ToastNotification.Activated` 回调在 Win10 不可靠——AUMID 无注册、补 HKCU AppUserModelId 键两种条件下点击均不触发（机器 A 实测，toast 被点掉但不回调）；现 toast XML 带 `activationType="protocol" launch="dshdesktop://open"`，点击由系统拉起协议 → 二次实例被 single-instance 拦截 → 回调 show 主窗口。链路依赖启动时的 `ensure_activation_registered`（HKCU 写协议+AUMID，仅安装形态写入，dev 跳过防覆盖已安装版指向）
@@ -216,7 +237,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 201 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 222 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 

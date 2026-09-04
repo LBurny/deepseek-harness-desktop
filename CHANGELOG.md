@@ -7,8 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-09-04
+
 ### Changed
 
+- dsh 运行时 0.1.1-rc.2 → 0.1.2-rc.1（rewrite 级跟版）。上游要点：Web UI 引入 BrowserAuth 鉴权（每进程 launch token 换会话 cookie，无关闭开关、回环也在门内）；事件传输重写（`/api/events.mux`+`/api/events.host` 双 WS → 单 `/api/remote.mux` + `$events` 事件桥 + 逐会话 `session/follow`）；agent 预设独立成包 `@deepseek-ai/dsh-agent-presets`；修复 0.1.1-rc.2 升级后启动失败与会话标题丢失（alpha.5，直接覆盖本机用户的升级路径）；RPC 信封改 typert wire 名传参
+- 壳侧三条链路随版改造：①`dsh_session.rs` 新模块统一凭证（stdout 就绪行捕获 launch token，Ready 门控保证导航必带 `?token=`，日志全链路脱敏）；②通知传输换 `notify/mux.rs` MuxSource（单 WS 承载 $events + N 条 follow，`api-session/added` 驱动逐会话跟随，子代理过滤与任务/回答完成拆分语义平移；严禁回包 `$events/result` 防抢先结算审批）；③远程代理 cookie 代持（launch token 现换 dsh-auth cookie、401 失效清缓存重换并重放一次、WS 桥接注入 cookie——漏注入手机端表现为页面开但全断）
+- 契约套件随 0.1.2 重写（BrowserAuth 门/303 交换/RPC 信封/`$events` ready 帧/follow 错误帧字段集逐项探真）；测试用假 dsh 服务器（tests/support，axum 进程内）替代进程外 fake-dsh.cjs（后者仅剩进程监督与 RemoteManager 套件在用）
+- mobile.js 适配 0.1.2 输入框 contenteditable 化：回形针附件按钮的注入目标从 textarea 扩为 contenteditable（旧判断下按钮静默消失，Playwright 390px 实测发现）
 - `/init` 命令结果行文案改为 "Prompt submitted to prepare for generating the AGENTS.md file"（原 "Submitted the AGENTS.md init prompt as a collapsed context injection."——用户反馈原句偏实现细节）。dsh-command-init 插件 0.1.1 → 0.1.2，已安装实例下次启动经 preseed 文件同步自动更新
 
 ## [0.5.0] - 2026-09-03

@@ -9,7 +9,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
-use tokio::sync::Notify;
+use tokio::sync::{watch, Notify};
 
 const MAX_BACKOFF: Duration = Duration::from_secs(30);
 const MAX_FAILURES: u32 = 5;
@@ -34,6 +34,10 @@ struct Inner {
     paths: RuntimePaths,
     state: Mutex<DshState>,
     pid: AtomicU32,
+    /// 0.1.2 BrowserAuth launch token（stdout 就绪行捕获；Ready 时必已就绪）
+    token: Mutex<Option<Arc<str>>>,
+    /// 就绪 token 的广播端（pump 命中时更新；None=调用方未订阅）
+    token_tx: Option<Arc<watch::Sender<Option<Arc<str>>>>>,
     on_event: Arc<dyn Fn(ProcessEvent) + Send + Sync>,
     shutdown: AtomicBool,
     stop: Notify,
@@ -49,6 +53,7 @@ impl DshProcess {
     pub fn spawn_supervised(
         platform: Arc<dyn Platform>,
         paths: RuntimePaths,
+        token_tx: watch::Sender<Option<Arc<str>>>,
         events: impl Fn(ProcessEvent) + Send + Sync + 'static,
     ) -> Self {
         let this = Self {
@@ -57,6 +62,8 @@ impl DshProcess {
                 paths,
                 state: Mutex::new(DshState::Starting),
                 pid: AtomicU32::new(0),
+                token: Mutex::new(None),
+                token_tx: Some(Arc::new(token_tx)),
                 on_event: Arc::new(events),
                 shutdown: AtomicBool::new(false),
                 stop: Notify::new(),
@@ -70,6 +77,11 @@ impl DshProcess {
 
     pub fn state(&self) -> DshState {
         self.inner.state.lock().unwrap().clone()
+    }
+
+    /// 0.1.2 launch token（stdout 就绪行捕获）；`DshState::Ready` 发出时必已就绪
+    pub fn token(&self) -> Option<Arc<str>> {
+        self.inner.token.lock().unwrap().clone()
     }
 
     pub fn port(&self) -> Option<u16> {
@@ -170,6 +182,26 @@ impl DshProcess {
             }
 
             if wait_ready(port, READY_TIMEOUT).await {
+                // 0.1.2 契约：HTTP 就绪后 stdout 才打就绪行（token 唯一来源）。
+                // Ready 必须等 token——导航要 ?token= 过 BrowserAuth，没 token 的
+                // Ready 只会让主窗口落 401 页
+                if !self.wait_token(READY_TIMEOUT).await {
+                    self.log(
+                        "[dshdesktop] dsh stdout 未出现就绪 URL（token）——上游 READY_URL_PREFIX 契约漂移？",
+                    );
+                    self.inner.platform.kill_process_tree(pid);
+                    let _ = child.wait().await;
+                    self.inner.pid.store(0, Ordering::SeqCst);
+                    failures += 1;
+                    if failures >= MAX_FAILURES {
+                        self.set_state(DshState::Failed("dsh token never captured".into()));
+                        break;
+                    }
+                    if !self.wait_backoff(&mut backoff).await {
+                        break;
+                    }
+                    continue;
+                }
                 failures = 0;
                 backoff = Duration::from_millis(500);
                 self.set_state(DshState::Ready { port });
@@ -225,6 +257,25 @@ impl DshProcess {
         }
     }
 
+    /// 等 stdout 就绪行捕获到 token；期间响应 stop（返回 false=应终止循环）。
+    /// 50ms 轮询而非 Notify 纯等待——notify_waiters 只唤醒已注册的 waiter，
+    /// 检查与注册之间的通知会丢（错过一次就是干等 60s 超时）
+    async fn wait_token(&self, timeout: Duration) -> bool {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            if self.token().is_some() {
+                return true;
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(Duration::from_millis(50)) => {}
+                _ = self.inner.stop.notified() => return false,
+            }
+            if tokio::time::Instant::now() >= deadline {
+                return false;
+            }
+        }
+    }
+
     /// 退避等待，期间响应 stop / restart。返回 false 表示收到 stop，循环应终止。
     async fn wait_backoff(&self, backoff: &mut Duration) -> bool {
         let current = *backoff;
@@ -241,10 +292,27 @@ impl DshProcess {
 
     fn spawn_pump<R: AsyncRead + Unpin + Send + 'static>(&self, reader: R) {
         let emit = self.inner.on_event.clone();
+        let this = self.clone();
         tokio::spawn(async move {
             let mut lines = BufReader::new(reader).lines();
             while let Ok(Some(line)) = lines.next_line().await {
-                emit(ProcessEvent::Log(line));
+                // 0.1.2 起 stdout 就绪行是 launch token 唯一来源：先捕获再脱敏。
+                // 链接即凭据，原始行不得进入任何日志面（dsh-log/events.log/诊断环）
+                if let Some((_, token)) = crate::dsh_session::parse_ready_line(&line) {
+                    let t: Arc<str> = token.into();
+                    *this.inner.token.lock().unwrap() = Some(t.clone());
+                    if let Some(tx) = &this.inner.token_tx {
+                        tx.send_if_modified(|cur| {
+                            if cur.as_deref() == Some(t.as_ref()) {
+                                false
+                            } else {
+                                *cur = Some(t.clone());
+                                true
+                            }
+                        });
+                    }
+                }
+                emit(ProcessEvent::Log(crate::remote::redact_token(&line)));
             }
         });
     }

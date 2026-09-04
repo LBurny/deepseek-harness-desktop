@@ -88,15 +88,24 @@ while ((Get-Date) -lt $deadline) {
     $port = [int]$Matches[1]
     try {
       $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 3
-      if ($resp.StatusCode -eq 200) { break }
-    } catch {}
+      if ($resp.StatusCode -eq 200 -or $resp.StatusCode -eq 401) { break }
+    } catch {
+      # 401 会走 catch（IWR 对非 2xx 抛异常）：0.1.2 BrowserAuth 门下 401 恰恰证明服务已就绪
+      if ($_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401) { break }
+    }
   }
 }
 if (-not $nodeProc) { throw 'dsh node 未启动' }
 "dsh node pid=$($nodeProc.ProcessId) port=$port"
 if ($port -eq 0) { throw '未解析到端口' }
-$resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5
-"http status=$($resp.StatusCode), __DSH_BOOT__=$(if ($resp.Content -match '__DSH_BOOT__') {'present'} else {'MISSING'})"
+try {
+  $resp = Invoke-WebRequest -Uri "http://127.0.0.1:$port/" -UseBasicParsing -TimeoutSec 5
+  "http status=$($resp.StatusCode), __DSH_BOOT__=$(if ($resp.Content -match '__DSH_BOOT__') {'present'} else {'MISSING'})"
+} catch {
+  $code = if ($_.Exception.Response) { [int]$_.Exception.Response.StatusCode } else { -1 }
+  if ($code -ne 401) { throw "dsh 端口探测失败 status=$code" }
+  "http status=401（0.1.2 BrowserAuth 门，无凭证探测的预期形态——壳经 stdout token 登录）"
+}
 
 Step '4. 单实例校验（再启一次）'
 Start-Process -FilePath $exe

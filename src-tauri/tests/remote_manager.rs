@@ -7,6 +7,8 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tokio::sync::watch;
 
+mod support;
+
 struct TestPlatform;
 
 impl Platform for TestPlatform {
@@ -94,7 +96,15 @@ fn make_manager(
     work: &Path,
     dsh_port: Option<u16>,
 ) -> (RemoteManager, Arc<Mutex<Vec<RemoteStatus>>>) {
-    let (_tx, rx) = watch::channel(dsh_port);
+    // 0.1.2 起 RemoteManager 拿的是 DshCreds（端口+token）：fixture dsh 无鉴权门，
+    // token 随便给（cookie 交换失败只影响注入，不影响转发）
+    let creds = dsh_port.map(|port| {
+        Arc::new(dshdesktop_lib::dsh_session::DshCreds {
+            port,
+            token: support::FIXTURE_TOKEN.into(),
+        })
+    });
+    let (_tx, rx) = watch::channel(creds);
     let statuses: Arc<Mutex<Vec<RemoteStatus>>> = Arc::new(Mutex::new(Vec::new()));
     let st = statuses.clone();
     let mgr = RemoteManager::new(

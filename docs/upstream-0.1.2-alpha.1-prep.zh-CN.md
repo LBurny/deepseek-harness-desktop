@@ -348,8 +348,19 @@ addStyleTag/addScriptTag 注入，不能直连 dsh 端口）复验：
 
 ## 七、npm 发布后跟版 runbook
 
-> **实施计划已就绪**：逐步任务分解见 `docs/superpowers/plans/2026-08-28-dsh-0.1.2-upgrade.md`
->（13 个任务、TDD 步骤、验收命令；本节 runbook 是它的战略视图，执行按计划文档走）。
+> **实施计划已就绪**：逐步任务分解见 `docs/superpowers/plans/2026-09-04-dsh-0.1.2-rc.1-upgrade.md`
+>（13 个任务、TDD 步骤、验收命令；本节 runbook 是它的战略视图，执行按计划文档走。
+> 2026-09-04 刷新：npm 已发 0.1.2-rc.1，执行版取代了 2026-08-28 的 alpha.1 期计划）。
+
+> **✅ rc.1 实测结论（2026-09-04 跟版完成，壳 0.5.1）**：本文 §二~§五 契约全部在真实
+> rc.1 运行时验证成立，与预研一致；实测补正三处——①RPC 参数按 typert 描述符 wire 名
+> 传（session/follow 形参 `request`、session/list 形参 `_request`，裸 args 被拒
+> arguments-invalid，见 §3.1 补正）；②follow 错误帧字段集实测
+> `["code","details","message"]`（如 `session/not-found`），RemoteError 统一封装与
+> §3.2 预期一致；③`$events` open 空 args 后 ready 帧形状 `{type:"ready",clientId,host}`
+> 实测成立。契约套件全绿（222 tests），三条红项（预设路径/needle 接收者/鉴权门）按
+> 预案修复。§八坑清单全部复核有效，其中"WS upgrade cookie 注入"与"cookie 绑端口"
+> 已固化进 AGENTS.md 三坑条目。
 
 1. **等正式版**：`curl -s https://registry.npmjs.org/@deepseek-ai/dsh` 确认目标版已发布
    （建议 `0.1.2-rc.1`+ 或 stable；alpha 期只做代码准备，且鉴权/传输必须对真实运行时联调）

@@ -77,6 +77,8 @@ const server = http.createServer((req, res) => {
 
 server.listen(port, '127.0.0.1', () => {
   console.log(`listening http://127.0.0.1:${port}`)
+  // 0.1.2 BrowserAuth：就绪后 stdout 打印带 launch token 的 URL（壳的 token 唯一来源）
+  console.log(`dsh web: http://127.0.0.1:${port}/?token=fixture-token-0123456789abcdef`)
 })
 
 // WebSocket 下行流：与真实 dsh 一致，/api/events.mux 与 /api/events.host 通过 WS 推送

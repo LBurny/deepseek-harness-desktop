@@ -1,19 +1,21 @@
-use futures::future::BoxFuture;
-use regex::Regex;
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, LazyLock, Mutex};
-use tokio::sync::watch;
+use std::sync::{Arc, Mutex};
 
 use crate::upstream;
+use crate::upstream::{
+    EVENT_API_SESSION_ADDED, EVENT_API_SESSION_REMOVED, EVENT_APPROVAL_REQUEST,
+    EVENT_USER_QUESTIONS_REQUEST,
+};
+use mux::FollowTx;
 
+pub mod mux;
 pub mod toast;
-pub mod ws;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NotifyKind {
-    /// 待批准（approval/requested）：按 settings.notify.approval 规则
+    /// 待批准（approval/request waterfall）：按 settings.notify.approval 规则
     Approval,
-    /// 待回答（question/requested）：按 settings.notify.question 规则
+    /// 待回答（user-questions/request waterfall）：按 settings.notify.question 规则
     Question,
     /// 干活回合正常完成（回合内有过 tool/call）：按 settings.notify.turn_done 规则
     TaskCompleted,
@@ -29,29 +31,10 @@ pub struct Notification {
 }
 
 pub type NotifySink = Arc<dyn Fn(Notification) + Send + Sync>;
-/// WS 帧处理器：mux/host 两个端点各配各的；sink 形参仅供 mux 使用
-pub type FrameHandler = Arc<dyn Fn(&str, &NotifySink) + Send + Sync>;
 
-/// 通知来源适配器接口。dsh 上游接口不稳定（开发者预览），
-/// 后期可加 FileWatchSource（解析 session jsonl）等替代实现。
-pub trait NotifySource: Send {
-    /// port 通过 watch 通道下发：dsh 每次 Ready（含重启换端口）都会更新。
-    fn run(self: Box<Self>, sink: NotifySink, port: watch::Receiver<Option<u16>>) -> BoxFuture<'static, ()>;
-}
-
-/// 需要用户关注的事件（server-request 帧的 method），粗筛快路径
-static ATTENTION_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(&format!(
-        r#""(method|type)"\s*:\s*"({}|{})""#,
-        upstream::METHOD_APPROVAL,
-        upstream::METHOD_QUESTION
-    ))
-    .unwrap()
-});
-
-/// 会话台账：子代理集合（来自 events.host 的 origin=subagent）+
-/// 会话标题（来自 mux 的 session/title 事件）+
-/// 当前回合是否干过活（mux 的 turn/start 清零、tool/call 置位）。
+/// 会话台账：子代理集合（$events 的 api-session/added origin=subagent）+
+/// 会话标题（follow 流的 session/title 事件）+
+/// 当前回合是否干过活（turn/start 清零、tool/call 置位）。
 #[derive(Default)]
 pub struct SessionBook {
     subagents: HashSet<String>,
@@ -97,39 +80,78 @@ impl SessionBook {
     }
 }
 
-/// mux 帧处理：approval/question → Attention 通知；session/event 里关心
-/// turn/start（清干活痕迹）、tool/call（置干活痕迹）、turn/end
-/// (reason.kind=="completed" 时按是否干过活拆分任务完成/回答完成) 与
-/// session/title。
-/// 先 contains 粗筛、命中才 JSON 解析——流式期间每 token 一帧，不能逢帧解析。
-pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook>) {
-    if ATTENTION_RE.is_match(frame) {
-        let kind = if frame.contains(upstream::METHOD_APPROVAL) {
-            NotifyKind::Approval
-        } else {
-            NotifyKind::Question
-        };
-        sink(Notification {
-            title: "DSHDesktop".into(),
-            body: summarize_attention(frame),
-            kind,
-        });
-        return;
+/// ===== 0.1.2 结构化帧处理（mux 传输；信封已在 mux.rs 分类，这里只动 value）=====
+
+/// $events 流条目处理（emit/waterfall）：
+///   - emit `api-session/added`：origin=="subagent" 记台账；否则请求开 follow
+///     （0.1.2 会话事件全走 session/follow 下行，mux 流只报会话生命周期）
+///   - emit `api-session/removed`：摘台账 + 关 follow
+///   - waterfall `approval/request` / `user-questions/request`：Attention 通知。
+///     **严禁回应 waterfall**：本层永不发 `$events/result`——任一客户端回 result
+///     即抢先替用户结算审批（prep §八.4 边界）
+pub fn handle_event_frame(
+    v: &serde_json::Value,
+    sink: &NotifySink,
+    book: &Mutex<SessionBook>,
+    follow_tx: &FollowTx,
+) {
+    match v.get("type").and_then(|t| t.as_str()) {
+        Some("emit") => {
+            let name = v.get("event").and_then(|e| e.as_str()).unwrap_or("");
+            let args = v.get("args").and_then(|a| a.as_array());
+            match name {
+                EVENT_API_SESSION_ADDED => {
+                    let Some(s) = args.and_then(|a| a.first()) else { return };
+                    let Some(id) = s.get("sessionId").and_then(|x| x.as_str()) else {
+                        return;
+                    };
+                    if s.get("origin").and_then(|o| o.as_str()) == Some(upstream::ORIGIN_SUBAGENT)
+                    {
+                        book.lock().unwrap().add_subagent(id);
+                    } else {
+                        // 非子代理会话：开 follow 流（子代理事件仍由 book 过滤，不开流）
+                        let _ = follow_tx.send(mux::FollowCmd::Open(id.into()));
+                    }
+                }
+                EVENT_API_SESSION_REMOVED => {
+                    let Some(id) = args.and_then(|a| a.first()).and_then(|x| x.as_str()) else {
+                        return;
+                    };
+                    book.lock().unwrap().remove(id);
+                    let _ = follow_tx.send(mux::FollowCmd::Close(id.into()));
+                }
+                _ => {}
+            }
+        }
+        Some("waterfall") => {
+            let kind = match v.get("event").and_then(|e| e.as_str()) {
+                Some(EVENT_APPROVAL_REQUEST) => NotifyKind::Approval,
+                Some(EVENT_USER_QUESTIONS_REQUEST) => NotifyKind::Question,
+                _ => return,
+            };
+            sink(Notification {
+                title: "DSHDesktop".into(),
+                body: summarize_waterfall(kind),
+                kind,
+            });
+        }
+        _ => {}
     }
-    if !frame.contains(upstream::METHOD_SESSION_EVENT) {
-        return;
+}
+
+/// session/follow 流条目处理：value.type=="event" 的 value.event 即旧
+/// session/event 的 event 对象（turn/start / tool/call / turn/end / session/title）。
+/// snapshot 帧忽略——历史重放不是新通知。
+pub fn handle_follow_frame(
+    session_id: &str,
+    v: &serde_json::Value,
+    sink: &NotifySink,
+    book: &Mutex<SessionBook>,
+) {
+    if v.get("type").and_then(|t| t.as_str()) != Some("event") {
+        return; // snapshot / 其他
     }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(frame) else {
-        return;
-    };
-    if v.get("method").and_then(|m| m.as_str()) != Some(upstream::METHOD_SESSION_EVENT) {
-        return;
-    }
-    let Some(payload) = v.get("payload") else { return };
-    let Some(session_id) = payload.get("sessionId").and_then(|s| s.as_str()) else {
-        return;
-    };
-    let Some(event) = payload.get("event") else { return };
+    let Some(event) = v.get("event") else { return };
     match event.get("type").and_then(|t| t.as_str()) {
         Some(upstream::EVENT_TURN_START) => {
             book.lock().unwrap().clear_worked(session_id);
@@ -147,15 +169,15 @@ pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook
             if !completed {
                 return;
             }
-            let book = book.lock().unwrap();
-            if book.is_subagent(session_id) {
+            let b = book.lock().unwrap();
+            if b.is_subagent(session_id) {
                 return;
             }
             // 干活回合（回合内有 tool/call）= 任务完成；纯文字回答 = 回答完成。
-            // WS（重）连窗口期内 turn/start 可能缺失：工具帧若都在断连前发出，
+            // follow（重）连窗口期内 turn/start 可能缺失：工具帧若都在断连前发出，
             // 会被误判成回答完成——两规则默认均开，fail-open 只是分类可能偏，不漏弹。
-            let worked = book.has_worked(session_id);
-            let body = match book.title(session_id) {
+            let worked = b.has_worked(session_id);
+            let body = match b.title(session_id) {
                 Some(t) => {
                     if worked {
                         crate::i18n::pick(format!("「{t}」任务完成"), format!("“{t}” task completed"))
@@ -176,6 +198,7 @@ pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook
             } else {
                 NotifyKind::AnswerCompleted
             };
+            drop(b);
             sink(Notification {
                 title: "DSHDesktop".into(),
                 body,
@@ -195,52 +218,22 @@ pub fn handle_mux_frame(frame: &str, sink: &NotifySink, book: &Mutex<SessionBook
     }
 }
 
-/// host 帧处理：只跟踪 session-added(origin=="subagent") / session-removed
-pub fn handle_host_frame(frame: &str, book: &Mutex<SessionBook>) {
-    let added = frame.contains(upstream::METHOD_HOST_SESSION_ADDED);
-    if !added && !frame.contains(upstream::METHOD_HOST_SESSION_REMOVED) {
-        return;
-    }
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(frame) else {
-        return;
-    };
-    let method = v.get("method").and_then(|m| m.as_str());
-    let Some(payload) = v.get("payload") else { return };
-    let Some(id) = payload.get("sessionId").and_then(|s| s.as_str()) else {
-        return;
-    };
-    match method {
-        Some(upstream::METHOD_HOST_SESSION_ADDED)
-            if payload.get("origin").and_then(|o| o.as_str()) == Some(upstream::ORIGIN_SUBAGENT) =>
-        {
-            book.lock().unwrap().add_subagent(id);
+/// approval/question 通知摘要（0.1.2 waterfall 的 request 内容不进文案，
+/// 通知只提示"有东西等你处理"——详情回界面看，与旧版文案一致）
+fn summarize_waterfall(kind: NotifyKind) -> String {
+    match kind {
+        NotifyKind::Approval => crate::i18n::pick(
+            "dsh 有一个操作等待你批准",
+            "dsh has an operation waiting for your approval",
+        ),
+        NotifyKind::Question => {
+            crate::i18n::pick("dsh 有一个问题等待你回答", "dsh has a question waiting for you")
         }
-        Some(upstream::METHOD_HOST_SESSION_REMOVED) => book.lock().unwrap().remove(id),
-        _ => {}
+        NotifyKind::TaskCompleted | NotifyKind::AnswerCompleted => String::new(),
     }
 }
 
 /// approval/question 帧的可读摘要（dsh 帧结构：{"type":"server-request","method":..,"payload":..}）
-fn summarize_attention(frame: &str) -> String {
-    let parsed = serde_json::from_str::<serde_json::Value>(frame).ok();
-    let method = parsed
-        .as_ref()
-        .and_then(|v| v.get("method"))
-        .and_then(|t| t.as_str())
-        .map(String::from);
-    match method.as_deref() {
-        Some("approval/requested") => crate::i18n::pick(
-            "dsh 有一个操作等待你批准",
-            "dsh has an operation waiting for your approval",
-        ),
-        Some("question/requested") => {
-            crate::i18n::pick("dsh 有一个问题等待你回答", "dsh has a question waiting for you")
-        }
-        Some(m) => crate::i18n::pick(format!("dsh 事件：{m}"), format!("dsh event: {m}")),
-        None => frame.chars().take(80).collect(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -249,192 +242,6 @@ mod tests {
         let store = Arc::new(Mutex::new(Vec::new()));
         let s = store.clone();
         (Arc::new(move |n| s.lock().unwrap().push(n)), store)
-    }
-
-    const APPROVAL: &str =
-        r#"{"type":"server-request","rpcId":"x","method":"approval/requested","payload":{}}"#;
-    const QUESTION: &str =
-        r#"{"type":"server-request","method":"question/requested","payload":{}}"#;
-
-    fn session_event(session_id: &str, event: &str) -> String {
-        format!(
-            r#"{{"type":"server-request","method":"session/event","payload":{{"type":"session/event","sessionId":"{session_id}","event":{event}}}}}"#
-        )
-    }
-
-    fn turn_end(seq: u32, kind: &str) -> String {
-        format!(
-            r#"{{"type":"turn/end","seq":{seq},"time":0,"data":{{"turn":1,"reason":{{"kind":"{kind}"}}}}}}"#
-        )
-    }
-
-    fn turn_start(seq: u32) -> String {
-        format!(r#"{{"type":"turn/start","seq":{seq},"time":0,"data":{{"turn":1}}}}"#)
-    }
-
-    fn tool_call(seq: u32) -> String {
-        format!(
-            r#"{{"type":"tool/call","seq":{seq},"time":0,"data":{{"callId":"c{seq}","name":"bash","arguments":"{{}}"}}}}"#
-        )
-    }
-
-    #[test]
-    fn mux_attention_events_notify() {
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(APPROVAL, &sink, &book);
-        handle_mux_frame(QUESTION, &sink, &book);
-        let got = store.lock().unwrap();
-        assert_eq!(got.len(), 2);
-        assert!(matches!(got[0].kind, NotifyKind::Approval));
-        assert!(matches!(got[1].kind, NotifyKind::Question));
-        assert_eq!(got[0].body, "dsh 有一个操作等待你批准");
-        assert_eq!(got[1].body, "dsh 有一个问题等待你回答");
-    }
-
-    #[test]
-    fn mux_worked_turn_notifies_as_task_completed() {
-        // 回合内有过 tool/call → 任务完成（走 turn_done 规则）
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(
-            &session_event(
-                "s1",
-                r#"{"type":"session/title","seq":1,"time":0,"data":{"title":"修 bug"}}"#,
-            ),
-            &sink,
-            &book,
-        );
-        handle_mux_frame(&session_event("s1", &turn_start(2)), &sink, &book);
-        handle_mux_frame(&session_event("s1", &tool_call(3)), &sink, &book);
-        handle_mux_frame(&session_event("s1", &turn_end(4, "completed")), &sink, &book);
-        let got = store.lock().unwrap();
-        assert_eq!(got.len(), 1);
-        assert!(matches!(got[0].kind, NotifyKind::TaskCompleted));
-        assert_eq!(got[0].body, "「修 bug」任务完成");
-        assert_eq!(got[0].title, "DSHDesktop");
-    }
-
-    #[test]
-    fn mux_pure_reply_notifies_as_answer_completed() {
-        // 无 tool/call 的回合 → 回答完成（走 answer_done 规则）
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(
-            &session_event(
-                "s1",
-                r#"{"type":"session/title","seq":1,"time":0,"data":{"title":"修 bug"}}"#,
-            ),
-            &sink,
-            &book,
-        );
-        handle_mux_frame(&session_event("s1", &turn_end(2, "completed")), &sink, &book);
-        let got = store.lock().unwrap();
-        assert_eq!(got.len(), 1);
-        assert!(matches!(got[0].kind, NotifyKind::AnswerCompleted));
-        assert_eq!(got[0].body, "「修 bug」回答完成");
-        assert_eq!(got[0].title, "DSHDesktop");
-    }
-
-    #[test]
-    fn mux_turn_start_clears_worked_between_turns() {
-        // 上一轮干过活、新一轮 turn/start 后纯回答 → 应算回答完成而不是任务完成
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(&session_event("s1", &turn_start(1)), &sink, &book);
-        handle_mux_frame(&session_event("s1", &tool_call(2)), &sink, &book);
-        handle_mux_frame(&session_event("s1", &turn_end(3, "completed")), &sink, &book);
-        handle_mux_frame(&session_event("s1", &turn_start(4)), &sink, &book);
-        handle_mux_frame(&session_event("s1", &turn_end(5, "completed")), &sink, &book);
-        let got = store.lock().unwrap();
-        assert_eq!(got.len(), 2);
-        assert!(matches!(got[0].kind, NotifyKind::TaskCompleted));
-        assert_eq!(got[0].body, "dsh 任务完成");
-        assert!(matches!(got[1].kind, NotifyKind::AnswerCompleted));
-        assert_eq!(got[1].body, "dsh 回答完成");
-    }
-
-    #[test]
-    fn mux_task_completed_without_title_uses_fallback() {
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(&session_event("s1", &tool_call(1)), &sink, &book);
-        handle_mux_frame(&session_event("s1", &turn_end(2, "completed")), &sink, &book);
-        let got = store.lock().unwrap();
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].body, "dsh 任务完成");
-    }
-
-    #[test]
-    fn mux_turn_end_not_completed_is_silent() {
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        for kind in ["aborted", "error", "blocked", "max-tokens"] {
-            handle_mux_frame(&session_event("s1", &turn_end(1, kind)), &sink, &book);
-        }
-        assert!(store.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn mux_ignores_other_session_events_and_garbage() {
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_mux_frame(
-            &session_event("s1", r#"{"type":"assistant/chunk","seq":1,"time":0,"data":{}}"#),
-            &sink,
-            &book,
-        );
-        handle_mux_frame(
-            r#"{"type":"server-request","method":"host/session-added","payload":{}}"#,
-            &sink,
-            &book,
-        );
-        handle_mux_frame("garbage", &sink, &book);
-        handle_mux_frame(r#"{"method":"session/event","payload": 非法"#, &sink, &book);
-        assert!(store.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn mux_skips_subagent_turn_completed() {
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_host_frame(
-            r#"{"type":"server-request","method":"host/session-added","payload":{"type":"host/session-added","sessionId":"sub1","blank":false,"origin":"subagent"}}"#,
-            &book,
-        );
-        handle_mux_frame(&session_event("sub1", &turn_end(1, "completed")), &sink, &book);
-        assert!(store.lock().unwrap().is_empty());
-        // removed 后同 id 不再按子代理过滤
-        handle_host_frame(
-            r#"{"type":"server-request","method":"host/session-removed","payload":{"type":"host/session-removed","sessionId":"sub1"}}"#,
-            &book,
-        );
-        handle_mux_frame(&session_event("sub1", &turn_end(2, "completed")), &sink, &book);
-        assert_eq!(store.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn host_added_without_origin_is_not_subagent() {
-        let (sink, store) = collecting_sink();
-        let book = Mutex::new(SessionBook::default());
-        handle_host_frame(
-            r#"{"type":"server-request","method":"host/session-added","payload":{"type":"host/session-added","sessionId":"m1","blank":true}}"#,
-            &book,
-        );
-        handle_mux_frame(&session_event("m1", &turn_end(1, "completed")), &sink, &book);
-        assert_eq!(store.lock().unwrap().len(), 1);
-    }
-
-    #[test]
-    fn host_ignores_garbage() {
-        let book = Mutex::new(SessionBook::default());
-        handle_host_frame("garbage", &book);
-        handle_host_frame(r#"{"method":"host/session-added","payload": 非法"#, &book);
-        handle_host_frame(
-            r#"{"type":"server-request","method":"host/session-status","payload":{"sessionId":"s","running":true}}"#,
-            &book,
-        );
-        assert!(!book.lock().unwrap().is_subagent("s"));
     }
 
     #[test]
@@ -448,5 +255,217 @@ mod tests {
         assert_eq!(b.title("s").as_deref(), Some("标题"));
         b.remove("s");
         assert_eq!(b.title("s"), None);
+    }
+
+    // ===== 0.1.2 结构化帧用例（对齐旧用例逐一平移，断言不变）=====
+
+    use mux::FollowCmd;
+
+    fn api_added(id: &str, origin: Option<&str>) -> serde_json::Value {
+        serde_json::json!({"type":"emit","event":"api-session/added",
+            "args":[{"sessionId":id,"origin":origin,"blank":false,"running":false}]})
+    }
+
+    fn api_removed(id: &str) -> serde_json::Value {
+        serde_json::json!({"type":"emit","event":"api-session/removed","args":[id]})
+    }
+
+    fn waterfall(name: &str, request: serde_json::Value) -> serde_json::Value {
+        serde_json::json!({"type":"waterfall","event":name,"eventId":"e1","request":request})
+    }
+
+    fn follow_event(id: &str, event: serde_json::Value) -> (String, serde_json::Value) {
+        (id.into(), serde_json::json!({"type":"event","event":event}))
+    }
+
+    fn ev_turn_end(seq: u32, kind: &str) -> serde_json::Value {
+        serde_json::json!({"type":"turn/end","seq":seq,"time":0,"data":{"turn":1,"reason":{"kind":kind}}})
+    }
+
+    fn ev_turn_start(seq: u32) -> serde_json::Value {
+        serde_json::json!({"type":"turn/start","seq":seq,"time":0,"data":{"turn":1}})
+    }
+
+    fn ev_tool_call(seq: u32) -> serde_json::Value {
+        serde_json::json!({"type":"tool/call","seq":seq,"time":0,"data":{"callId":"c","name":"bash","arguments":"{}"}})
+    }
+
+    fn ev_title(seq: u32, text: &str) -> serde_json::Value {
+        serde_json::json!({"type":"session/title","seq":seq,"time":0,"data":{"title":text}})
+    }
+
+    fn opener_channel() -> (FollowTx, Arc<Mutex<Vec<FollowCmd>>>) {
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let s = seen.clone();
+        std::thread::spawn(move || {
+            while let Some(cmd) = rx.blocking_recv() {
+                s.lock().unwrap().push(cmd);
+            }
+        });
+        (Arc::new(tx), seen)
+    }
+
+    #[test]
+    fn event_waterfall_attention_notifies() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        let (tx, _seen) = opener_channel();
+        handle_event_frame(
+            &waterfall("approval/request", serde_json::json!({"toolName":"bash"})),
+            &sink,
+            &book,
+            &tx,
+        );
+        handle_event_frame(
+            &waterfall("user-questions/request", serde_json::json!({"questions":[]}),),
+            &sink,
+            &book,
+            &tx,
+        );
+        let got = store.lock().unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(matches!(got[0].kind, NotifyKind::Approval));
+        assert!(matches!(got[1].kind, NotifyKind::Question));
+        assert_eq!(got[0].body, "dsh 有一个操作等待你批准");
+        assert_eq!(got[1].body, "dsh 有一个问题等待你回答");
+        // Attention 永不回应 $events/result（本层无回包路径——只能靠不实现保证）
+    }
+
+    #[test]
+    fn event_added_opens_follow_or_marks_subagent() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        let (tx, seen) = opener_channel();
+        // 主会话：开 follow
+        handle_event_frame(&api_added("s-main", None), &sink, &book, &tx);
+        // 子代理：记台账不开流
+        handle_event_frame(&api_added("s-sub", Some("subagent")), &sink, &book, &tx);
+        // removed：摘台账 + 关 follow
+        handle_event_frame(&api_removed("s-main"), &sink, &book, &tx);
+        // 收集线程可能晚一拍：轮询到 2 条命令（Open + Close）为止
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        loop {
+            let n = seen.lock().unwrap().len();
+            if n >= 2 || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let cmds = seen.lock().unwrap().clone();
+        assert_eq!(
+            cmds,
+            vec![
+                FollowCmd::Open("s-main".into()),
+                FollowCmd::Close("s-main".into())
+            ],
+            "只有非子代理会话触发 follow open；removed 触发 Close"
+        );
+        assert!(store.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn follow_worked_turn_notifies_as_task_completed() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        let (sid, v) = follow_event("s1", ev_title(1, "修 bug"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_turn_start(2));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_tool_call(3));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_turn_end(4, "completed"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let got = store.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(matches!(got[0].kind, NotifyKind::TaskCompleted));
+        assert_eq!(got[0].body, "「修 bug」任务完成");
+        assert_eq!(got[0].title, "DSHDesktop");
+    }
+
+    #[test]
+    fn follow_pure_reply_notifies_as_answer_completed() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        let (sid, v) = follow_event("s1", ev_title(1, "修 bug"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_turn_end(2, "completed"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let got = store.lock().unwrap();
+        assert_eq!(got.len(), 1);
+        assert!(matches!(got[0].kind, NotifyKind::AnswerCompleted));
+        assert_eq!(got[0].body, "「修 bug」回答完成");
+    }
+
+    #[test]
+    fn follow_turn_start_clears_worked_between_turns() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        let (sid, v) = follow_event("s1", ev_turn_start(1));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_tool_call(2));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_turn_end(3, "completed"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_turn_start(4));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let (sid, v) = follow_event("s1", ev_turn_end(5, "completed"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        let got = store.lock().unwrap();
+        assert_eq!(got.len(), 2);
+        assert!(matches!(got[0].kind, NotifyKind::TaskCompleted));
+        assert_eq!(got[0].body, "dsh 任务完成");
+        assert!(matches!(got[1].kind, NotifyKind::AnswerCompleted));
+        assert_eq!(got[1].body, "dsh 回答完成");
+    }
+
+    #[test]
+    fn follow_turn_end_not_completed_is_silent() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        for kind in ["aborted", "error", "blocked", "max-tokens"] {
+            let (sid, v) = follow_event("s1", ev_turn_end(1, kind));
+            handle_follow_frame(&sid, &v, &sink, &book);
+        }
+        assert!(store.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn follow_snapshot_and_garbage_are_ignored() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        // snapshot（历史重放）不触发通知
+        let (sid, v) = (
+            "s1".to_string(),
+            serde_json::json!({"type":"snapshot","header":{},"cursor":0,"records":[]}),
+        );
+        handle_follow_frame(&sid, &v, &sink, &book);
+        // 垃圾输入
+        let (sid, v) = follow_event("s1", serde_json::json!({"type":"assistant/chunk","seq":1,"time":0,"data":{}}));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        handle_follow_frame("s1", &serde_json::json!({}), &sink, &book);
+        handle_event_frame(
+            &serde_json::json!({"type":"emit","event":"settings/document-updated","args":[]}),
+            &sink,
+            &book,
+            &opener_channel().0,
+        );
+        assert!(store.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn follow_skips_subagent_turn_completed() {
+        let (sink, store) = collecting_sink();
+        let book = Mutex::new(SessionBook::default());
+        let (tx, _seen) = opener_channel();
+        handle_event_frame(&api_added("sub1", Some("subagent")), &sink, &book, &tx);
+        let (sid, v) = follow_event("sub1", ev_turn_end(1, "completed"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        assert!(store.lock().unwrap().is_empty());
+        // removed 后同 id 不再按子代理过滤
+        handle_event_frame(&api_removed("sub1"), &sink, &book, &tx);
+        let (sid, v) = follow_event("sub1", ev_turn_end(2, "completed"));
+        handle_follow_frame(&sid, &v, &sink, &book);
+        assert_eq!(store.lock().unwrap().len(), 1);
     }
 }

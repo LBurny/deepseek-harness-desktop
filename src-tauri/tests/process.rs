@@ -4,6 +4,7 @@ use dshdesktop_lib::runtime::RuntimePaths;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
+use tokio::sync::watch;
 
 struct TestPlatform;
 
@@ -97,9 +98,11 @@ fn wait_event(events: &Events, pred: impl Fn(&ProcessEvent) -> bool, timeout: Du
 async fn dsh_becomes_ready_and_stops() {
     let work = tempfile::tempdir().unwrap();
     let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
     let proc = DshProcess::spawn_supervised(
         Arc::new(TestPlatform),
         fixture_paths(work.path()),
+        token_tx,
         emit,
     );
     let s = wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
@@ -118,9 +121,11 @@ async fn dsh_restarts_after_crash() {
     let work = tempfile::tempdir().unwrap();
     std::fs::write(work.path().join("fake-dsh.exit-after"), "1500").unwrap();
     let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
     let proc = DshProcess::spawn_supervised(
         Arc::new(TestPlatform),
         fixture_paths(work.path()),
+        token_tx,
         emit,
     );
     wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
@@ -144,6 +149,46 @@ async fn dsh_restarts_after_crash() {
     let port = proc.port().expect("should be Ready again");
     let resp = reqwest::get(format!("http://127.0.0.1:{port}/")).await.unwrap();
     assert_eq!(resp.status(), 200);
+    proc.stop().await;
+    wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
+}
+
+/// 0.1.2 契约：Ready 态发出时 token 必已捕获（导航要带 ?token= 才能过 BrowserAuth），
+/// 且原始就绪行里的 token 不得进入日志事件（链接即凭据）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ready_implies_token_captured_and_logs_redacted() {
+    let work = tempfile::tempdir().unwrap();
+    let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let proc = DshProcess::spawn_supervised(
+        Arc::new(TestPlatform),
+        fixture_paths(work.path()),
+        token_tx,
+        emit,
+    );
+    wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
+    assert_eq!(
+        proc.token().as_deref(),
+        Some("fixture-token-0123456789abcdef"),
+        "Ready 时 token 必须已捕获（fake-dsh 就绪行）"
+    );
+    let logs: Vec<String> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            ProcessEvent::Log(l) => Some(l.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !logs.iter().any(|l| l.contains("fixture-token-0123456789abcdef")),
+        "日志事件不得含明文 token，实际：{logs:?}"
+    );
+    assert!(
+        logs.iter().any(|l| l.contains("token=<redacted>")),
+        "就绪行应脱敏后仍进日志，实际：{logs:?}"
+    );
     proc.stop().await;
     wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
 }

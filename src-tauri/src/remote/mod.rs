@@ -10,6 +10,7 @@ pub mod project;
 pub mod proxy;
 pub mod tunnel;
 
+use crate::dsh_session::DshCreds;
 use crate::platform::Platform;
 use proxy::{spawn_proxy, ProxyHandle};
 use rand::Rng;
@@ -121,7 +122,8 @@ pub struct RemoteManager {
     work_dir: PathBuf,
     /// dsh-home（代理上 project.rs 的 resolve/list/file 解析 workspace.json 用）
     dsh_home: PathBuf,
-    dsh_port: watch::Receiver<Option<u16>>,
+    /// dsh 凭据（端口 + launch token；0.1.2 起代理据此代持 dsh-auth cookie）
+    creds: watch::Receiver<Option<Arc<DshCreds>>>,
 }
 
 impl RemoteManager {
@@ -131,7 +133,7 @@ impl RemoteManager {
         tunnel_prefix: Vec<String>,
         work_dir: PathBuf,
         dsh_home: PathBuf,
-        dsh_port: watch::Receiver<Option<u16>>,
+        creds: watch::Receiver<Option<Arc<DshCreds>>>,
         on_event: Box<dyn Fn(RemoteEvent) + Send + Sync>,
     ) -> Self {
         Self {
@@ -152,7 +154,7 @@ impl RemoteManager {
             tunnel_prefix,
             work_dir,
             dsh_home,
-            dsh_port,
+            creds,
         }
     }
 
@@ -180,7 +182,7 @@ impl RemoteManager {
         let token: Arc<str> = generate_token().into();
         let proxy = match spawn_proxy(
             token.clone(),
-            self.dsh_port.clone(),
+            self.creds.clone(),
             self.dsh_home.clone(),
             "127.0.0.1:0".parse().unwrap(),
         )

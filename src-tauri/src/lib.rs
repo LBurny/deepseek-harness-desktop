@@ -1,12 +1,14 @@
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::Arc;
+use std::time::Duration;
 use tauri::{Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::watch;
 
 pub mod commands;
 pub mod diagnostics;
 pub mod download;
+pub mod dsh_session;
 pub mod i18n;
 pub mod mcp;
 pub mod notify;
@@ -30,7 +32,8 @@ pub mod update;
 pub mod welcome;
 pub mod zoom;
 
-use notify::{Notification, NotifySink, NotifySource};
+use notify::{Notification, NotifySink};
+use dsh_session::DshCreds;
 use process::{DshState, ProcessEvent};
 use progress::ProgressPayload;
 
@@ -217,13 +220,17 @@ pub fn run() {
                 .and_then(|w| w.url().ok())
                 .unwrap_or_else(|| Url::parse("http://tauri.localhost/").unwrap());
 
-            // dsh 就绪端口通道：Ready（含重启后）时更新，通知 WS 订阅器
-            let (port_tx, port_rx) = watch::channel::<Option<u16>>(None);
+            // dsh 凭据通道：Ready（含重启后）时更新，通知 WS 订阅器与远程代理。
+            // 0.1.2 起 token 是鉴权前提，port+token 合流成 DshCreds 一并下发
+            let (creds_tx, creds_rx) = watch::channel::<Option<Arc<DshCreds>>>(None);
+            // 0.1.2 BrowserAuth launch token 通道：stdout 就绪行捕获（Ready 时必已就绪）
+            let (token_tx, token_rx) = watch::channel::<Option<Arc<str>>>(None);
             // toast 点击激活链路（URL Protocol + AUMID 显示名）开机自检，失败落
             // events.log；幂等且 exe 换路径后自动纠正
             notify::toast::ensure_activation_registered(&handle);
             // 事件调试日志路径（与 diagnostics 用的同一份：runtime_base_dir/events.log）
             let notify_log = platform.runtime_base_dir().join("events.log");
+            let mux_log = notify_log.clone();
             let sink_handle = handle.clone();
             let sink_platform = platform.clone();
             let sink: NotifySink = Arc::new(move |n: Notification| {
@@ -301,34 +308,38 @@ pub fn run() {
                     diag(format!("toast show failed: {e}"));
                 }
             });
-            // mux（会话事件 → 通知/标题）+ host（子代理标记）双下行流，共享 SessionBook
+            // mux（会话事件 → 通知/标题）：0.1.2 单 WS 承载 $events + N 条 session/follow
             let book = Arc::new(std::sync::Mutex::new(notify::SessionBook::default()));
-            let mux_book = book.clone();
-            let mux_handler: notify::FrameHandler = Arc::new(move |frame, sink| {
-                notify::handle_mux_frame(frame, sink, &mux_book);
-            });
-            let host_book = book.clone();
-            let host_handler: notify::FrameHandler = Arc::new(move |frame, _| {
-                notify::handle_host_frame(frame, &host_book);
+            let (follow_tx, follow_rx) = tokio::sync::mpsc::unbounded_channel();
+            let handler_book = book.clone();
+            let handler_follow: notify::mux::FollowTx = Arc::new(follow_tx);
+            let mux_handler: notify::mux::MuxHandler = Arc::new(move |frame, sink| match frame {
+                notify::mux::MuxFrame::EventStream(v) => {
+                    notify::handle_event_frame(&v, sink, &handler_book, &handler_follow)
+                }
+                notify::mux::MuxFrame::Follow { session_id, value } => {
+                    notify::handle_follow_frame(&session_id, &value, sink, &handler_book)
+                }
             });
             let reconnect_book = book.clone();
+            let emit_handle_for_mux = handle.clone();
             tauri::async_runtime::spawn(
-                Box::new(notify::ws::WsSource {
-                    path: upstream::EVENTS_MUX_PATH,
-                    handler: mux_handler,
-                    on_connect: None,
-                })
-                .run(sink.clone(), port_rx.clone()),
-            );
-            tauri::async_runtime::spawn(
-                Box::new(notify::ws::WsSource {
-                    path: upstream::EVENTS_HOST_PATH,
-                    handler: host_handler,
-                    on_connect: Some(Arc::new(move || {
-                        reconnect_book.lock().unwrap().clear_subagents();
+                Box::new(notify::mux::MuxSource {
+                    events: notify::mux::MuxEvents {
+                        handler: mux_handler,
+                        // （重）连后子代理基线不可知：清空集合，fail-open 宁多弹不漏弹
+                        on_connect: Some(Arc::new(move || {
+                            reconnect_book.lock().unwrap().clear_subagents();
+                        })),
+                        follow_rx,
+                    },
+                    // 只记端口/事件名（token/cookie 不进日志）
+                    on_log: Some(Arc::new(move |line| {
+                        append_debug_line(&mux_log, &line);
+                        let _ = emit_handle_for_mux.emit("dsh-log", &line);
                     })),
                 })
-                .run(sink, port_rx.clone()),
+                .run(sink, creds_rx.clone()),
             );
 
             let source = std::env::var_os("DSHDESKTOP_RUNTIME_DIR")
@@ -482,9 +493,10 @@ pub fn run() {
                 process::DshProcess::spawn_supervised(
                     platform.clone(),
                     paths.clone(),
+                    token_tx,
                     move |event| {
                         append_debug_log(&debug_log, &event);
-                        bridge_event(&emit_handle, &nav_home, &port_tx, deployed, event);
+                        bridge_event(&emit_handle, &nav_home, &creds_tx, &token_rx, deployed, event);
                     },
                 )
             });
@@ -505,7 +517,7 @@ pub fn run() {
                 vec![],
                 remote_work_dir,
                 dsh_home,
-                port_rx,
+                creds_rx,
                 Box::new(move |ev| match ev {
                     // 链接即凭据：日志只记非敏感字段，隧道输出过 token 脱敏
                     remote::RemoteEvent::Log(l) => {
@@ -661,7 +673,8 @@ fn append_debug_log(path: &PathBuf, event: &ProcessEvent) {
 fn bridge_event(
     handle: &tauri::AppHandle,
     home_url: &Url,
-    port_tx: &watch::Sender<Option<u16>>,
+    creds_tx: &watch::Sender<Option<Arc<DshCreds>>>,
+    token_rx: &watch::Receiver<Option<Arc<str>>>,
     deployed: bool,
     event: ProcessEvent,
 ) {
@@ -681,16 +694,49 @@ fn bridge_event(
                 );
             }
             DshState::Ready { port } => {
-                let _ = port_tx.send(Some(port));
                 let _ = handle.emit("dsh-ready", serde_json::json!({ "port": port }));
                 let _ = handle.emit(
                     "dsh-progress",
                     ProgressPayload::new("ready", i18n::pick("正在打开界面…", "Opening interface…"), Some(100)),
                 );
                 if let Some(w) = handle.get_webview_window("main") {
-                    if let Ok(url) = Url::parse(&format!("http://127.0.0.1:{port}/")) {
-                        let _ = w.navigate(url);
-                    }
+                    // 0.1.2 导航必须带 ?token= 过 BrowserAuth。Ready 门控保证 token
+                    // 已捕获，这里 30s 等待只是兜底（超时退回裸 URL 不白屏——会落
+                    // dsh 401 页但可读）。token 到手同时发 DshCreds（端口+token 合流，
+                    // 订阅方：MuxSource 通知流、远程代理 cookie 代持）
+                    let mut token_rx = token_rx.clone();
+                    let creds_tx = creds_tx.clone();
+                    let w = w.clone();
+                    let handle = handle.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let mut token: Option<Arc<str>> = token_rx.borrow().clone();
+                        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+                        while token.is_none() && tokio::time::Instant::now() < deadline {
+                            if token_rx.changed().await.is_err() {
+                                break;
+                            }
+                            token = token_rx.borrow().clone();
+                        }
+                        if let Some(t) = &token {
+                            creds_tx.send_replace(Some(Arc::new(DshCreds {
+                                port,
+                                token: t.clone(),
+                            })));
+                        }
+                        let url_str = match &token {
+                            Some(t) => format!("http://127.0.0.1:{port}/?token={t}"),
+                            None => {
+                                let _ = handle.emit(
+                                    "dsh-log",
+                                    "[dshdesktop] 30s 未捕获 launch token，退回裸 URL（预期落 dsh 鉴权页）",
+                                );
+                                format!("http://127.0.0.1:{port}/")
+                            }
+                        };
+                        if let Ok(url) = Url::parse(&url_str) {
+                            let _ = w.navigate(url);
+                        }
+                    });
                 }
             }
             DshState::Failed(msg) => {

@@ -7,10 +7,13 @@
 //! 当前事实基线：@deepseek-ai/dsh 0.1.1-rc.2（子包为浮动区间，抓取时解析到
 //! 最新 rc；npm latest 标签可能滞后，fetch-runtime.ps1 须显式 -DshVersion）。
 //!
-//! 下一版预研：上游已打 dsh-v0.1.2-alpha.1（npm 未发布），逐条漂移核对与跟版
-//! runbook 见 docs/upstream-0.1.2-alpha.1-prep.zh-CN.md——大改三件：Web 鉴权
-//! （launch token + cookie）、事件传输重写（/api/remote.mux + $events +
-//! per-session follow）、shipped 预设搬进 dsh-agent-presets 包。
+//! 0.1.2 跟版（2026-09-04 起执行）：契约与 runbook 见
+//! docs/upstream-0.1.2-alpha.1-prep.zh-CN.md（§二~§五），执行计划见
+//! docs/superpowers/plans/2026-09-04-dsh-0.1.2-rc.1-upgrade.md——大改三件：
+//! Web 鉴权（launch token + cookie，无关闭开关）、事件传输重写
+//!（/api/remote.mux + $events + per-session follow，events.mux/host 移除）、
+//! shipped 预设搬进 dsh-agent-presets 包。迁移期间新旧词表并存
+//!（旧 EVENTS_MUX_PATH 族待全接线完成后删除）。
 
 use std::path::{Path, PathBuf};
 
@@ -53,18 +56,9 @@ pub const DSH_PORT_FLAG: &str = "--port";
 /// 影响：process.rs spawn 参数。
 pub const DSH_NO_OPEN_FLAG: &str = "--no-open";
 
-// ── 事件通道（lib.rs 接线；帧事实 notify/mod.rs 分类）────
-/// 会话事件下行（GET 返回 426，仅 WS）。影响：lib.rs WsSource、notify/ws.rs。
-pub const EVENTS_MUX_PATH: &str = "/api/events.mux";
-/// 主机事件下行（子代理 origin 标记）。影响：同上。
-pub const EVENTS_HOST_PATH: &str = "/api/events.host";
-/// server-request 帧：{"type":"server-request","method":<payload.type>,"payload":{...}}
-pub const METHOD_APPROVAL: &str = "approval/requested";
-pub const METHOD_QUESTION: &str = "question/requested";
-pub const METHOD_SESSION_EVENT: &str = "session/event";
-pub const METHOD_HOST_SESSION_ADDED: &str = "host/session-added";
-pub const METHOD_HOST_SESSION_REMOVED: &str = "host/session-removed";
-/// session/event 的 payload.event.type 值
+// ── 事件语义（notify/mod.rs 分类；0.1.2 起经 mux 下行）────
+/// session/follow 流 value.event.type 值（0.1.1-rc.2 时为 session/event 的
+/// payload.event.type；数据形状同源，仅信封不同）
 /// 上游出处：dsh-agent-loop/lib/index.js 的 session.append（turn/start 带
 /// {turn}，turn/end 带 {turn, reason}）；tool/call 由工具执行时追加
 /// （带 callId/name/arguments），每轮 LLM 调用产出的工具调用都发一帧。
@@ -75,8 +69,52 @@ pub const EVENT_TOOL_CALL: &str = "tool/call";
 pub const EVENT_SESSION_TITLE: &str = "session/title";
 /// turn/end 的 data.reason.kind 完成值
 pub const REASON_COMPLETED: &str = "completed";
-/// host/session-added 的 payload.origin 子代理标记
+/// 会话 origin 子代理标记（0.1.1-rc.2：host/session-added payload.origin；
+/// 0.1.2：$events 的 api-session/added args[0].origin）
 pub const ORIGIN_SUBAGENT: &str = "subagent";
+
+// ── 0.1.2 传输与鉴权（BrowserAuth + 单一 mux；prep 文档 §二/§三）────────────
+/// 0.1.2 起全部远程调用走单一 WS mux（旧 events.mux/events.host 两端点已移除）。
+/// 上游出处：api/gateway/src/stream-protocol.ts:6-15（路径/帧形）；非升级 GET
+/// 由 requestRejection 拦（无 cookie 401）。影响：notify/mux.rs、proxy.rs 桥接目标。
+pub const DSH_MUX_PATH: &str = "/api/remote.mux";
+/// mux 上的全局事件流端点（cordis 事件桥）。上游出处：api/gateway/src/index.ts:398-405
+///（open 必须空 args）、:461-550（waterfall fan-out/结算）；client/stream-client.ts:97,116。
+/// 注意：壳只监听 $events，**严禁**实现 $events/result 回包——任一客户端回 result
+/// 即抢先替用户结算审批（prep §4.3/§八.4 边界）。
+pub const EVENT_STREAM_ENDPOINT: &str = "$events";
+/// waterfall 结算回包端点（仅契约文档意义；壳不调用，见上条）。
+pub const EVENT_RESULT_ENDPOINT: &str = "$events/result";
+/// turn 级会话事件流端点（per-session follow，取代旧全局 session/event 广播）。
+/// 上游出处：api/session-controller/src/index.ts:83,115,378-383（@Remote stream）；
+/// 地址形 {kind:'session', sessionId}（types.ts:387-392）。影响：notify/mux.rs。
+pub const METHOD_SESSION_FOLLOW: &str = "session/follow";
+/// HTTP RPC 探针端点（POST /api/<endpoint> 信封校验用）。
+pub const METHOD_SESSION_LIST: &str = "session/list";
+/// stdout 就绪行前缀（launch token 的唯一来源；printUrl 默认开，
+/// bundle/web-app/src/index.ts:45-56,281；就绪行晚于 HTTP 绑定，捕获必须持续 pump）。
+/// 影响：process.rs/dsh_session.rs 的 token 捕获；fetch-runtime.ps1 冒烟同款解析。
+pub const READY_URL_PREFIX: &str = "dsh web: ";
+/// dsh 会话 cookie 名前缀：dsh-auth-<base64url(sha256(authority))>，authority = Host
+/// 头（127.0.0.1:<port>）——**换端口即换新 cookie 名**。上游出处：
+/// client/connection/src/browser-auth.ts:16,106-108。影响：dsh_session.rs 换取与识别。
+pub const DSH_AUTH_COOKIE_PREFIX: &str = "dsh-auth-";
+
+// ── 0.1.2 事件词表（$events 流上的 cordis 事件名；prep §4.2 转发清单）──────
+/// 会话新增（emit，args[0]=SessionSummary；origin=="subagent" 标记子代理——取代旧
+/// host/session-added 的 payload.origin）。api/remotes/src/remote-events.ts:26-43。
+pub const EVENT_API_SESSION_ADDED: &str = "api-session/added";
+/// 会话移除（emit，args[0]=sessionId）。影响：notify/mod.rs 台账清痕 + follow 关闭。
+pub const EVENT_API_SESSION_REMOVED: &str = "api-session/removed";
+/// 粗粒度运行态（emit，(agentId, running:boolean)；完成判定的降级备选，壳未用）。
+pub const EVENT_API_SESSION_STATUS: &str = "api-session/status";
+/// 审批请求（waterfall，request={toolName, callId?, reason?}；壳只听不回）。
+pub const EVENT_APPROVAL_REQUEST: &str = "approval/request";
+/// 提问请求（waterfall，request={questions[]}；壳只听不回）。
+pub const EVENT_USER_QUESTIONS_REQUEST: &str = "user-questions/request";
+/// 设置文档更新（emit，(ns, revision)——**无键名**，主题/语言跟随继续走文件轮询，
+/// 不订阅此事件；列出仅供契约探针核对转发清单）。
+pub const EVENT_SETTINGS_UPDATED: &str = "settings/document-updated";
 
 // ── 设置文件（theme.rs 跟随 + 首启播种）──────────────────
 pub const SETTINGS_FILE: &str = "settings.yaml";
@@ -177,8 +215,14 @@ pub const PICKER_CLIENT_LOCALE_EN_NEEDLE: &str = r#""browser.showHidden": "Show 
 
 // ── 预设签名（presets.rs 只读探测；补丁器已于 rc.8 退役，MARKER 与补丁
 // 内容曾是我方产物，随补丁器一并删除）──────────────────────────────────
-/// minimal 预设目录的包内相对路径。
-pub const PRESET_DIR_SEGMENTS: &[&str] = &["config", "agent-presets", "minimal"];
+/// minimal 预设目录的 **node_modules 相对路径**（基准 = dsh_node_modules_dir）。
+/// 0.1.2 起预设从 dsh 包搬入独立的 @deepseek-ai/dsh-agent-presets 包（apps/cli 的
+/// files 收缩为 lib/*.js；上游出处：preset/agent-presets/package.json files:
+/// lib+presets）。发布形态 2026-09-04 rc.1 真实包实测落盘：
+/// dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets/minimal。
+/// 影响：tests/upstream_contract.rs probe_presets 的目录拼装（presets.rs 本身
+/// 只消费最终目录，签名判定逻辑不变）。
+pub const PRESET_DIR_SEGMENTS: &[&str] = &["@deepseek-ai", "dsh-agent-presets", "presets", "minimal"];
 pub const PRESET_COMPOSITION_FILE: &str = "agent.cordis.yml";
 /// 破损签名：引用了 PTY 持久 bash 工具。rc.8 起该行仍在但带 win32 禁用门控
 /// （上游已自修），所以单凭此 needle 命中不再意味着需要补丁。
@@ -189,9 +233,12 @@ pub const PRESET_PLATFORM_NEEDLE: &str = "win32";
 
 // ── 远程代理（remote/proxy.rs 的 bundle 改写）────────────
 /// dsh 内测声明（WelcomeNoticeStore）的持久化选择三元式。
-/// 须含 `connection.` 前缀，否则替换后残留 `connection."host"` 直接语法错误。
+/// 须含 `ctx.remote.$host.` 前缀，否则替换后残留 `ctx.remote.$host."host"` 直接
+/// 语法错误（旧版 receiver 是 `connection.`；0.1.2 构建形态变为
+/// `ctx.remote.$host.isLoopback`——2026-09-04 rc.1 实测落盘
+/// dsh-client-ui-settings/lib/client.js，全 node_modules 的 client.js 唯一命中）。
 /// 影响：proxy.rs 改写失效时内测声明每次远程连接都弹（功能不崩，静默退化）。
-pub const WELCOME_NOTICE_NEEDLE: &[u8] = br#"connection.isLoopback ? "host" : "memory""#;
+pub const WELCOME_NOTICE_NEEDLE: &[u8] = br#"ctx.remote.$host.isLoopback ? "host" : "memory""#;
 
 // ── 插件管理（plugins.rs；dsh plugin 官方入口 + 壳内置 pnpm）────────
 /// plugin 子命令与 profile 参数。上游出处：bin.js command("plugin") +
@@ -258,7 +305,8 @@ pub const MODEL_TRIGGER_EFFORT_NEEDLE: &str = "triggerEffort";
 
 // ── 预装 /init 插件的 UI 折叠锚点（resources/preseed-plugins/dsh-command-init）──
 /// 消息渲染的"用户气泡 vs 折叠上下文行"分支。实测落盘：
-/// @deepseek-ai/dsh-client-ui-conversation/lib/client.js（messageDefinition.start：
+/// @deepseek-ai/dsh-client-ui-chat/lib/client.js（0.1.2 起聊天渲染从
+/// ui-conversation 拆入 ui-chat 包，2026-09-04 rc.1 实测命中；messageDefinition.start：
 /// `event.data.source.kind !== "user"` → context 节点 → ContextInjectionRow
 /// 折叠行；kind=="user" 才渲染完整气泡）。影响面：/init 注入的长提示词靠
 /// source.kind="plugin" 落进折叠的「上下文注入」行——分支改掉则提示词重新

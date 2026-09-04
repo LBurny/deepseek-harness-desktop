@@ -1,52 +1,53 @@
+//! 远程代理集成测试（0.1.2）：cookie 代持 + 401 重放 + WS 桥接注入。
+//! 假 dsh 用 support::spawn_fake_dsh（进程内 axum，0.1.2 鉴权/栅栏/mux 全仿真），
+//! 旧 fake-dsh.cjs 只剩 tests/process.rs 与 remote_manager.rs 在用。
+
+use dshdesktop_lib::dsh_session::DshCreds;
 use dshdesktop_lib::port::free_port;
 use dshdesktop_lib::remote::proxy::{spawn_proxy, ProxyHandle, COOKIE_NAME};
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use futures::{SinkExt, StreamExt};
+use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 use tokio_tungstenite::tungstenite::client::IntoClientRequest;
 use tokio_tungstenite::tungstenite::Message;
 
-fn system_node() -> PathBuf {
-    let out = Command::new("where").arg("node").output().unwrap();
-    let stdout = String::from_utf8(out.stdout).unwrap();
-    PathBuf::from(
-        stdout
-            .lines()
-            .next()
-            .expect("node not found on PATH")
-            .trim(),
-    )
-}
+mod support;
 
-fn spawn_fixture(port: u16, work: &Path) -> std::process::Child {
-    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("tests")
-        .join("fixtures")
-        .join("fake-dsh.cjs");
-    Command::new(system_node())
-        .arg(fixture)
-        .arg("web")
-        .arg("--port")
-        .arg(port.to_string())
-        .current_dir(work)
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap()
-}
-
-/// 起代理指向 dsh_port（None 模拟 dsh 未就绪），返回 (句柄, token)
-async fn start_proxy(dsh_port: Option<u16>) -> (ProxyHandle, Arc<str>) {
+/// 起代理（creds None 模拟 dsh 未就绪）；返回 (句柄, 代理 token, creds 发送端)。
+/// creds 发送端必须由调用方持有（drop 后 watch 关闭，代理读末值仍可工作，
+/// 但中途换端口的重放用例需要活着的发送端）
+async fn start_proxy(
+    creds: Option<Arc<DshCreds>>,
+) -> (
+    ProxyHandle,
+    Arc<str>,
+    watch::Sender<Option<Arc<DshCreds>>>,
+) {
     let token: Arc<str> = dshdesktop_lib::remote::generate_token().into();
-    let (_tx, rx) = watch::channel(dsh_port);
+    let (tx, rx) = watch::channel(creds);
     // dsh-home 用一次性临时目录（keep 后不自动删除，测试进程结束由 OS 清理）
     let home = tempfile::tempdir().unwrap().keep();
     let handle = spawn_proxy(token.clone(), rx, home, "127.0.0.1:0".parse().unwrap())
         .await
         .unwrap();
-    (handle, token)
+    (handle, token, tx)
+}
+
+/// 起假 dsh，返回 (FakeDsh, scripted 注入端)
+async fn spawn_dsh() -> (support::FakeDsh, mpsc::UnboundedSender<Value>) {
+    let port = free_port().unwrap();
+    let (tx, rx) = mpsc::unbounded_channel();
+    let fake = support::spawn_fake_dsh(port, support::ScriptedFrames(rx)).await;
+    (fake, tx)
+}
+
+fn creds_for(port: u16) -> Arc<DshCreds> {
+    Arc::new(DshCreds {
+        port,
+        token: support::FIXTURE_TOKEN.into(),
+    })
 }
 
 fn client() -> reqwest::Client {
@@ -65,9 +66,8 @@ async fn get_direct(url: &str) -> reqwest::Result<reqwest::Response> {
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gate_covers_shell_routes() {
     // 门岗中间件化后：壳自有路由（/__dsh-desktop/*）同样被 token 门岗拦截。
-    // 若门岗退回 fallback 内部判断，这些显式路由会绕过鉴权（路由在 Task 4 挂上，
-    // 挂上后无凭据访问将不再是 403 而是 2xx/404——本测试就是那道闸）
-    let (handle, _token) = start_proxy(None).await;
+    // 若门岗退回 fallback 内部判断，这些显式路由会绕过鉴权——本测试就是那道闸
+    let (handle, _token, _tx) = start_proxy(None).await;
     let base = format!("http://127.0.0.1:{}", handle.port);
     for path in [
         "/__dsh-desktop/project",
@@ -96,22 +96,8 @@ fn token_is_64_hex_and_unique() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn gate_requires_token() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    // 等 fixture 就绪
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, token) = start_proxy(Some(dsh_port)).await;
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let http = client();
 
@@ -160,7 +146,7 @@ async fn gate_requires_token() {
     );
     assert!(set_cookie.contains("HttpOnly"), "cookie 应 HttpOnly");
 
-    // 4. 带 cookie → 200 且转发到 dsh
+    // 4. 带 cookie → 200 且转发到 dsh（0.1.2 假服务器回 SPA 入口 HTML）
     let r = http
         .get(format!("{base}/"))
         .header("cookie", format!("{COOKIE_NAME}={token}"))
@@ -168,15 +154,15 @@ async fn gate_requires_token() {
         .await
         .unwrap();
     assert_eq!(r.status(), 200, "带 cookie 应放行，实际 {:?}", r.status());
-    assert_eq!(r.text().await.unwrap(), "ok");
+    assert!(r.text().await.unwrap().contains("<html>"));
 
-    let _ = child.kill();
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn dsh_down_returns_503() {
-    let (proxy, token) = start_proxy(None).await;
+    let (proxy, token, _tx) = start_proxy(None).await;
     let http = client();
     let r = http
         .get(format!("http://127.0.0.1:{}/", proxy.port))
@@ -190,25 +176,12 @@ async fn dsh_down_returns_503() {
 
 /// 真实 dsh 有浏览器信任栅栏：/api 请求若 Origin.host ≠ Host 头（或
 /// sec-fetch-site: cross-site）→ 403。经隧道远程访问时浏览器带的是
-/// trycloudflare 域名的 Origin，代理转发前必须剥掉这些浏览器标记头，
-/// 否则页面上所有 RPC 调用（agentPreset.list/settings.describe/…）全 403。
+/// trycloudflare 域名的 Origin，代理转发前必须剥掉这些浏览器标记头。
+/// 0.1.2 增补：转发还必须携带代持的 dsh-auth cookie（假服务器侧记录验证）。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn forward_strips_browser_marker_headers() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, token) = start_proxy(Some(dsh_port)).await;
+async fn forward_strips_browser_marker_headers_and_carries_dsh_cookie() {
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let r = client()
         .post(format!("{base}/api/agentPreset.list"))
@@ -230,89 +203,84 @@ async fn forward_strips_browser_marker_headers() {
         "带隧道 Origin 的 RPC 经代理后不应触发 dsh 栅栏，实际 {:?}",
         r.status()
     );
-
-    let _ = child.kill();
+    // 假服务器侧：这次 /api 转发必须带上了代持的 dsh-auth cookie
+    let hits = fake.api_hits.lock().unwrap().clone();
+    assert!(
+        hits.iter()
+            .any(|(path, authed)| path.contains("agentPreset.list") && *authed),
+        "转发应携带 dsh-auth cookie，实际 hits：{:?}",
+        hits
+    );
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_bridged_with_cookie() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, token) = start_proxy(Some(dsh_port)).await;
-    let url = format!("ws://127.0.0.1:{}/api/events.mux", proxy.port);
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
+    let url = format!("ws://127.0.0.1:{}/api/remote.mux", proxy.port);
     let mut req = url.into_client_request().unwrap();
     req.headers_mut()
         .insert("cookie", format!("{COOKIE_NAME}={token}").parse().unwrap());
     let (mut ws, _) = tokio_tungstenite::connect_async(req)
         .await
         .expect("带 cookie 的 WS 握手应成功");
-
-    use futures::StreamExt;
-    let deadline = Instant::now() + Duration::from_secs(15);
-    let mut got_heartbeat = false;
-    while Instant::now() < deadline {
-        match tokio::time::timeout(Duration::from_secs(5), ws.next()).await {
-            Ok(Some(Ok(Message::Text(t)))) if t.as_str().contains("heartbeat") => {
-                got_heartbeat = true;
-                break;
+    // 客户端 open $events 应经桥到达假 dsh（桥侧须注入 dsh-auth cookie，0.1.2 起
+    // 漏注入 = 页面开但全断）并回 ready 帧
+    ws.send(Message::Text(
+        json!({"type":"open","streamId":"p1","endpoint":"$events","payload":{"args":{}}})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let got_ready = tokio::time::timeout(Duration::from_secs(15), async {
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(t) = msg {
+                if t.as_str().contains("\"type\":\"ready\"") {
+                    return true;
+                }
             }
-            Ok(Some(Ok(_))) => continue,
-            other => panic!("WS 读帧异常：{other:?}"),
         }
-    }
+        false
+    })
+    .await
+    .unwrap_or(false);
+    let bridged = fake
+        .opens
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|o| o.contains("$events"));
 
-    let _ = child.kill();
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
-    assert!(got_heartbeat, "15s 内应经代理收到 heartbeat 帧");
+    assert!(bridged, "桥接应已建立并 open $events");
+    assert!(got_ready, "open $events 后应经桥收到 ready 帧");
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_rejected_without_cookie() {
-    let (proxy, _token) = start_proxy(None).await;
-    let url = format!("ws://127.0.0.1:{}/api/events.mux", proxy.port);
+    let (proxy, _token, _tx) = start_proxy(None).await;
+    let url = format!("ws://127.0.0.1:{}/api/remote.mux", proxy.port);
     let req = url.into_client_request().unwrap();
     let result = tokio_tungstenite::connect_async(req).await;
     assert!(result.is_err(), "无 cookie 的 WS 握手应被拒");
     proxy.shutdown().await;
 }
 
-/// 远程访问的页面源是隧道域名（非 loopback），dsh 的“内测声明”因此用内存
+/// 远程访问的页面源是隧道域名（非 loopback），dsh 的"内测声明"因此用内存
 /// 确认、每次访问都弹窗。代理把插件 bundle 里的持久化选择三元式
 /// `isLoopback ? "host" : "memory"` 改写为 `"host"`，确认落 settings.yaml。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn rewrites_welcome_notice_persistence_in_plugin_bundle() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, token) = start_proxy(Some(dsh_port)).await;
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let http = client();
 
-    // 插件 bundle：三元式应被改写为 "host"
+    // 插件 bundle：三元式应被改写为 "host"（0.1.2 needle 带 $host 接收者前缀）
     let r = http
         .get(format!("{base}/plugins/fake/client.js?rev=1"))
         .header("cookie", format!("{COOKIE_NAME}={token}"))
@@ -327,7 +295,7 @@ async fn rewrites_welcome_notice_persistence_in_plugin_bundle() {
     );
     let body = r.text().await.unwrap();
     assert!(
-        body.contains(r#"connection.api, "host""#),
+        body.contains(r#"ctx.remote.$host, "host""#),
         "三元式应被改写为 \"host\"，实际：{body}"
     );
     assert!(
@@ -343,9 +311,9 @@ async fn rewrites_welcome_notice_persistence_in_plugin_bundle() {
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(r.text().await.unwrap(), "ok");
+    assert!(r.text().await.unwrap().contains("<html>"));
 
-    let _ = child.kill();
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
 
@@ -353,21 +321,8 @@ async fn rewrites_welcome_notice_persistence_in_plugin_bundle() {
 /// 侧栏抽屉化等 @media ≤700px 规则）。无 </head> 或非 HTML 一律原文透传。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn injects_mobile_css_into_html_documents() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, token) = start_proxy(Some(dsh_port)).await;
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let http = client();
 
@@ -428,7 +383,7 @@ async fn injects_mobile_css_into_html_documents() {
     let body = r.text().await.unwrap();
     assert_eq!(body, "<!doctype html><html><body>no head</body></html>");
 
-    // 3. 非 HTML（text/plain）：不受影响
+    // 3. 非 HTML（text/html 以外的 SPA 入口也注入；text/plain 不受影响）
     let r = http
         .get(format!("{base}/"))
         .header("cookie", format!("{COOKIE_NAME}={token}"))
@@ -437,15 +392,15 @@ async fn injects_mobile_css_into_html_documents() {
         .await
         .unwrap();
     assert_eq!(r.status(), 200);
-    assert_eq!(r.text().await.unwrap(), "ok");
+    assert!(r.text().await.unwrap().contains("<html>"));
 
-    let _ = child.kill();
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn shutdown_stops_listener() {
-    let (proxy, _token) = start_proxy(Some(1)).await;
+    let (proxy, _token, _creds_tx) = start_proxy(Some(creds_for(1))).await;
     let url = format!("http://127.0.0.1:{}/", proxy.port);
     let r = get_direct(&url).await.unwrap();
     assert_eq!(r.status(), 403);
@@ -464,21 +419,8 @@ async fn shutdown_stops_listener() {
 /// 代理与隧道都不重启，端口不变。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reset_token_revokes_old_credential() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, old_token) = start_proxy(Some(dsh_port)).await;
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, old_token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
     let base = format!("http://127.0.0.1:{}", proxy.port);
     let http = client();
     let old_port = proxy.port;
@@ -528,7 +470,7 @@ async fn reset_token_revokes_old_credential() {
         .unwrap();
     assert_eq!(r.status(), 200, "新 cookie 应放行");
 
-    let _ = child.kill();
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
 
@@ -536,22 +478,9 @@ async fn reset_token_revokes_old_credential() {
 /// 仍能持续收事件流，重置形同虚设。
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn reset_token_drops_live_ws() {
-    let dsh_port = free_port().unwrap();
-    let work = tempfile::tempdir().unwrap();
-    let mut child = spawn_fixture(dsh_port, work.path());
-    let deadline = Instant::now() + Duration::from_secs(15);
-    loop {
-        if let Ok(r) = get_direct(&format!("http://127.0.0.1:{dsh_port}/")).await {
-            if r.status().is_success() {
-                break;
-            }
-        }
-        assert!(Instant::now() < deadline, "fixture 15s 内未就绪");
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
-
-    let (proxy, token) = start_proxy(Some(dsh_port)).await;
-    let url = format!("ws://127.0.0.1:{}/api/events.mux", proxy.port);
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
+    let url = format!("ws://127.0.0.1:{}/api/remote.mux", proxy.port);
     let mut req = url.into_client_request().unwrap();
     req.headers_mut()
         .insert("cookie", format!("{COOKIE_NAME}={token}").parse().unwrap());
@@ -559,10 +488,26 @@ async fn reset_token_drops_live_ws() {
         .await
         .expect("带 cookie 的 WS 握手应成功");
 
-    use futures::StreamExt;
-    // 确认桥接已通（能收到 fixture 心跳）
-    let first = tokio::time::timeout(Duration::from_secs(10), ws.next()).await;
-    assert!(matches!(first, Ok(Some(Ok(_)))), "桥接应已建立：{first:?}");
+    // 确认桥接已通（open $events → ready 帧回来）
+    ws.send(Message::Text(
+        json!({"type":"open","streamId":"p1","endpoint":"$events","payload":{"args":{}}})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let first = tokio::time::timeout(Duration::from_secs(10), async {
+        while let Some(Ok(msg)) = ws.next().await {
+            if let Message::Text(t) = msg {
+                if t.as_str().contains("\"type\":\"ready\"") {
+                    return true;
+                }
+            }
+        }
+        false
+    })
+    .await;
+    assert!(matches!(first, Ok(true)), "桥接应已建立（ready 帧回来）：{first:?}");
 
     let new_token: Arc<str> = dshdesktop_lib::remote::generate_token().into();
     proxy.reset_token(new_token);
@@ -579,7 +524,57 @@ async fn reset_token_drops_live_ws() {
     .await;
     assert!(closed.is_ok(), "重置后已建立的 WS 应在 5s 内被掐断");
 
-    let _ = child.kill();
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
 
+/// 0.1.2 cookie 代持的失效重放：dsh 重启换端口后旧 cookie 全失效——代理转发得
+/// 401 → 清缓存按新 creds 重换 → 重放一次拿到 200（只重放一次防环）
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn stale_cookie_refreshes_on_401() {
+    let (fake_a, _tx) = spawn_dsh().await;
+    let (fake_b, _tx2) = spawn_dsh().await;
+    let (proxy, proxy_token, creds_tx) = start_proxy(Some(creds_for(fake_a.port))).await;
+    let base = format!("http://127.0.0.1:{}", proxy.port);
+    let http = client();
+
+    // 第一次：走 fake A，缓存下 A 的 cookie
+    let r = http
+        .get(format!("{base}/"))
+        .header("cookie", format!("{COOKIE_NAME}={proxy_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200, "首次转发应成功（cookie A 已缓存）");
+
+    // dsh 重启：creds 换到 B（端口变了 → A 的 cookie 绑定旧 authority，必 401）
+    creds_tx.send_replace(Some(creds_for(fake_b.port)));
+    let r = http
+        .get(format!("{base}/"))
+        .header("cookie", format!("{COOKIE_NAME}={proxy_token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        200,
+        "401 后应重换 cookie 并重放成功，实际 {:?}",
+        r.status()
+    );
+    // B 侧页面命中记录：重放成功的请求应带上了 B 的新 cookie
+    let hits = fake_b.api_hits.lock().unwrap().clone();
+    assert!(
+        hits.iter().any(|(path, authed)| path == "/" && *authed),
+        "重放请求应携带 B 的新 cookie，实际 hits：{:?}",
+        hits
+    );
+    let rejected = hits
+        .iter()
+        .filter(|(path, _)| path == "/")
+        .any(|(_, authed)| !authed);
+    assert!(rejected, "旧 cookie 应先在 B 上被拒 401，实际 hits：{:?}", hits);
+
+    fake_a.shutdown.notify_one();
+    fake_b.shutdown.notify_one();
+    proxy.shutdown().await;
+}

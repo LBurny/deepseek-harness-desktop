@@ -1,10 +1,10 @@
 ﻿# 下载并组装内嵌运行时：Node.js win-x64 便携版 + @deepseek-ai/dsh（含 node_modules）。
 # 产物写入 src-tauri/runtime/<triplet>/，供 tauri.conf.json 的 bundle.resources 打包。
-# 用法：powershell -File scripts/fetch-runtime.ps1 [-NodeVersion 24.19.0] [-DshVersion 0.1.1-rc.2] [-CloudflaredVersion 2026.8.2]
+# 用法：powershell -File scripts/fetch-runtime.ps1 [-NodeVersion 24.19.0] [-DshVersion 0.1.2-rc.1] [-CloudflaredVersion 2026.8.2]
 [CmdletBinding()]
 param(
   [string]$NodeVersion = '24.19.0',
-  [string]$DshVersion = '0.1.1-rc.2',
+  [string]$DshVersion = '0.1.2-rc.1',
   [string]$CloudflaredVersion = '2026.8.2',
   [string]$PnpmVersion = '11.22.0',
   [string]$Triplet = 'windows-x64'
@@ -78,17 +78,38 @@ if ($LASTEXITCODE -ne 0) { throw 'dsh bin.js --help 冒烟失败' }
 # 5. 精简运行时（删除文档/测试/类型声明/非 win32-x64 二进制等，约省 100+MB）
 & (Join-Path $PSScriptRoot 'prune-runtime.ps1') -RuntimeDir $dest
 
-# 6. 冒烟：真实拉起 web 服务并验证 200 响应（含前端 dist 是否随包发布）
+# 6. 冒烟：真实拉起 web 服务并验证鉴权链路（含前端 dist 是否随包发布）。
+#    0.1.2 起 BrowserAuth 无关闭开关、回环也在门内：GET / 无凭证恒 401，
+#    必须从 stdout 就绪行取一次性 launch token 换 cookie 才能拿到 200——
+#    顺带把就绪行契约（壳 process.rs 的 token 捕获依据）与鉴权门一并冒烟。
+#    就绪行晚于 HTTP 绑定（Loader 树装配完才打印），要持续 poll 输出。
 $smokePort = 39871
 $env:DSH_HOME = Join-Path $env:TEMP 'dsh-smoke-home'
 Write-Host "冒烟启动 dsh web --port $smokePort ..."
-$job = Start-Job -ScriptBlock { param($n, $b, $p) & $n $b web --port $p } -ArgumentList $nodeExe, $bin, $smokePort
-$ok = $false
+# 与壳 spawn 形一致带 --no-open（openBrowser 默认 true，不带每次冒烟都弹系统浏览器）
+$job = Start-Job -ScriptBlock { param($n, $b, $p) & $n $b web --port $p --no-open 2>&1 } -ArgumentList $nodeExe, $bin, $smokePort
+$token = $null
 foreach ($i in 1..60) {
+  $out = (Receive-Job $job -Keep) | Out-String
+  $m = [regex]::Match($out, 'dsh web: http://127\.0\.0\.1:\d+/\?token=([A-Za-z0-9_-]+)')
+  if ($m.Success) { $token = $m.Groups[1].Value; break }
+  Start-Sleep -Milliseconds 500
+}
+$gateOk = $false
+$ok = $false
+if ($token) {
+  # 门：无凭证 GET / 必须 401（0.1.2 前是 200——此处若拿到 200 反而说明鉴权没生效）
   try {
-    $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$smokePort/" -TimeoutSec 1
-    if ($r.StatusCode -eq 200) { $ok = $true; break }
-  } catch { Start-Sleep -Milliseconds 500 }
+    Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$smokePort/" -TimeoutSec 2 | Out-Null
+  } catch {
+    $gateOk = ($null -ne $_.Exception.Response -and [int]$_.Exception.Response.StatusCode -eq 401)
+  }
+  # token 交换：IWR 自动跟随 303，SessionVariable 接住 Set-Cookie 并带进后续请求；
+  # 最终 200 = dist 随包发布 + cookie 链路可用
+  try {
+    $r = Invoke-WebRequest -UseBasicParsing "http://127.0.0.1:$smokePort/?token=$token" -SessionVariable smokeSess -TimeoutSec 5
+    $ok = ($r.StatusCode -eq 200)
+  } catch { $ok = $false }
 }
 # 清理：杀掉 job 及其 node 子进程
 Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
@@ -96,8 +117,10 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Stop-Job $job -ErrorAction SilentlyContinue
 Remove-Job $job -Force -ErrorAction SilentlyContinue
-if (-not $ok) { throw 'dsh web 冒烟失败：60 次探测未得到 200' }
-Write-Host 'dsh web 冒烟通过（HTTP 200）'
+if (-not $token) { throw 'dsh web 冒烟失败：stdout 未出现就绪行（token）——上游就绪行契约漂移？' }
+if (-not $gateOk) { throw 'dsh web 冒烟失败：无凭证 GET / 不是 401——BrowserAuth 门形态变了' }
+if (-not $ok) { throw 'dsh web 冒烟失败：token 交换后 GET / 未得 200' }
+Write-Host 'dsh web 冒烟通过（401 门 + token 交换 + 鉴权 GET / = 200）'
 
 # 7. pnpm standalone（壳内置：dsh plugin 的 spawnSync("pnpm") 经 pnpm.cmd 解析到它；
 #    包结构 bin/pnpm.cjs -> ./pnpm.mjs -> ../dist/pnpm.mjs，dist 是 14MB 全量 bundle，
