@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.10] - 2026-09-05
+
+### Fixed
+
+- **覆盖安装/应用内更新不再弹 "Unable to uninstall!"**（用户反馈：更新下载后装不上，老问题复发）。模板该弹窗有两个触发条件：`_?=` 原地运行的旧卸载器退出码非 0，或卸载后主程序 exe 仍存在（`PageLeaveReinstall` 复检）。排障实测定位到两类引爆点：①`install_update` 裸启动安装包不传 `/UPDATE`（Tauri 官方 updater 插件恒传），升级必经"先卸载旧版"步骤，整个失败类才有机会发生；②卸载时序窗口：用户快速连点时，旧卸载器的 `CheckIfAppIsRunning` 会撞上正在自行退出（quit_app 停 dsh 等 1.5s）的主程序，杀进程后仅 500ms 就 Delete 主程序 exe，而 Windows 系统组件（Defender/PCA）对刚退出的进程映像持柄 1~3s（本机实测锁窗口 ~1.3s，19MB exe + 机械盘 + 杀软扫描），Delete 静默失败、退出码仍 0 → 触发条件②。修复：应用内更新改传 `/UPDATE /P /R`——更新模式下模板跳过卸载步骤直接覆盖安装（旧卸载器不参与，整个失败类无从发生）、只显进度条免逐页点击、装完自动拉起新版形成闭环；NSIS 钩子在等净进程后再等主程序与 runtime 两件 exe 可独占打开（15s 封顶，超时照常继续不劣于旧行为），把手动流残余竞态窗口压到最小。**已知残留**：从 0.5.9 手动双击 0.5.10 安装包并选"卸载后再安装"仍由旧版（无等锁）卸载器执行，快速连点+应用刚退出时可能复现——改选"不卸载"直接覆盖，或退出应用半分钟后再装即可避开；应用内更新无此问题
+- **远程链接跨更新保持真正落地**（0.5.8 语义此前在真实更新路径被破坏，每次更新必断链）：`install_update` 不传 `/UPDATE` 时模板调旧卸载器也不带 `/UPDATE`，旧卸载器 POSTUNINSTALL 按"真卸载"杀常驻隧道、删 `remote-session.json`（0.5.8→0.5.9 实锤：装完启动无 auto-resume，只能手动重开换新链接）。修复双保险：①应用内更新走 /UPDATE 模式，旧卸载器根本不运行；②POSTUNINSTALL 清理前检测父进程——父进程是新安装器（`DSHDesktop_*_x64-setup.exe`，模板 `_?=` 原地调用的升级卸载场景）则跳过隧道清理，手动双击安装包的升级流同样保链；真卸载（设置/开始菜单，自我复制到 %TEMP%，父进程链不匹配）与 WMI 查询失败时照常清理（fail-closed 保卸载卫生）
+- **/UPDATE 覆盖安装的运行时卫生**：更新模式不经过旧卸载器，旧版 runtime 树无人清理——PREINSTALL 钩子装前自清 `$INSTDIR\runtime`（`RMDir /r /REBOOTOK`），防旧版独有文件（含 dsh 自更新残留）跨版本混杂；非更新路径旧卸载器已删净，重复清理是无害 no-op
+
+### Known Issues（排障备忘）
+
+- NSIS `_?=` 开关必须是卸载器命令行的**最后一个**参数：它之后的所有内容会被吞进 `$INSTDIR`（如 `_?=F:\DSHDesktop /S` 会让 `$INSTDIR` 变成 `F:\DSHDesktop /S`，Delete 全部打空、退出码仍 0）——Tauri 模板自身把 `_?=$4` 放最后是对的，但任何手工复现/脚本化测试放错顺序会得到假的"卸载失败"现象（本次排障实踩一轮）
+
 ## [0.5.9] - 2026-09-05
 
 ### Changed

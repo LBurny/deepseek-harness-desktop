@@ -21,6 +21,14 @@
 ; _?= 原地运行的旧卸载器都在树上，覆盖安装中途全部凭空消失，新版本永远装不上。
 ; 子进程回收不依赖 /T：>=0.1.9 的子进程全部挂在 KILL_ON_JOB_CLOSE Job 里，
 ; 主程序一死内核连带回收；<=0.1.8 遗留孤儿由下面的按路径清扫兜底。
+;
+; 0.5.10 修复：进程死亡 ≠ exe 文件锁释放。Windows 系统组件（Defender/PCA）会对
+; 刚退出的进程映像保持短暂句柄（本机实测 19MB 主程序+机械盘锁窗口 ~1.3s），而模板
+; CheckIfAppIsRunning 杀完主程序仅 500ms 就 Delete——快速连点+应用正在自行退出时
+; Delete 撞锁静默失败（退出码仍 0），新安装器模板 FileExists 复检弹
+; "Unable to uninstall!"；/UPDATE 覆盖路径 File 写主程序撞锁则直接 "Can't write" 中止。
+; 故等净进程后再等三个 exe 可独占打开（主程序 + runtime 的 node/cloudflared），
+; 15s 封顶超时也照常继续（不劣于旧行为）。
 
 !macro DSHDESKTOP_KILL_STRAY_RUNTIME_PROCESSES
   ; 1) 主程序仍在运行：杀它（/F 强制），Job Object 随其死亡连带回收整棵子进程树。
@@ -35,6 +43,12 @@
   nsExec::ExecToStack "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$self = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $$PID)).ParentProcessId; Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$INSTDIR\*' -and $$_.ProcessId -ne $$self } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }; $$deadline = (Get-Date).AddSeconds(10); do { Start-Sleep -Milliseconds 400; $$left = @(Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$INSTDIR\*' -and $$_.ProcessId -ne $$self }) } while ($$left.Count -gt 0 -and (Get-Date) -lt $$deadline)$\""
   Pop $0
   Pop $1
+  ; 3) 进程没了还要等 exe 文件锁释放（0.5.10，见文件头注释）：逐个试独占打开
+  ;    主程序与 runtime 两大件，全通或 15s 超时为止。独立第二次 nsExec 调用：
+  ;    NSIS 字符串长度有限，与上面的清扫命令合并会超限。
+  nsExec::ExecToStack "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$probes = @('$INSTDIR\DSHDesktop.exe', '$INSTDIR\runtime\windows-x64\node.exe', '$INSTDIR\runtime\windows-x64\cloudflared.exe') | Where-Object { Test-Path $$_ }; $$dl = (Get-Date).AddSeconds(15); while ($$probes.Count -gt 0 -and (Get-Date) -lt $$dl) { $$locked = $$false; foreach ($$f in $$probes) { try { $$fs = [System.IO.File]::Open($$f, 'Open', 'ReadWrite', 'None'); $$fs.Close() } catch { $$locked = $$true } }; if (-not $$locked) { break }; Start-Sleep -Milliseconds 300 }$\""
+  Pop $0
+  Pop $1
   ; 进程对象销毁到句柄完全释放还有一瞬，再补 500ms
   Sleep 500
 !macroend
@@ -42,6 +56,11 @@
 !macro NSIS_HOOK_PREINSTALL
   DetailPrint "Stopping DSHDesktop background processes..."
   !insertmacro DSHDESKTOP_KILL_STRAY_RUNTIME_PROCESSES
+  ; /UPDATE 覆盖安装（0.5.10 起 install_update 恒传 /UPDATE，模板跳过卸载步骤直接
+  ; 覆盖）不经过旧卸载器，POSTUNINSTALL 的 runtime 清理不会执行——装前自清，
+  ; 防旧版独有文件（含 dsh 自更新残留）跨版本混杂。非更新路径旧卸载器已删净，
+  ; 重复 RMDir 是无害 no-op。/REBOOTOK：个别文件仍被锁时排重启删除兜底。
+  RMDir /r /REBOOTOK "$INSTDIR\runtime"
 !macroend
 
 !macro NSIS_HOOK_PREUNINSTALL
@@ -58,13 +77,26 @@
 
   ; 0.5.8 起远程会话持久化：常驻隧道副本与状态文件在 $INSTDIR 之外
   ; （%LOCALAPPDATA%\DSHDesktop\），上面的 $INSTDIR 清扫碰不到。
-  ; /UPDATE 模式（覆盖安装时新版安装器原地调用旧卸载器）必须留活——
-  ; 杀了则更新后链接失效，违背持久化语义；真卸载才连锅端。
+  ; 仅在"真卸载"时连锅端。两类升级/覆盖场景必须留活（杀了则更新后链接失效，
+  ; 违背持久化语义）：
+  ;   ① /UPDATE 模式（0.5.10 起 install_update 恒传；模板在更新模式下根本不运行
+  ;      本卸载器，此分支只是兜底）；
+  ;   ② 手动双击新安装包选"先卸载"：模板以 _?= 原地调用本卸载器且不带 /UPDATE，
+  ;      此时父进程是新安装器 DSHDesktop_*_x64-setup.exe（0.5.9 实踩：该路径
+  ;      UpdateMode=0，隧道被杀、remote-session.json 被删，链接每次手动更新都断）。
+  ; 真卸载（设置/开始菜单）自我复制到 %TEMP% 运行，父进程链已死或为 explorer，
+  ; 不匹配模式 → 照常清理；WMI 查询失败同样清理（fail-closed 保卸载卫生，
+  ; 与旧版行为一致）。
   ${If} $UpdateMode <> 1
-    nsExec::ExecToStack "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$LOCALAPPDATA\DSHDesktop\tunnel\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }$\""
+    nsExec::ExecToStack "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"$$up = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $$PID)).ParentProcessId; $$caller = (Get-CimInstance Win32_Process -Filter ('ProcessId=' + $$up)).ParentProcessId; $$callerProc = Get-CimInstance Win32_Process -Filter ('ProcessId=' + $$caller); if ($$callerProc -and $$callerProc.Name -like 'DSHDesktop_*_x64-setup.exe') { exit 0 } else { exit 1 }$\""
     Pop $0
     Pop $1
-    RMDir /r /REBOOTOK "$LOCALAPPDATA\DSHDesktop\tunnel"
-    Delete /REBOOTOK "$LOCALAPPDATA\DSHDesktop\remote-session.json"
+    ${If} $0 <> 0
+      nsExec::ExecToStack "$SYSDIR\WindowsPowerShell\v1.0\powershell.exe -NoProfile -ExecutionPolicy Bypass -Command $\"Get-CimInstance Win32_Process | Where-Object { $$_.ExecutablePath -like '$LOCALAPPDATA\DSHDesktop\tunnel\*' } | ForEach-Object { Stop-Process -Id $$_.ProcessId -Force -ErrorAction SilentlyContinue }$\""
+      Pop $0
+      Pop $1
+      RMDir /r /REBOOTOK "$LOCALAPPDATA\DSHDesktop\tunnel"
+      Delete /REBOOTOK "$LOCALAPPDATA\DSHDesktop\remote-session.json"
+    ${EndIf}
   ${EndIf}
 !macroend

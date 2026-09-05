@@ -254,6 +254,19 @@ pub async fn download_update(
     Ok(final_path.to_string_lossy().to_string())
 }
 
+/// 安装包启动参数（与 Tauri 官方 updater 插件对齐，其恒传 /UPDATE）：
+/// - `/UPDATE`：模板进入更新模式——跳过"先卸载旧版"页与 ExecWait 旧卸载器，
+///   直接覆盖安装。旧卸载器不参与 => ①不可能再因旧卸载器 Delete 主程序撞
+///   文件锁而弹 "Unable to uninstall!"（0.5.9 实踩）；②常驻隧道与
+///   remote-session.json 不动，远程链接跨更新保持（0.5.8 语义落地）。
+/// - `/P`：被动模式，只显进度条免逐页点击（GUI 模式下"已安装"页仍显示且
+///   单选钮被 PageLeaveReinstall 强制忽略，UX 误导，故不用裸 /UPDATE）。
+/// - `/R`：被动/静默模式装完由 .onInstSuccess 自动拉起主程序，形成
+///   "点立即安装 → 进度条 → 新版自动起来"闭环。
+pub(crate) fn installer_args() -> &'static [&'static str] {
+    &["/UPDATE", "/P", "/R"]
+}
+
 /// 运行已下载的安装包，随后本进程走正常退出流程（quit_app：停 dsh、1.5s 后 exit）。
 /// 必须退出：安装包是本进程的子进程，而 NSIS 钩子会 taskkill 主程序——本进程不死，
 /// 旧版钩子的 /T 会连整棵进程树（含安装器与 _?= 原地运行的旧卸载器）一起杀掉，
@@ -267,6 +280,7 @@ pub fn install_update(app: AppHandle, path: String) -> Result<(), String> {
         return Err(crate::i18n::pick("安装包路径无效", "Invalid installer path").into());
     }
     std::process::Command::new(&p)
+        .args(installer_args())
         .spawn()
         .map_err(|e| {
             crate::i18n::pick(
@@ -443,6 +457,84 @@ mod tests {
         assert!(
             !taskkill_line.contains("/T"),
             "taskkill must not kill the whole tree (installer self-kill): {taskkill_line}"
+        );
+    }
+
+    #[test]
+    fn install_update_runs_installer_in_update_mode() {
+        // 0.5.10 修复：install_update 必须带 /UPDATE——Tauri NSIS 模板仅在更新模式下
+        // 跳过"先卸载旧版"步骤（PageLeaveReinstall 的 ExecWait _?= 旧卸载器 +
+        // FileExists 主程序检查，两个触发条件：卸载器退出码非 0 / exe 卸载后仍存在）。
+        // 不带 /UPDATE 时：①整个卸载步骤的时序竞态窗口都会暴露（模板
+        // CheckIfAppIsRunning 杀进程后仅 500ms 就 Delete 主程序，而系统组件对刚退出
+        // 的进程映像持柄 1~3s，Delete 静默失败、退出码仍 0 → 弹 "Unable to
+        // uninstall!"）；②旧卸载器 POSTUNINSTALL 按"真卸载"清常驻隧道与
+        // remote-session.json，远程链接每次更新都失效（0.5.8 语义被破坏，0.5.8→0.5.9
+        // 实锤断链）。/UPDATE 下旧卸载器根本不运行，两个问题同源消失。Tauri 官方
+        // updater 插件恒传 /UPDATE（plugins-workspace updater.rs updater_parameters）。
+        // /P=被动模式只显进度条（GUI 模式下"已安装"页仍显示且单选钮失效，UX 误导）；
+        // /R=被动/静默模式装完自动拉起主程序（.onInstSuccess），形成"点立即安装→
+        // 进度条→新版自动起来"闭环。
+        let args = installer_args();
+        assert!(args.contains(&"/UPDATE"), "missing /UPDATE: {args:?}");
+        assert!(args.contains(&"/P"), "missing /P: {args:?}");
+        assert!(args.contains(&"/R"), "missing /R: {args:?}");
+    }
+
+    #[test]
+    fn nsis_hook_waits_for_exe_file_unlock_after_kill() {
+        // 0.5.10 修复：进程死亡≠ exe 文件锁释放（Defender/PCA 会对刚退出的进程映像
+        // 保持短暂句柄，本机实测 19MB 主程序+机械盘锁窗口 ~1.3s）。模板
+        // CheckIfAppIsRunning 杀完主程序仅 500ms 就 Delete——快速连点+应用正在
+        // 自行退出时 Delete 撞锁静默失败（退出码仍 0）→ 模板 FileExists 复检弹
+        // "Unable to uninstall!"；/UPDATE 覆盖路径 File 写主程序撞锁则直接
+        // "Can't write" 中止。钩子在等净进程后必须再等主程序/runtime 两件 exe
+        // 可独占打开，让 Delete/File 落在锁释放后。
+        let hooks = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/windows/nsis-hooks.nsh"
+        ))
+        .unwrap();
+        assert!(
+            hooks.contains("[System.IO.File]::Open"),
+            "hooks must probe exe file locks after killing processes"
+        );
+    }
+
+    #[test]
+    fn nsis_hook_preinstall_purges_runtime_tree() {
+        // 0.5.10：/UPDATE 覆盖安装不再经过旧卸载器（POSTUNINSTALL 的 RMDir runtime
+        // 不执行），PREINSTALL 必须自己清 runtime 树，否则旧版独有文件跨版本混杂
+        // （dsh 自更新残留同理）。非更新路径下旧卸载器已删净，重复 RMDir 是无害 no-op。
+        let hooks = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/windows/nsis-hooks.nsh"
+        ))
+        .unwrap();
+        let count = hooks
+            .matches("RMDir /r /REBOOTOK \"$INSTDIR\\runtime\"")
+            .count();
+        assert!(
+            count >= 2,
+            "runtime purge must exist in both PREINSTALL and POSTUNINSTALL, found {count}"
+        );
+    }
+
+    #[test]
+    fn nsis_hook_postuninstall_keeps_tunnel_when_invoked_by_setup() {
+        // 0.5.10 修复：手动双击新安装包走"先卸载"时，旧卸载器的父进程是新安装器
+        // （DSHDesktop_*_x64-setup.exe）——这是升级不是真卸载，常驻隧道与
+        // remote-session.json 必须留活，否则手动更新一样断链（/UPDATE 标志只覆盖
+        // 应用内更新流）。真卸载（设置/开始菜单，自我复制到 %TEMP%）父进程链已死
+        // 或为 explorer，不匹配模式 → 照常清理。
+        let hooks = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/windows/nsis-hooks.nsh"
+        ))
+        .unwrap();
+        assert!(
+            hooks.contains("DSHDesktop_*_x64-setup.exe"),
+            "POSTUNINSTALL must detect setup.exe parent to keep the tunnel on upgrades"
         );
     }
 
