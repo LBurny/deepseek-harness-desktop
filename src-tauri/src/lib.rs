@@ -537,32 +537,27 @@ pub fn run() {
                         // toast 会留在系统通知中心，正文不带链接，只提示去托盘复制
                         match st.phase.as_str() {
                             "up" => {
-                                // resumed=收养复活（链接未变，无需重新复制）；
-                                // 全新开启/重生换域名=链接已变，引导去托盘复制
-                                let (title, body) = if st.resumed {
-                                    (
-                                        i18n::pick("远程访问已自动恢复", "Remote access restored"),
-                                        i18n::pick(
-                                            "链接未变，可直接使用",
-                                            "Link unchanged — keep using it",
-                                        ),
-                                    )
+                                if st.resumed {
+                                    // 自动恢复（收养复活，链接未变）不打扰用户：
+                                    // 不弹 toast，仅落日志（用户反馈 0.5.8：重启应用
+                                    // 自动连回上次链接属后台行为，弹窗是噪音）
+                                    append_debug_line(
+                                        &remote_log,
+                                        "Remote: auto-resumed, toast skipped (log only)",
+                                    );
                                 } else {
-                                    (
-                                        i18n::pick("远程访问已开启", "Remote access is on"),
-                                        i18n::pick(
+                                    // 全新开启/重生换域名=链接已变，引导去托盘复制
+                                    let _ = notify::toast::show(
+                                        &remote_handle,
+                                        &i18n::pick("远程访问已开启", "Remote access is on"),
+                                        &i18n::pick(
                                             "链接已就绪，请从托盘菜单复制",
                                             "Link ready — copy it from the tray menu",
                                         ),
-                                    )
-                                };
-                                let _ = notify::toast::show(
-                                    &remote_handle,
-                                    &title,
-                                    &body,
-                                    notify::toast::ToastSound::Silent,
-                                    None,
-                                );
+                                        notify::toast::ToastSound::Silent,
+                                        None,
+                                    );
+                                }
                             }
                             "error" => {
                                 let _ = notify::toast::show(

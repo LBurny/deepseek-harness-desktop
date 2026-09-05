@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **远程访问自动恢复不再弹 Windows 通知**（用户反馈：重启应用自动连回上次链接是后台行为，弹窗是噪音）：复活成功只写 events.log（phase=up 行 + 一条 `auto-resumed, toast skipped` 语义行），托盘远程子菜单状态照常更新；首次开启/换域名重生的 toast 与开启失败的 error toast 均不变
+
 ## [0.5.8] - 2026-09-05
 
 ### Added
