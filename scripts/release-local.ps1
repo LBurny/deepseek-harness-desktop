@@ -47,17 +47,19 @@ $tag = "v$Version"
 $repos = @('LBurny/deepseek-harness-desktop-releases', 'LBurny/deepseek-harness-desktop')
 
 if (-not $env:GH_TOKEN) { throw 'GH_TOKEN 环境变量未设置（私有仓库 API 必需）' }
+if ($NotesPath -and -not (Test-Path $NotesPath)) { throw "NotesPath 不存在: $NotesPath" }
 $headers = @{
     Authorization = "Bearer $env:GH_TOKEN"
     Accept        = 'application/vnd.github+json'
 }
 $ua = 'dshdesktop-release-local'
 
-# 定位本地安装包并校验版本号一致（防拿旧包发新版）
+# 定位本地安装包并校验版本号一致（防拿旧包发新版；精确名比对——notlike "*$Version*"
+# 会把 0.5.1 误配 0.5.11）
 $exe = Get-ChildItem (Join-Path $repoRoot 'src-tauri/target/release/bundle/nsis/*_x64-setup.exe') |
     Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $exe) { throw '找不到本地安装包，先 pnpm tauri build' }
-if ($exe.Name -notlike "*$Version*") { throw "安装包 $($exe.Name) 与版本 $Version 不符，先 bump + 重新 build" }
+if ($exe.Name -ne "DSHDesktop_${Version}_x64-setup.exe") { throw "安装包 $($exe.Name) 与版本 $Version 不符（期望 DSHDesktop_${Version}_x64-setup.exe），先 bump + 重新 build" }
 
 # sha256 与旧 CI 的 Checksum 步骤同格式
 $hash = (Get-FileHash $exe -Algorithm SHA256).Hash.ToLower()

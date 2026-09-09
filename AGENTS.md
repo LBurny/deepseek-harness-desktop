@@ -191,7 +191,7 @@ pnpm tauri build                      # 产出 src-tauri/target/release/bundle/n
 powershell -File scripts/fetch-runtime.ps1   # 抓取真实运行时到 src-tauri/runtime/windows-x64/
 powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch]   # 一键跟版：钉版→清旧→重抓→bump→cargo test→文档/CHANGELOG
 powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版→安装→启动→全项校验→截图
-pnpm release                # 一条命令发版（bump+收编+测试+构建+验收+commit/tag/push+双仓上传+终验；-DryRun 演练）
+pnpm release                # 一条命令发版（bump+收编+测试+构建+验收+commit/tag/push+双仓上传+终验；-DryRun 演练、-SelfTest 自检、门禁缓存秒级续跑）
 ```
 
 ## 版本与发布
@@ -201,9 +201,19 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
   不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.11，下一版 0.5.12。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起公开仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
   **0.5.12 起：`pnpm release` 一条命令跑完下面整条链路**（参数 -Version / -CommitMsg /
-  -SkipAcceptance / -DryRun；跑前工作区必须干净——本次发版的代码改动先单独 commit，
-  docs/release-notes/、CHANGELOG.md、三处版本文件、AGENTS.md 这些发版机械文件允许脏
-  并会被收编进发版 commit；说明文件缺 TODO 未填会脚手架后退出，填完重跑）。
+  -SkipAcceptance / -DryRun 演练 / -SelfTest 自检白名单与门禁缓存逻辑；跑前工作区必须
+  干净——本次发版的代码改动先单独 commit，docs/release-notes/、CHANGELOG.md、三处版本
+  文件、AGENTS.md 这些发版机械文件允许脏并会被收编进发版 commit；说明文件缺失脚手架后
+  退出，填完重跑）。机械步骤全自动：bump 三处 → CHANGELOG 收编（顶部自动补回空
+  Unreleased 节）→ 说明脚手架+格式 lint（英文版须含 `docs/release-notes/v<ver>.zh.md`
+  链接防复制忘换版本号；中文版须 `# 中文说明` 开头、含 `/releases/tag/v<ver>` 返回链接）
+  → 版本指针 → cargo test → pnpm tauri build → acceptance 真机验收 → commit/tag/push
+  （代理兜底）→ 镜像说明（先 pull --ff-only 对齐）→ release-local 双仓上传 → 匿名 API
+  终验（匿名失败回退 GH_TOKEN 重试一次）。**门禁缓存**：测试/构建/验收通过记入
+  `%LOCALAPPDATA%\DSHDesktop\release-cache\v<ver>.json`（head=门禁通过时的 HEAD），
+  重跑时 HEAD 未变、或相对缓存点的 diff 只含发版白名单文件（代码改动必先 commit，必然
+  出现在 diff 里）即秒级跳过已过门禁——断点续跑不再重等分钟级门禁；build 缓存还要求
+  产物 exe 在。
   下面原有手工链路保留作兜底与细节：
   bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→
   CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 →
