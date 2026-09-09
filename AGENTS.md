@@ -191,6 +191,7 @@ pnpm tauri build                      # 产出 src-tauri/target/release/bundle/n
 powershell -File scripts/fetch-runtime.ps1   # 抓取真实运行时到 src-tauri/runtime/windows-x64/
 powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch]   # 一键跟版：钉版→清旧→重抓→bump→cargo test→文档/CHANGELOG
 powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版→安装→启动→全项校验→截图
+pnpm release                # 一条命令发版（bump+收编+测试+构建+验收+commit/tag/push+双仓上传+终验；-DryRun 演练）
 ```
 
 ## 版本与发布
@@ -199,6 +200,11 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
   不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.11，下一版 0.5.12。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起公开仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
+  **0.5.12 起：`pnpm release` 一条命令跑完下面整条链路**（参数 -Version / -CommitMsg /
+  -SkipAcceptance / -DryRun；跑前工作区必须干净——本次发版的代码改动先单独 commit，
+  docs/release-notes/、CHANGELOG.md、三处版本文件、AGENTS.md 这些发版机械文件允许脏
+  并会被收编进发版 commit；说明文件缺 TODO 未填会脚手架后退出，填完重跑）。
+  下面原有手工链路保留作兜底与细节：
   bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→
   CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 →
   commit → `git tag v0.y.z` 推送（tag 不再触发发布）→ `powershell -File scripts/release-local.ps1`

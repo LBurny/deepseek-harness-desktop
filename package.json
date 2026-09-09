@@ -12,7 +12,9 @@
     "build": "vite build",
     "preview": "vite preview",
     "tauri": "tauri",
-    "check": "svelte-check --tsconfig ./tsconfig.json"
+    "check": "svelte-check --tsconfig ./tsconfig.json",
+    "release": "powershell -ExecutionPolicy Bypass -File scripts/release.ps1",
+    "release:dry": "powershell -ExecutionPolicy Bypass -File scripts/release.ps1 -DryRun"
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
