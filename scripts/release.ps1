@@ -12,9 +12,9 @@
 #   [6/9] pnpm tauri build（退出码门禁 + 校验 nsis 安装包存在）
 #   [7/9] 真机验收: 先杀 DSHDesktop 进程再跑 acceptance.ps1（发版红线，默认必跑）
 #   [8/9] 主仓 commit + tag + push（直连失败探测 Clash 代理重试，一次性 -c 不写 git 配置）
-#   [9/9] 说明文件镜像进公开仓本地镜像（先 pull --ff-only 对齐；有变化才 commit+push）
+#   [9/9] 说明文件镜像进发布仓本地镜像（先 pull --ff-only 对齐；有变化才 commit+push）
 #         → release-local.ps1 双仓上传
-#         → 匿名 API 终验（tag_name 与资产恰为 exe+sha256 两件——公开仓资产红线终验）
+#         → 匿名 API 终验（tag_name 与资产恰为 exe+sha256 两件——发布仓资产红线终验）
 #
 # 版本进位规则（固定，AGENTS.md §版本与发布）：下一版 = patch+1；patch==9 → minor+1、
 # patch 归 0（0.5.9→0.6.0；0.5.9→0.5.10 是历史上手工指定的特例，不照抄进规则）。
@@ -37,7 +37,7 @@
 #     CHANGELOG.md / AGENTS.md / docs/release-notes/（前缀匹配）；本次发版的
 #     **代码改动必须先单独 commit**，出现其它脏/未跟踪文件即中止
 #   * 当前分支 main（push 目标是 origin main）；git / curl / cargo / pnpm 在 PATH
-#   * 公开仓本地镜像 H:\My_Software\deepseek-harness-desktop-releases 存在，其
+#   * 发布仓本地镜像 H:\My_Software\deepseek-harness-desktop-releases 存在，其
 #     docs\release-notes\ 是说明文件镜像的固定落位
 #
 # 用法：
@@ -475,9 +475,9 @@ foreach ($tool in @('git', 'curl.exe', 'cargo', 'pnpm')) {
     if (-not (Get-Command $tool -ErrorAction SilentlyContinue)) { GateViolation "必需工具不在 PATH: $tool" }
 }
 if (-not (Test-Path $script:mirrorNotesDir)) {
-    GateViolation "公开仓本地镜像说明目录不存在: $script:mirrorNotesDir（发版说明镜像的固定落位，先恢复 H:\My_Software\deepseek-harness-desktop-releases）"
+    GateViolation "发布仓本地镜像说明目录不存在: $script:mirrorNotesDir（发版说明镜像的固定落位，先恢复 H:\My_Software\deepseek-harness-desktop-releases）"
 } else {
-    Info "  公开仓本地镜像说明目录存在: $script:mirrorNotesDir"
+    Info "  发布仓本地镜像说明目录存在: $script:mirrorNotesDir"
 }
 
 # ---------------- 阶段 1：bump 三处 ----------------
@@ -763,15 +763,15 @@ if ($DryRun) {
     Info "  [DryRun] 将复制 $notesEnRel 与 $notesZhRel → $script:mirrorNotesDir（字节一致则跳过，有变化则 commit+push）"
     Info "  [DryRun] 复制前将先 git -C $script:mirrorRoot pull --ff-only 对齐远端（与 push 同款代理兜底，失败只警告不中止）"
     Info "  [DryRun] 将执行: powershell -File scripts/release-local.ps1 -Version $target -NotesPath $notesEnAbs（双仓建/更 Release、传 exe+sha256、用 NotesPath PATCH 正文，幂等）"
-    Info "  [DryRun] 将终验: 匿名 GET https://api.github.com/repos/$script:publicRepo/releases/latest → 断言 tag_name = $tag 且资产恰为 exe+sha256 两件（公开仓资产红线终验；匿名失败自动用 GH_TOKEN 重试一次），打印 Release 页 URL 与 sha256"
+    Info "  [DryRun] 将终验: 匿名 GET https://api.github.com/repos/$script:publicRepo/releases/latest → 断言 tag_name = $tag 且资产恰为 exe+sha256 两件（发布仓资产红线终验；匿名失败自动用 GH_TOKEN 重试一次），打印 Release 页 URL 与 sha256"
 } else {
-    # 1) 镜像说明文件（公开仓本地镜像的固定落位；先推它再 PATCH，Release 正文里的外链才不 404）
+    # 1) 镜像说明文件（发布仓本地镜像的固定落位；先推它再 PATCH，Release 正文里的外链才不 404）
     if (-not (Test-Path $script:mirrorNotesDir)) {
-        Die "公开仓本地镜像说明目录不存在: $script:mirrorNotesDir（先恢复 H:\My_Software\deepseek-harness-desktop-releases）"
+        Die "发布仓本地镜像说明目录不存在: $script:mirrorNotesDir（先恢复 H:\My_Software\deepseek-harness-desktop-releases）"
     }
     $mirrorBranch = (Invoke-Git @('-C', $script:mirrorRoot, 'rev-parse', '--abbrev-ref', 'HEAD')).Output[0]
     if ($mirrorBranch -ne 'main') {
-        Die "公开仓镜像当前分支是 '$mirrorBranch'，commit/push 目标是 main——请先切回 main"
+        Die "发布仓镜像当前分支是 '$mirrorBranch'，commit/push 目标是 main——请先切回 main"
     }
     # 0) 先 pull --ff-only 对齐远端（远端有他人/上轮提交时直接 push 会被拒）；失败只 Warn
     #    ——真落后时下面的镜像 push 会 Die 并给处理指引
@@ -806,7 +806,7 @@ if ($DryRun) {
         powershell -NoProfile -ExecutionPolicy Bypass -File $releaseLocalScript -Version $target -NotesPath $notesEnAbs
     } -TailLines 20
 
-    # 3) 终验：公开仓匿名 API——tag 正确、资产恰为 exe+sha256 两件
+    # 3) 终验：发布仓匿名 API——tag 正确、资产恰为 exe+sha256 两件
     try {
         $latest = Invoke-RestMethod -Headers @{ 'User-Agent' = 'dshdesktop-release' } `
             "https://api.github.com/repos/$script:publicRepo/releases/latest"
@@ -816,22 +816,22 @@ if ($DryRun) {
             $latest = Invoke-RestMethod -Headers @{ 'User-Agent' = 'dshdesktop-release'; Authorization = "Bearer $env:GH_TOKEN" } `
                 "https://api.github.com/repos/$script:publicRepo/releases/latest"
         } catch {
-            Die "终验失败: 公开仓 releases/latest API 调用失败（匿名与 GH_TOKEN 各试一次）——$($_.Exception.Message)"
+            Die "终验失败: 发布仓 releases/latest API 调用失败（匿名与 GH_TOKEN 各试一次）——$($_.Exception.Message)"
         }
     }
     if ($latest.tag_name -ne $tag) {
-        Die "终验失败: 公开仓 releases/latest 的 tag_name 是 '$($latest.tag_name)'，期望 '$tag'"
+        Die "终验失败: 发布仓 releases/latest 的 tag_name 是 '$($latest.tag_name)'，期望 '$tag'"
     }
     $assetNames = @($latest.assets | ForEach-Object { $_.name })
     $expected = @($exeName, "${exeName}.sha256")
     $wrong = @($expected | Where-Object { $assetNames -notcontains $_ })
     if ($assetNames.Count -ne 2 -or $wrong.Count -ne 0) {
-        Die "终验失败（公开仓资产红线）: 资产应为且仅为 $exeName + .sha256 两件，实际: $($assetNames -join ', ')"
+        Die "终验失败（发布仓资产红线）: 资产应为且仅为 $exeName + .sha256 两件，实际: $($assetNames -join ', ')"
     }
     $shaFile = "${exePath}.sha256"
     if (-not (Test-Path $shaFile)) { Die "找不到 sha256 文件: $shaFile（release-local.ps1 应已生成）" }
     $shaLine = (Get-Content $shaFile -Raw).Trim()
-    Write-Host '  终验通过: 公开仓 releases/latest 的 tag 与资产集合符合预期'
+    Write-Host '  终验通过: 发布仓 releases/latest 的 tag 与资产集合符合预期'
     Write-Host "  Release 页: $($latest.html_url)"
     Write-Host "  SHA256: $shaLine"
 }

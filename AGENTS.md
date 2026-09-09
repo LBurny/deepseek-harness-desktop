@@ -199,7 +199,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
   不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.11，下一版 0.5.12。
-- **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起公开仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
+- **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起发布仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
   **0.5.12 起：`pnpm release` 一条命令跑完下面整条链路**（参数 -Version / -CommitMsg /
   -SkipAcceptance / -DryRun 演练 / -SelfTest 自检白名单与门禁缓存逻辑；跑前工作区必须
   干净——本次发版的代码改动先单独 commit，docs/release-notes/、CHANGELOG.md、三处版本
@@ -218,18 +218,18 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
   bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→
   CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 →
   commit → `git tag v0.y.z` 推送（tag 不再触发发布）→ `powershell -File scripts/release-local.ps1`
-  用本地安装包在**公开仓**（`deepseek-harness-desktop-releases`，对外分发）与**私有仓**
-  （`deepseek-harness-desktop`，exe 存档）各建/更新 Release
-  （需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑；公开仓资产红线见 §GitHub 访问）。
+  用本地安装包在**发布仓**（`deepseek-harness-desktop-releases`，对外分发）与**源码仓**
+  （`deepseek-harness-desktop`，2026-09-09 起公开，exe 存档）各建/更新 Release
+  （需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑；发布仓资产红线见 §GitHub 访问）。
   github 直连被拦时 push 走 §GitHub 访问的代理（openssl 被掐就加 `-c http.sslBackend=schannel`）。
   **Release 说明必须双语成文（0.5.11 起，弃用裸 generate_release_notes）**：说明文件
   存主仓 `docs/release-notes/`（每版两个：`v<ver>.md` = Release 正文（英文），
   `v<ver>.zh.md` = 中文说明），正文文件传 `release-local.ps1 -NotesPath <file>`
   （两仓同文；幂等重跑会重新 PATCH，改完重跑即生效）。正文首行
-  `English | [中文说明](<公开仓 blob 链接>#中文说明)` 切换外链，英文正文平话编号
+  `English | [中文说明](<发布仓 blob 链接>#中文说明)` 切换外链，英文正文平话编号
   小节（对齐 notion-desktop 的 Release 样式，少堆内部黑话）；中文说明**不内联**
-  在 Release 页，点击跳转公开发布仓的 `docs/release-notes/v<ver>.zh.md`——该目录
-  随镜像进公开仓（H:\My_Software\deepseek-harness-desktop-releases，先推它再
+  在 Release 页，点击跳转发布仓的 `docs/release-notes/v<ver>.zh.md`——该目录
+  随镜像进发布仓（H:\My_Software\deepseek-harness-desktop-releases，先推它再
   PATCH，外链才不 404），主仓同目录存档。0.5.11 之前各版只有一条 Full Changelog
   链接，太模糊，别再犯。
 - **弃用 CI 发布的原因（0.4.9 实踩）**：私有仓库 tag 触发的 release run 跑满 30~70 分钟
@@ -240,22 +240,23 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 
 ## GitHub 访问
 
-- 仓库 **已转私有**：`LBurny/deepseek-harness-desktop`（origin 指向它）——存**源码 + tag + Release**
+- **源码仓**：`LBurny/deepseek-harness-desktop`（origin 指向它；曾转私有，**2026-09-09 起重新公开**，用户确认有意）——存**源码 + tag + Release**
   （exe+sha256 双份存档）：v0.1.0~v0.5.2 是旧 CI 时代资产，0.5.3~0.5.6 缺口已于 2026-09-04
   用本地原件补齐（回拉哈希逐一核对过），此后 release-local.ps1 每版双仓上传
-- **公开发布仓（0.5.3 起）**：`LBurny/deepseek-harness-desktop-releases`（public，匿名可读）——
+- **发布仓（0.5.3 起，源码仓公开后仍维持双仓分工）**：`LBurny/deepseek-harness-desktop-releases`（public，匿名可读）——
   **只发 exe+sha256**，仓库内仅 README/LICENSE/界面截图作门面。应用的检查更新/手动更新/
-  "GitHub 下载"全部指向它（update.rs 常量，有锚定测试防指回私有仓）。
+  "GitHub 下载"全部指向它（update.rs 常量，有锚定测试防指回源码仓）。
   本地镜像在 `H:\My_Software\deepseek-harness-desktop-releases`（repo-local 身份同主仓 DSHDesktop）
-- **红线（重大事故级，2026-09-04）**：公开仓**严禁上传源码或任何非 `*_x64-setup.exe(+.sha256)` 资产**
-  （release-local.ps1 有守卫，违规直接拒发）。公开仓 Release 页的 "Source code (zip)/(tar.gz)"
-  是 GitHub 按 tag 自动生成的**仓内文件归档**（内容只有 README/LICENSE/截图，无应用源码）——
+- **红线（保留，理由已变）**：发布仓**仍只许 `*_x64-setup.exe(+.sha256)` 资产**——源码仓公开后
+  这不再是保密问题，而是分发仓门面职责：下载页只给安装包，源码归源码仓（release-local.ps1
+  守卫保留，违规直接拒发）。发布仓 Release 页的 "Source code (zip)/(tar.gz)"
+  是 GitHub 按 tag 自动生成的**仓内文件归档**（内容只有 README/LICENSE/截图）——
   删不掉也别去删 tag：删 tag 会把已发布 Release 转成草稿（2026-09-04 API 实测：删 ref →
   draft:true，匿名 `releases/latest` 即断、应用内检查更新死；草稿 PATCH draft:false 重发布会
   把 tag 复活回来。试验用临时 Release 已清理）
-- 本机**没装 gh CLI**；访问 GitHub API 用环境变量 **`GH_TOKEN`**（属主 LBurny，已验证对私有仓库返回 200）：
+- 本机**没装 gh CLI**；访问 GitHub API 用环境变量 **`GH_TOKEN`**（属主 LBurny，已验证对双仓 API 返回 200）：
   `curl -H "Authorization: Bearer $GH_TOKEN" -H "Accept: application/vnd.github+json" https://api.github.com/repos/LBurny/deepseek-harness-desktop`
-- git fetch/push 走凭据管理器 `manager-core`，不受私有化影响
+- git fetch/push 走凭据管理器 `manager-core`，与仓库可见性无关
 - **github.com 直连可能被 TLS 拦截**（0.3.0 后实踩）：push 报 `self signed certificate in
   certificate chain`（openssl）或 `SEC_E_UNTRUSTED_ROOT`（schannel），而 api.github.com
   正常——是网络层拦截不是配置问题，别改 sslBackend/别关 sslVerify。系统 Clash 代理
@@ -438,7 +439,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 ## 已知限制
 
 - Win10 深色标题栏聚焦时纯黑（系统行为，`DWMWA_CAPTION_COLOR` 仅 Win11）；要做成恒为 dsh 深灰需无边框自绘标题栏——方案要点见 docs/design.zh-CN.md §8，暂缓。
-- ~~检查更新在仓库私有期间必 404~~ **（0.5.3 已修，走候选方案②）**：另建公开发布仓
+- ~~检查更新在仓库私有期间必 404~~ **（0.5.3 已修，走候选方案②）**：另建发布仓
   `deepseek-harness-desktop-releases` 专发 Release，update.rs 两个常量与 release-local.ps1
-  指向它——公开仓匿名 API 可读，启动检查与"其它设置"手动检查恢复。历史背景：0.4.x~0.5.2
+  指向它——发布仓匿名 API 可读，启动检查与"其它设置"手动检查恢复。历史背景：0.4.x~0.5.2
   匿名查私有仓 `releases/latest` 一律 404，只在 events.log 落 `Update: check on launch failed`
