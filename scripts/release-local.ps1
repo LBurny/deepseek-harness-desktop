@@ -19,10 +19,12 @@
 # 前置：GH_TOKEN 环境变量（对上述两仓均有 contents:write）；
 #       bump 三处版本号 / cargo test / pnpm tauri build / commit / tag / push 已完成。
 # 用法：powershell -File scripts/release-local.ps1 [-Version 0.4.9] [-NotesPath <md 文件>]
-#       -NotesPath 指向双语 Release 说明文件（UTF-8 Markdown）时，两仓 Release 正文都
+#       -NotesPath 指向 Release 正文文件（UTF-8 Markdown）时，两仓 Release 正文都
 #       写成该文件内容（幂等重跑会重新 PATCH，改完说明重跑即生效）；缺省沿用 GitHub
-#       自动生成的 Full Changelog 链接。说明格式惯例（0.5.11 起）：English 正文开头 +
-#       [中文说明](#中文说明) 锚点节，两节同构、平话讲清修了什么/为什么（参照
+#       自动生成的 Full Changelog 链接。说明惯例（0.5.11 起）：文件存主仓
+#       docs/release-notes/（v<ver>.md = 正文/英文，v<ver>.zh.md = 中文说明，需同步
+#       镜像进公开发布仓同目录）；正文首行 `English | [中文说明](<公开仓 blob 链接
+#       #中文说明>)` 切换外链（中文不内联，点击跳转），英文平话编号小节（参照
 #       notion-desktop v0.2.10 的 Release 样式），不要只丢一条 Full Changelog。
 # 幂等：Release 已存在则复用并替换同名资产，可安全重跑。
 # 注意：替换某版产物直接重跑本脚本即可，**别删远端 tag**——删 tag 会把已发布的

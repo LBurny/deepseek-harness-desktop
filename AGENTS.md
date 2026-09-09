@@ -206,12 +206,16 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   （`deepseek-harness-desktop`，exe 存档）各建/更新 Release
   （需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑；公开仓资产红线见 §GitHub 访问）。
   github 直连被拦时 push 走 §GitHub 访问的代理（openssl 被掐就加 `-c http.sslBackend=schannel`）。
-  **Release 说明必须双语成文（0.5.11 起，弃用裸 generate_release_notes）**：写一个
-  UTF-8 Markdown 文件传 `release-local.ps1 -NotesPath <file>`（两仓同文；幂等重跑会
-  重新 PATCH，改完重跑即生效）。格式对齐 notion-desktop 的 Release 样式：首行
-  `English | [中文说明](#中文说明)`，正文英文开头（平话讲清修了什么/为什么，编号
-  小节，少堆内部黑话），`---` 分隔后 `## 中文说明` 镜像同构——0.5.11 之前各版只有
-  一条 Full Changelog 链接，太模糊，别再犯。
+  **Release 说明必须双语成文（0.5.11 起，弃用裸 generate_release_notes）**：说明文件
+  存主仓 `docs/release-notes/`（每版两个：`v<ver>.md` = Release 正文（英文），
+  `v<ver>.zh.md` = 中文说明），正文文件传 `release-local.ps1 -NotesPath <file>`
+  （两仓同文；幂等重跑会重新 PATCH，改完重跑即生效）。正文首行
+  `English | [中文说明](<公开仓 blob 链接>#中文说明)` 切换外链，英文正文平话编号
+  小节（对齐 notion-desktop 的 Release 样式，少堆内部黑话）；中文说明**不内联**
+  在 Release 页，点击跳转公开发布仓的 `docs/release-notes/v<ver>.zh.md`——该目录
+  随镜像进公开仓（H:\My_Software\deepseek-harness-desktop-releases，先推它再
+  PATCH，外链才不 404），主仓同目录存档。0.5.11 之前各版只有一条 Full Changelog
+  链接，太模糊，别再犯。
 - **弃用 CI 发布的原因（0.4.9 实踩）**：私有仓库 tag 触发的 release run 跑满 30~70 分钟
   （Actions 缓存按 ref 隔离，tag run 读不到自己存的缓存、只能等 main 预热），而本地构建
   3~5 分钟 + release-local.ps1 上传总共几分钟。release.yml 已降为 workflow_dispatch 手动备用。
