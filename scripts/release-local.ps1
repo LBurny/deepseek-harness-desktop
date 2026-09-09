@@ -18,12 +18,18 @@
 #
 # 前置：GH_TOKEN 环境变量（对上述两仓均有 contents:write）；
 #       bump 三处版本号 / cargo test / pnpm tauri build / commit / tag / push 已完成。
-# 用法：powershell -File scripts/release-local.ps1 [-Version 0.4.9]
+# 用法：powershell -File scripts/release-local.ps1 [-Version 0.4.9] [-NotesPath <md 文件>]
+#       -NotesPath 指向双语 Release 说明文件（UTF-8 Markdown）时，两仓 Release 正文都
+#       写成该文件内容（幂等重跑会重新 PATCH，改完说明重跑即生效）；缺省沿用 GitHub
+#       自动生成的 Full Changelog 链接。说明格式惯例（0.5.11 起）：English 正文开头 +
+#       [中文说明](#中文说明) 锚点节，两节同构、平话讲清修了什么/为什么（参照
+#       notion-desktop v0.2.10 的 Release 样式），不要只丢一条 Full Changelog。
 # 幂等：Release 已存在则复用并替换同名资产，可安全重跑。
 # 注意：替换某版产物直接重跑本脚本即可，**别删远端 tag**——删 tag 会把已发布的
 #       Release 转成草稿（按 tag 查 404 → 重跑会再建一个，出重复），删后需手动清草稿。
 param(
-    [string]$Version  # 缺省读 src-tauri/tauri.conf.json 的 version
+    [string]$Version,   # 缺省读 src-tauri/tauri.conf.json 的 version
+    [string]$NotesPath  # Release 说明 Markdown 文件（UTF-8）；两仓同文，缺省 GitHub 自动生成
 )
 
 $ErrorActionPreference = 'Stop'
@@ -77,9 +83,24 @@ foreach ($repo in $repos) {
     if ($release) {
         Write-Host "[$repo] Release $tag 已存在（id=$($release.id)），替换同名资产"
     } else {
-        $body = @{ tag_name = $tag; name = $tag; generate_release_notes = $true } | ConvertTo-Json
+        # 自定义说明时不走 generate_release_notes（那会追加 Full Changelog 链接并
+        # 忽略自定义 body）；ConvertTo-Json 会把中文转 \uXXXX 转义，JSON 传输无碍
+        $createBody = @{ tag_name = $tag; name = $tag }
+        if ($NotesPath) {
+            $createBody.body = (Get-Content -Raw -Encoding UTF8 $NotesPath)
+            $createBody.generate_release_notes = $false
+        } else {
+            $createBody.generate_release_notes = $true
+        }
+        $body = $createBody | ConvertTo-Json
         $release = Invoke-RestMethod -Method Post -Uri "$apiBase/releases" -Headers $headers -UserAgent $ua -Body $body -ContentType 'application/json'
         Write-Host "[$repo] 已创建 Release $tag（id=$($release.id)）"
+    }
+    if ($NotesPath) {
+        # 已存在的 Release 也 PATCH 正文：改完说明重跑本脚本即生效（幂等）
+        $patchBody = @{ body = (Get-Content -Raw -Encoding UTF8 $NotesPath) } | ConvertTo-Json
+        Invoke-RestMethod -Method Patch -Uri "$apiBase/releases/$($release.id)" -Headers $headers -UserAgent $ua -Body $patchBody -ContentType 'application/json' | Out-Null
+        Write-Host "[$repo] 已更新 Release 说明（来自 $NotesPath）"
     }
 
     foreach ($file in @($exe.FullName, $shaFile)) {

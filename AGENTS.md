@@ -197,7 +197,7 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
 
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
-  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.10，下一版 0.5.11。
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.11，下一版 0.5.12。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起公开仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
   bump 三处版本号（`package.json` / `src-tauri/tauri.conf.json` / `src-tauri/Cargo.toml`）→
   CHANGELOG 把 Unreleased 收编进新版节 → 本地 `cargo test` + `pnpm tauri build` + `acceptance.ps1` 全过 →
@@ -206,6 +206,12 @@ powershell -File scripts/acceptance.ps1 -SetupExe <setup.exe>   # 卸载旧版�
   （`deepseek-harness-desktop`，exe 存档）各建/更新 Release
   （需 GH_TOKEN；资产 exe+sha256，格式与旧 CI 完全一致，幂等可重跑；公开仓资产红线见 §GitHub 访问）。
   github 直连被拦时 push 走 §GitHub 访问的代理（openssl 被掐就加 `-c http.sslBackend=schannel`）。
+  **Release 说明必须双语成文（0.5.11 起，弃用裸 generate_release_notes）**：写一个
+  UTF-8 Markdown 文件传 `release-local.ps1 -NotesPath <file>`（两仓同文；幂等重跑会
+  重新 PATCH，改完重跑即生效）。格式对齐 notion-desktop 的 Release 样式：首行
+  `English | [中文说明](#中文说明)`，正文英文开头（平话讲清修了什么/为什么，编号
+  小节，少堆内部黑话），`---` 分隔后 `## 中文说明` 镜像同构——0.5.11 之前各版只有
+  一条 Full Changelog 链接，太模糊，别再犯。
 - **弃用 CI 发布的原因（0.4.9 实踩）**：私有仓库 tag 触发的 release run 跑满 30~70 分钟
   （Actions 缓存按 ref 隔离，tag run 读不到自己存的缓存、只能等 main 预热），而本地构建
   3~5 分钟 + release-local.ps1 上传总共几分钟。release.yml 已降为 workflow_dispatch 手动备用。
