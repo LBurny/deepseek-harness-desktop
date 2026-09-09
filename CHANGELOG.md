@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.5.11] - 2026-09-09
+
+### Fixed
+
+- **主窗口 "Failed to load plugins"（bundle 加载失败）根因修复**（用户反馈：配置 MCP 本地插件后主窗口整页报错，重启 dsh 多次不消）。根因实锤（挂 WebView2 CDP 抓网络层）：dsh 每个进程 Set-Cookie 一个**新名的** `dsh-auth-<hash>`（30 天 Max-Age），cookie 不分端口，主窗口 WebView2 的 cookie 罐只进不出——实机抓到 **66 个**累积 cookie（≈15KB）；dsh 的插件 bundle 是 45 个 client.js 的组合 URL（≈2.2KB），两者相加超过 Node 默认 16KB 请求头上限，dsh 回 **431 Request Header Fields Too Large**，`<script>` error 事件 → "bundle script failed to load"。阈值特性解释全部现象：短 URL 的 HTML 与小 bundle（client-modules）恒 200，只有最长的 bundle 触发；干净 profile 的 Playwright/Edge 复刻全部正常；手机走代理不受影响（代理代持单个 cookie）。修复：壳在每次 Ready 导航主窗口前用 Tauri cookie API（`cookies()` 含 HttpOnly + `delete_cookie`，跑在 async 任务避 Windows 同步死锁 wry#583）清光罐里的 `dsh-auth-*` 再带 token 导航——`?token=` 立即补发新 cookie，罐子此后恒 ≤1 个；远程代理门岗 cookie `__dsh_remote` 与其它站点 cookie 不动（锚定测试防误删）。当场处置：CDP 清 cookie + 带 token 重导航，UI 恢复（DOM+截图验证）。**注意**：已装的 0.5.10 不含此修复，清干净的罐需再积累数周才复发，发 0.5.11 即根治；用户若用 Chrome 直连过 dsh，Chrome 自己的 cookie 罐同样会中招，清一次 127.0.0.1 的 cookie 即可
+
+### Added
+
+- 主窗口页面观测桥：document-start 注入脚本（每次导航都跑、先于页面脚本、绕页面 CSP）把 dsh UI 的脚本错误/资源加载失败/unhandledrejection/console.error 限流落 events.log（`[page:<kind>]` 前缀行，60 行/分钟限流 + 800 字符截断 + token 脱敏）——"进程 Ready 但 UI 死"类故障（如本次 431）第一时间在日志可见
+- UI 启动心跳与自愈看门狗：dsh UI `#root` 挂载成功上报落 `dsh UI booted (Xs)`；Ready 导航后 30s 无心跳自动清 dsh-auth cookie 并带 token 重导航一次（one-shot 不自旋，动作落日志；期间 dsh 停止则不导航到死端口）
+- 诊断 CDP 开关：`%LOCALAPPDATA%\DSHDesktop\debug-cdp` 空文件存在时 WebView2 带 `--remote-debugging-port=9222` 启动，免改代码挂 DevTools 协议排障（端口对本机全进程开放页面调试，仅排障期间放置 marker）
+
+### Changed
+
+- dsh 子进程 Node 请求头上限 16KB→64KB（`--max-http-header-size=65536`）：cookie 剪枝之外的纵深防御，兼护用户自带浏览器直连 dsh 端口攒了 cookie 的场景
+
 ## [0.5.10] - 2026-09-05
 
 ### Fixed

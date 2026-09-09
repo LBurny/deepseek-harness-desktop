@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "dsh-remote",
-  "description": "Remote dsh Web UI origin (loopback only): expose nothing but the zoom command",
+  "description": "Remote dsh Web UI origin (loopback only): zoom plus the two shell-injected pagebridge commands that append rate-limited, token-redacted lines to the shell log (write-only, no data read, no actions)",
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
-  "permissions": ["allow-zoom-ui"]
+  "permissions": ["allow-zoom-ui", "allow-report-page-error", "allow-ui-boot-ok"]
 }

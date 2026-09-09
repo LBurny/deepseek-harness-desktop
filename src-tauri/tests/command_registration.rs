@@ -77,12 +77,19 @@ fn commands_registered_in_all_three_places() {
 }
 
 #[test]
-fn remote_capability_only_exposes_zoom() {
-    // dsh-remote.json 只对远程 dsh 源开放 zoom_ui；多开任何命令都是远程面扩大
+fn remote_capability_only_exposes_zoom_and_pagebridge() {
+    // dsh-remote.json 只对远程 dsh 源开放 zoom_ui 与页面桥两条命令。页面桥两条
+    // 由壳注入的 INIT_SCRIPT 从 dsh 远程源调用，只写 events.log（60 行/分钟限流 +
+    // 800 字符截断 + token 脱敏）、不读数据不执行动作，是远程面的最小必要扩展；
+    // 再往远程放行任何命令先过安全审查再改这个测试
     let remote = capability_commands("dsh-remote.json");
     assert_eq!(
         remote,
-        BTreeSet::from(["zoom_ui".to_string()]),
-        "远程 capability 应只放行 zoom_ui，实际：{remote:?}"
+        BTreeSet::from([
+            "zoom_ui".to_string(),
+            "report_page_error".to_string(),
+            "ui_boot_ok".to_string(),
+        ]),
+        "远程 capability 应只放行 zoom_ui + 页面桥两条，实际：{remote:?}"
     );
 }

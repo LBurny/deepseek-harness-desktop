@@ -53,6 +53,8 @@
     "allow-check-update",
     "allow-download-update",
     "allow-install-update",
-    "allow-open-update-page"
+    "allow-open-update-page",
+    "allow-report-page-error",
+    "allow-ui-boot-ok"
   ]
 }

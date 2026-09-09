@@ -49,6 +49,8 @@ fn main() {
                 "download_update",
                 "install_update",
                 "open_update_page",
+                "report_page_error",
+                "ui_boot_ok",
             ]),
         ),
     )

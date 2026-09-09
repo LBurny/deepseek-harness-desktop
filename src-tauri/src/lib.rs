@@ -12,6 +12,7 @@ pub mod dsh_session;
 pub mod i18n;
 pub mod mcp;
 pub mod notify;
+pub mod pagebridge;
 pub mod platform;
 pub mod plugins;
 pub mod port;
@@ -38,6 +39,26 @@ use process::{DshState, ProcessEvent};
 use progress::ProgressPayload;
 
 pub fn run() {
+    // 诊断 CDP 开关（0.5.11）：runtime_base_dir/debug-cdp 空文件存在 → WebView2
+    // 浏览器进程带 --remote-debugging-port=9222 启动，可挂 DevTools 协议看主窗口
+    // 网络层（431 实锤靠这招）。必须在任何 webview 创建前 set_var——WebView2 创建
+    // 浏览器进程时读一次。9222 对本机所有进程开放页面调试（能读到页面内 token），
+    // 仅排障期间放置 marker，排完删掉。
+    {
+        let p: Arc<dyn platform::Platform> = platform::current().into();
+        let dir = p.runtime_base_dir();
+        if dir.join("debug-cdp").exists() {
+            std::env::set_var(
+                "WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS",
+                "--remote-debugging-port=9222",
+            );
+            let _ = std::fs::create_dir_all(&dir);
+            append_debug_line(
+                &dir.join("events.log"),
+                "[dshdesktop] debug-cdp marker found: WebView2 CDP listening on 9222",
+            );
+        }
+    }
     // 协议激活的二次实例：Windows 响应用户点击 toast 拉起本进程，它手握前台
     // 权限，但随即被下面的 single-instance 插件拦截退出——权限随之作废。赶在
     // 拦截前把前台权限广播出去（ASFW_ANY），运行中实例随后 bring_to_front 的
@@ -103,6 +124,8 @@ pub fn run() {
             commands::get_bootstrap_error,
             commands::is_first_launch,
             zoom::zoom_ui,
+            pagebridge::report_page_error,
+            pagebridge::ui_boot_ok,
             settings::get_shell_settings,
             settings::set_shell_settings,
             settings::preview_completion_sound,
@@ -199,6 +222,10 @@ pub fn run() {
                 .min_inner_size(900.0, 600.0)
                 .center()
                 .visible(false)
+                // document-start 注入每次导航都跑、先于页面脚本、绕页面 CSP：
+                // 错误桥（dsh UI 报错落 events.log）+ #root 挂载心跳，细节见
+                // pagebridge.rs 头注
+                .initialization_script(pagebridge::INIT_SCRIPT)
                 .on_download(download::handler(download_log))
                 .build()?;
             tray::setup_tray(&handle)?;
@@ -497,7 +524,7 @@ pub fn run() {
                     token_tx,
                     move |event| {
                         append_debug_log(&debug_log, &event);
-                        bridge_event(&emit_handle, &nav_home, &creds_tx, &token_rx, deployed, event);
+                        bridge_event(&emit_handle, &nav_home, &creds_tx, &token_rx, deployed, &debug_log, event);
                     },
                 )
             });
@@ -734,6 +761,38 @@ pub(crate) fn resolve_custom_sound(handle: &tauri::AppHandle, rel: &str) -> Opti
     [from_resource, from_exe].into_iter().flatten().find(|p| p.is_file())
 }
 
+/// 删 WebView2 cookie 罐里所有 dsh-auth-* cookie，返回删除个数。dsh 每个进程
+/// Set-Cookie 一个新名（dsh-auth-<hash>，30 天 Max-Age），cookie 不分端口、罐子
+/// 只进不出，攒满 ~66 个（≈15KB）后 Cookie 头 + bundle 组合 URL 超 Node 16KB
+/// 请求头上限 → dsh 431 → 主窗口 "Failed to load plugins"（2026-09-09 实锤，
+/// 66 个 cookie 实测）。拿 cookies() 列全罐（含 HttpOnly），逐个 delete_cookie
+/// （wry 经 ICoreWebView2CookieManager.DeleteCookie 按 name+domain+path 精确删，
+/// cookies() 回传的 Cookie 已带 domain/path，原样传回即中）。失败返回 0 不阻断
+/// 导航——最坏情形等于回到修复前现状（几周后再次积累）。必须跑在非主线程的
+/// async 上下文：Windows 同步命令/事件回调里调 cookies() 会死锁（tauri 文档
+/// + wry#583），本函数由 Ready 的 async spawn 任务调用。
+fn prune_stale_dsh_cookies(w: &tauri::WebviewWindow) -> usize {
+    let stale = match w.cookies() {
+        Ok(list) => list
+            .into_iter()
+            .filter(|c| is_stale_dsh_cookie(c.name()))
+            .collect::<Vec<_>>(),
+        Err(_) => return 0,
+    };
+    let n = stale.len();
+    for c in stale {
+        let _ = w.delete_cookie(c);
+    }
+    n
+}
+
+/// 431 防护只清 dsh 浏览器侧 auth cookie：名字随进程轮换（dsh-auth-<hash>）。
+/// 远程代理门岗 cookie（proxy::COOKIE_NAME = "__dsh_remote"）与其它站点 cookie
+/// 一律不动——误删会踢掉已登录的远程页，只能靠完整链接重进。
+fn is_stale_dsh_cookie(name: &str) -> bool {
+    name.starts_with("dsh-auth-")
+}
+
 fn append_debug_log(path: &PathBuf, event: &ProcessEvent) {
     let line = match event {
         ProcessEvent::StateChanged(s) => format!("{s:?}"),
@@ -748,6 +807,7 @@ fn bridge_event(
     creds_tx: &watch::Sender<Option<Arc<DshCreds>>>,
     token_rx: &watch::Receiver<Option<Arc<str>>>,
     deployed: bool,
+    debug_log: &std::path::Path,
     event: ProcessEvent,
 ) {
     match event {
@@ -796,7 +856,22 @@ fn bridge_event(
                     let creds_tx = creds_tx.clone();
                     let w = w.clone();
                     let handle = handle.clone();
+                    // owned 化后再进 async move 块：spawn 的 future 必须 'static
+                    let debug_log = debug_log.to_path_buf();
                     tauri::async_runtime::spawn(async move {
+                        // 0.5.11：导航前先清掉罐里的陈年 dsh-auth-* cookie——dsh 每个
+                        // 进程 Set-Cookie 一个新名（30 天 Max-Age），cookie 不分端口、
+                        // WebView2 罐子只进不出；攒到 ~66 个（≈15KB）时 Cookie 头 +
+                        // bundle 组合 URL 超过 Node 16KB 请求头上限 → dsh 431 → 主窗口
+                        // "Failed to load plugins"（2026-09-09 实锤）。下面 ?token=
+                        // 导航会立即补发新 cookie，罐子此后恒 ≤1 个。
+                        let pruned = prune_stale_dsh_cookies(&w);
+                        if pruned > 0 {
+                            append_debug_line(
+                                &debug_log,
+                                &format!("[dshdesktop] pruned {pruned} stale dsh-auth cookies (431 guard)"),
+                            );
+                        }
                         let mut token: Option<Arc<str>> = token_rx.borrow().clone();
                         let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
                         while token.is_none() && tokio::time::Instant::now() < deadline {
@@ -824,6 +899,46 @@ fn bridge_event(
                         if let Ok(url) = Url::parse(&url_str) {
                             let _ = w.navigate(url);
                         }
+                        // UI 心跳看门狗（0.5.11）：导航 30s 后 pagebridge 还没收到
+                        // #root 挂载上报 = "进程 Ready 但 UI 死"（431 同类故障）。
+                        // 自愈一次：清 dsh-auth cookie + 带 token 重导航。one-shot
+                        // 不自旋——再死等 dsh 监督重启走下一轮；30s 内 dsh
+                        // Failed/Stopped 把窗口牵回本地 splash 则放弃（别导航到死端口）
+                        let nav_ms = pagebridge::note_navigation();
+                        let heal_w = w.clone();
+                        let heal_log = debug_log.clone();
+                        let heal_token = token.clone();
+                        tauri::async_runtime::spawn(async move {
+                            tokio::time::sleep(Duration::from_secs(30)).await;
+                            if pagebridge::boot_millis() >= nav_ms {
+                                return;
+                            }
+                            // 30s 窗口内 dsh 重启会产生新一轮 Ready→导航→看门狗：
+                            // NAV_MS 已换 = 本狗看的是旧导航，让位给新狗——否则
+                            // 会拿上一进程的 stale token 把正在加载的新页面导航去 401
+                            if pagebridge::nav_millis() != nav_ms {
+                                return;
+                            }
+                            if heal_w
+                                .url()
+                                .map(|u| u.host_str() != Some("127.0.0.1"))
+                                .unwrap_or(true)
+                            {
+                                return;
+                            }
+                            let pruned = prune_stale_dsh_cookies(&heal_w);
+                            append_debug_line(
+                                &heal_log,
+                                &format!("[dshdesktop] UI boot heartbeat missing 30s; self-heal: pruned {pruned} dsh-auth cookies, re-navigating (port={port})"),
+                            );
+                            let s = match &heal_token {
+                                Some(t) => format!("http://127.0.0.1:{port}/?token={t}"),
+                                None => format!("http://127.0.0.1:{port}/"),
+                            };
+                            if let Ok(url) = Url::parse(&s) {
+                                let _ = heal_w.navigate(url);
+                            }
+                        });
                     });
                 }
             }
@@ -852,6 +967,17 @@ fn bridge_event(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stale_cookie_predicate_spares_remote_gate_cookie() {
+        // dsh 浏览器侧 auth cookie 名随进程轮换（dsh-auth-<hash>，2026-09-09
+        // 实机抓到 66 个）；远程代理门岗 cookie 是 __dsh_remote（proxy::COOKIE_NAME），
+        // 431 防护绝不能误删它，否则已登录的远程页被踢、只能靠完整链接重进
+        assert!(crate::is_stale_dsh_cookie("dsh-auth-UOBWB7hnni8G1RB"));
+        assert!(crate::is_stale_dsh_cookie("dsh-auth-x3d1aKAzkPuvABx"));
+        assert!(!crate::is_stale_dsh_cookie("__dsh_remote"));
+        assert!(!crate::is_stale_dsh_cookie("session"));
+    }
+
     #[test]
     fn needs_local_stamp_detects_existing_stamps() {
         // 壳侧自带本地时间戳的行（bring_to_front / 播放诊断）不重复盖

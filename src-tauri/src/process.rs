@@ -204,6 +204,12 @@ impl DshProcess {
                 self.inner.paths.work_dir.display()
             ));
             let mut cmd = Command::new(&self.inner.paths.node_exe);
+            // Node 默认请求头上限 16KB：WebView2 罐或用户自带浏览器攒下的
+            // dsh-auth-* cookie + 插件 bundle 组合 URL 可超限 → dsh 431 → 主窗口
+            // "Failed to load plugins"（2026-09-09 实锤）。cookie 剪枝（lib.rs）是
+            // 主防线，这里是纵深：上限提到 64KB，兼护用户浏览器直连 dsh 端口的
+            // 场景。旗标必须在 bin 路径之前（node 旗标，非 dsh 参数）
+            cmd.arg("--max-http-header-size=65536");
             cmd.arg(&self.inner.paths.dsh_bin)
                 .arg(crate::upstream::DSH_WEB_SUBCOMMAND)
                 .arg(crate::upstream::DSH_PORT_FLAG)
