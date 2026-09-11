@@ -147,7 +147,7 @@ fn session_log_pill_hidden_rule() {
     // 选择器锚 = "_" + 上游 CSS Modules 本地名（upstream.rs 常量，契约套件守门）
     let anchor = format!(
         "[class*=\"_{}\"]",
-        dshdesktop_lib::upstream::SESSION_LOG_BUTTON_NEEDLE
+        dshdesktop_lib::upstream::SESSION_HEADER_MORE_BUTTON_NEEDLE
     );
     // 必须双写凑 0-2-0 优先级：上游样式由 JS 运行时注入、文档序在我们之后，
     // 单写平级必输（改断的表现是规则在页面里但按钮照显示）

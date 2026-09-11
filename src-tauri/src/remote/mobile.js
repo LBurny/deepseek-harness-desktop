@@ -223,11 +223,17 @@
 })()
 
 /*
- * 附件按钮：上游输入只有拖拽/剪贴板两条图片入口（onPaste → intakeImages
- * → createDraftImages → base64 → session.prompt），手机浏览器一条都没有。
- * 这里在输入卡片工具行（"+" 旁）注入一个样式克隆自 "+" 的回形针按钮，
- * 点击调起系统文件选择器，选完构造 DataTransfer 合成 paste 事件喂回上游
- * 自己的粘贴管线——类型/数量/体积校验与报错 toast 全部复用上游逻辑。
+ * 附件按钮（**0.1.5 起退化为兜底**）：0.1.2 时代上游输入只有拖拽/剪贴板两条图片
+ * 入口（onPaste → intakeImages → createDraftImages → base64 → session.prompt），
+ * 手机浏览器一条都没有；这里在输入卡片工具行（"+" 旁）注入一个样式克隆自 "+" 的
+ * 回形针按钮，点击调起系统文件选择器，选完构造 DataTransfer 合成 paste 事件喂回
+ * 上游自己的粘贴管线——类型/数量/体积校验与报错 toast 全部复用上游逻辑。
+ *
+ * **0.1.5 起上游自带附件按钮**（实测 aria-label「添加附件」，支持任意文件类型），
+ * 我们的图片版（「添加图片附件」）与它并排就成了两个回形针。故 setup() 先探测原生
+ * 入口：存在即不注入、并摘掉可能残留的旧按钮；上游哪天再撤掉该入口，这里自动回退
+ * 到注入（探测只看 aria-label 里的「附件 / attach」，改名不匹配时最多多注入一个
+ * 按钮，功能不损）。
  *
  * 注意：上游 host（dsh-attachment admitEncodedImages，sharp 校验）只认
  * png/jpeg/webp/gif 四种位图，文档类型上游不支持，选择器因此只开图片。
@@ -281,6 +287,15 @@
       return picker
     }
 
+    // 上游是否已自带附件入口（0.1.5 起为「添加附件」，支持任意文件类型）。
+    // 只看 aria-label 里的「附件 / attach」且排除我们自己的按钮——上游改名则
+    // 退化为"多注入一个按钮"，不损功能。
+    const hasNativeAttach = (tools) =>
+      Array.from(tools.querySelectorAll('button')).some(
+        (b) =>
+          !b.hasAttribute(BTN_ATTR) && /附件|attach/i.test(b.getAttribute('aria-label') || ''),
+      )
+
     const setup = (tools) => {
       const addBtn = tools.querySelector('button[class*="_add"]')
       const card = tools.closest('[class*="_card"]')
@@ -321,6 +336,12 @@
       }
       for (const tools of document.querySelectorAll('div[class*="_tools"]')) {
         try {
+          // 0.1.5 起上游自带附件按钮（任意文件类型）：原生入口在就不注入我们的
+          // 图片版（否则两个回形针并排），并摘掉可能残留的旧按钮
+          if (hasNativeAttach(tools)) {
+            for (const b of tools.querySelectorAll(`button[${BTN_ATTR}]`)) b.remove()
+            continue
+          }
           const existing = tools.querySelector(`button[${BTN_ATTR}]`)
           if (existing) {
             // 跟随 "+" 的禁用态（锁定/忙时上游 onPaste 也会拒收，双保险）

@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **dsh 运行时 0.1.2-rc.1 → 0.1.5-rc.2**（fetch-runtime.ps1 钉版；跟版预研与影响面见 `docs/upstream-0.1.5-prep.zh-CN.md`，执行计划见 `docs/superpowers/plans/` 下 2026-09-12 的执行计划）。上游要点：**会话格式升 V3**——恢复旧会话时生成 V3 新日志并保留原文件，但**升级后的会话不可降级读取（用户数据单向）**；Web 新增流式文件上传（任意类型，进度/取消/切会话续显）与右侧栏（多标签/分栏/全屏，Markdown/代码/HTML/PDF/图片预览，包括子代理与未激活会话的文件，**原 Detail 面板移除**）；Web minimal 预设只剩持久 shell（`str_replace_editor` 与 `fs-local` 整组移除，极简模式从双工具降为单工具）；出站请求开始遵循 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY`（回环显式豁免 `127.0.0.0/8`）；Windows 本地子进程新增 `windowsHide`；MCP 工具列表遇重复分页游标不再挂住启动；插件面板槽位重排（`conversation`/`details` → keyed `main` + `rightbar` + `sidebar.panellist`）。**逆向面实测几乎不动**：契约套件 37 条探针仅 1 条漂移（见下）
+- 会话头部「Session log 下载按钮」在 0.1.5 改为「更多操作」图标按钮（CSS Modules 本地名 `sessionLogButton` → `moreButton`，下载动作收进它弹出的菜单）；`upstream.rs` 常量随之改 `SESSION_HEADER_MORE_BUTTON_NEEDLE`，`mobile.css` 的手机端隐藏规则同步改锚（锚点全 node_modules 唯一命中，无同名歧义）
+
+### Added
+
+- **远程代理流式上传旁路**（`remote/proxy.rs`）：`forward()` 为支持 401 换 cookie 后重放会整读请求体（上限 64MiB），而 0.1.5 的 `POST /api/session/uploadFileBinary` 是流式、服务端不限体积——命中 `is_streaming_body_route` 即转 `forward_streaming` 逐块直通（上传前强制换一次 cookie、不做 401 重放；换不到 cookie 时 dsh 的 401 原样透传，绝不误报 502）。修复手机端经隧道传大文件撞壳侧上限报 502「读取请求体失败」与壳进程短暂驻留 64MiB 两个问题。回归 `upload_route_streams_without_buffering` 用裸 TCP 分块 + 假 dsh 进度探针钉死「客户端发完之前代理已把首块转给 dsh」，并对旧缓冲实现验过红（注意 hyper 客户端对 `wrap_stream` 请求体在下一帧前不 flush，测试客户端必须用裸 TCP 才能观察到首块上线）
+- 契约套件新增 6 条 0.1.5 面探针：流式上传路由存在 + `requestBody: streaming` 声明、`/open-in-app/*` 三条免鉴权路由、面板槽位（`main`/`rightbar`/`sidebar.panellist`）、会话格式版本 V3、命令服务 `attachments` 旗标（预装 `/init` 插件兼容哨兵）、minimal 预设已无文件编辑工具（语义变更哨兵，与既有 win32 修复哨兵并存）
+
+### Fixed
+
+- **跟版脚本的文档基线同步复活**：`follow-upstream.ps1` 的文档同步靠计数断言（`upstream.rs=1 / design.zh-CN.md=3 / README×2=1`）定位版本串，0.1.2 跟版时因 `upstream.rs` 里两处历史对照注释含旧版全串（整文件计数 3≠1）导致**四个文件全部被静默 skip**、头注烂了两个版本。现把历史对照改成不带 `-rc` 的写法、计数不符时**整步显式报错**（不再静默跳过），SelfTest 增加「四文件钉版引用计数 == 期望」断言（13/13 绿）。本次跟版四个文件全部自动翻转成功
+- fetch-runtime 冒烟的就绪行轮询预算 30s → 120s，且失败路径打印 dsh 原始输出：首跑曾在 `npm install`（500+ 包）与 `prune`（删约 2 万文件）之后把环境抖动误报成「就绪行契约漂移」（同一棵树随后手动起 5s 就绪，就绪行字符串与 0.1.2 逐字相同）
+
 ## [0.5.11] - 2026-09-09
 
 ### Fixed

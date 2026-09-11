@@ -141,6 +141,9 @@ src-tauri/src/
                     否则 dsh 403；.no_proxy() 防系统代理劫持回环；门岗 cookie 30 天
                     长效（Max-Age=2592000——会话 cookie 会被手机浏览器进程回收丢弃，
                     地址栏已被 302 剥掉 token，一丢即 403 假"失效"，0.5.7 起长效化）；
+                    0.1.5 起加流式上传旁路：请求体默认整读（64MiB 上限）以支持 401
+                    重放，但 /api/session/uploadFileBinary 命中 is_streaming_body_route
+                    即转 forward_streaming 逐块直通（先换 cookie、不重放）；
                     HTML 注入移动端适配：
                     mobile.css 700px 断点 + mobile.js "项目/信息"标签 + 回形针附件按钮；
                     HTML 挂载点后注入 splash.css/splash.js 加载过渡页（#root 出现子
@@ -272,7 +275,12 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
   RegDeleteValueW，Run 值不存在时返回 ERROR_FILE_NOT_FOUND——从未开过自启动的用户
   每次保存设置都弹"系统找不到指定的文件 (os error 2)"。先 is_enabled() 比目标态，
   已达成即 Ok（commands.rs 有锚定测试）
-- **dsh 事实（0.1.2）**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只许绑 127.0.0.1 且 spawn 必带 `--no-open`；**0.1.2 起 BrowserAuth 鉴权无关闭开关（回环也在门内）**：每进程 launch token 经 stdout 就绪行 `dsh web: http://127.0.0.1:<port>/?token=<t>` 打印（就绪行晚于 HTTP 绑定，必须持续 pump），`GET /?token=<t>` → 303 + Set-Cookie `dsh-auth-<hash>=v1.…`（HttpOnly/SameSite=Strict，**绑 authority——换端口即失效**），静态资产无门、`/api/*` 与 WS 全在门内；事件走**单 WS `/api/remote.mux`**：客户端发 `{type:"open",streamId,endpoint,payload:{args}}`，服务端回 `{type:"item"|"end"|"error",streamId,…}`，`$events` 端点（open 空 args）首条 item 是 ready，随后 `{type:"emit"|"waterfall",event,args|request}`，会话事件经 `session/follow`（args 包 `{request:{address:{kind:"session",sessionId}}}`——typert wire 名，裸 address 被拒）；完成判定看 follow 流 `event.type=="turn/end"`（`data.reason.kind=="completed"`），子代理标记看 `$events` 的 `api-session/added` `args[0].origin`；**严禁实现 `$events/result` 回包**（任一客户端回 result 即抢先替用户结算审批）；agent 预设独立成包 `@deepseek-ai/dsh-agent-presets`；设置在 `$DSH_HOME/settings.yaml` 的 `ui-theme.preference`（light/dark/system）；**npm 依赖是浮动区间**，跟版靠契约套件守门
+- **dsh 事实（0.1.5）**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只许绑 127.0.0.1 且 spawn 必带 `--no-open`；**0.1.2 起 BrowserAuth 鉴权无关闭开关（回环也在门内）**：每进程 launch token 经 stdout 就绪行 `dsh web: http://127.0.0.1:<port>/?token=<t>` 打印（就绪行晚于 HTTP 绑定，必须持续 pump；0.1.5 该行字符串实测未变），`GET /?token=<t>` → 303 + Set-Cookie `dsh-auth-<hash>=v1.…`（HttpOnly/SameSite=Strict，**绑 authority——换端口即失效**），静态资产无门、`/api/*` 与 WS 全在门内；事件走**单 WS `/api/remote.mux`**：客户端发 `{type:"open",streamId,endpoint,payload:{args}}`，服务端回 `{type:"item"|"end"|"error",streamId,…}`，`$events` 端点（open 空 args）首条 item 是 ready，随后 `{type:"emit"|"waterfall",event,args|request}`（0.1.5 转发清单新增 `goal/activation-changed`，壳对未订阅事件一律忽略），会话事件经 `session/follow`（args 包 `{request:{address:{kind:"session",sessionId}}}`——typert wire 名，裸 address 被拒）；完成判定看 follow 流 `event.type=="turn/end"`（`data.reason.kind=="completed"`），子代理标记看 `$events` 的 `api-session/added` `args[0].origin`；**严禁实现 `$events/result` 回包**（任一客户端回 result 即抢先替用户结算审批）；agent 预设独立成包 `@deepseek-ai/dsh-agent-presets`；设置在 `$DSH_HOME/settings.yaml` 的 `ui-theme.preference`（light/dark/system）；**npm 依赖是浮动区间**，跟版靠契约套件守门
+- **dsh 0.1.5 的四条新事实**：①**会话格式 V3**（`SESSION_FORMAT_VERSION` 0→3）——恢复旧会话时生成新格式日志并保留原文件，但**升级后的会话不支持降级读取 = 用户数据单向**，发版后别回退 dsh 版本；②**流式上传路由 `POST /api/session/uploadFileBinary`**（`requestBody:"streaming"`，dsh 侧不限体积；普通 buffered `/api` 路由上限 300MB）——壳代理必须为它开流式旁路（见「关键约定与坑」）；③**面板槽位重排**：`conversation`/`details` → keyed `main`（保留 key `conversation`）+ `rightbar`，sidebar 内新增 `sidebar.panellist`，**原 Detail 面板移除**，Web 右侧栏支持多标签/分栏/全屏与 Markdown/代码/HTML/PDF/图片预览；④**Web minimal 预设只剩持久 shell**（`str_replace_editor` + `fs-local` 整组移除，极简模式从双工具降为单工具，用户可感）。另：出站请求开始遵循 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY`（**回环永不走代理**，dsh 侧显式豁免 `127.0.0.0/8` 与 IPv4-mapped）、Windows 本地子进程新增 `windowsHide`、新增**免鉴权**的 `/open-in-app/*` 路由族、会话持久化加"同一会话至多一个进程持有"的锁
+- **流式上传必须走旁路（0.1.5 实踩）**：`remote/proxy.rs` 的 `forward()` 为支持 401 换 cookie 后重放，会把请求体**整读**（`REPLAY_BODY_LIMIT = 64MiB`）；而 dsh 0.1.5 的 `/api/session/uploadFileBinary` 是**流式、服务端无上限**——不旁路则手机端经隧道传大文件必撞壳侧 64MiB 上限报 502「读取请求体失败」，且大文件在壳进程里整份驻留。`forward()` 开头 `is_streaming_body_route` 命中即转 `forward_streaming`：逐块 `wrap_stream` 直通、**上传前强制换一次 cookie、不做 401 重放**（体一旦被消费无法重放；换来的一次廉价回环交换抵掉整份文件丢失的风险），换不到 cookie 时 dsh 的 401 原样透传、绝不误报 502。回归 `upload_route_streams_without_buffering` 钉死"客户端发完之前代理已把首块转给 dsh"——**注意**：hyper 客户端对 `wrap_stream` 请求体在下一帧到达前不 flush（1KB~256KB 首块均实测），所以测试客户端必须用裸 TCP 手写 chunked 才能观察到首块上线
+- **会话数据单向（0.1.5）**：dsh 恢复旧会话时生成 V3 新日志（原文件保留），但**升级后的会话旧版读不回**——发版说明必须明示"不可降级"，回滚 dsh 版本不能当预案；验收必须覆盖"保留 DSH_HOME 的升级首启"（`acceptance.ps1` 卸旧不删 DSH_HOME 的那条路径）
+- **右栏/文档预览是手机端新增适配面（0.1.5）**：`_rightbarCol` 在无面板打开时是 **0 宽列**（实测不侵入布局），但打开文档/文件面板后的 ≤700px 形态要看真机；"在应用中打开"入口在手机上无意义（可能拉起 PC 端应用），评估隐藏；旧「Session log 药丸」在 0.1.5 变成会话头部 `moreButton` 图标（下载动作收进菜单），mobile.css 锚点已随之改
+- **跟版脚本文档锚点纪律**：`follow-upstream.ps1` 的文档基线同步是**计数断言式**的（`Get-DocSyncTargets`：`upstream.rs=1 / design.zh-CN.md=3 / README×2=1`），旧版本串取自 `upstream.rs` 头注「事实基线」行。**改 upstream.rs / design 时不得引入钉版全串以外的版本字面量**——历史对照一律写成不带 `-rc` 的形态（如「旧版（0.1.1 线）」），否则计数不符。0.1.2 跟版就因 upstream.rs 里两处历史注释含旧版全串（整文件计数 3≠1）导致**四个文件全部被静默 skip**、头注烂了两个版本；现已改为计数不符时**整步显式报错**，SelfTest 也加了"四文件计数 == 期望"断言（13/13）
 - **运行时布局**：暂存 `src-tauri/runtime/<triplet>/`，tauri.conf `resources` 用映射形式
   `{ "runtime": "runtime", "resources/sounds": "sounds" }`，安装后落 `<install>/runtime/<triplet>/`
   与 `<install>/sounds/*.wav`（列表形式会错落到 `<install>/resources/sounds/` 致提示音探测不到，
@@ -430,7 +438,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 250 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 271 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 

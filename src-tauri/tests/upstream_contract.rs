@@ -588,8 +588,8 @@ async fn probe_ws(dsh: &Dsh, c: &mut Checker) {
     // 4) open session/follow（不存在的 sessionId）→ 收 error 或 end 帧即形状正确。
     // 形参 wire 名是 `request`（SessionFollowRequest={address,maxMessages?}，
     // typert.host.js:822）——args 必须包一层 request，裸 address 会被网关拒为
-    // arguments-invalid（0.1.2-rc.1 实测）。error 帧字段集（alpha.2 RemoteError
-    // 统一封装）：0.1.2-rc.1 实测 = ["code","details","message"]。
+    // arguments-invalid（0.1.2 起实测，0.1.5 复验不变）。error 帧字段集（alpha.2
+    // RemoteError 统一封装）：实测 = ["code","details","message"]（两版一致）。
     let open_follow = serde_json::json!({
         "type": "open",
         "streamId": "probe-follow",
@@ -752,20 +752,22 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         format!("path={index_html:?}"),
         "dsh 改了挂载点结构：proxy.rs splash 注入整体跳过（远程首连回到白屏），改 upstream::SPA_ROOT_MOUNT_NEEDLE",
     );
-    // mobile.css 隐藏 Session log 药丸的锚点：CSS Modules 本地名仍在插件包内
-    // （实测落盘：@deepseek-ai/dsh-session-log-export/lib/client.js）
+    // mobile.css 隐藏会话头部"更多操作"图标的锚点：CSS Modules 本地名仍在插件包内
+    // （实测落盘：@deepseek-ai/dsh-session-log-export/lib/client.js；0.1.5 起该包
+    // 渲染的是 moreButton 图标按钮——下载动作收进它弹出的菜单，本地名不再是
+    // sessionLogButton）
     let hit = tree_find(
         &nm,
-        upstream::SESSION_LOG_BUTTON_NEEDLE.as_bytes(),
+        upstream::SESSION_HEADER_MORE_BUTTON_NEEDLE.as_bytes(),
         Some("client.js"),
         4 << 20,
         4,
     );
     c.check(
-        "插件 client.js 仍含 sessionLogButton 本地名",
+        "插件 client.js 仍含会话头部 moreButton 本地名（0.1.5 起取代 sessionLogButton）",
         hit.is_some(),
         format!("hit={hit:?}"),
-        "上游改了类名：mobile.css 的 [class*=\"_sessionLogButton\"] 隐藏规则静默失效（按钮复原显示），改 upstream::SESSION_LOG_BUTTON_NEEDLE 与 mobile.css 的选择器",
+        "上游改了类名：mobile.css 的 [class*=\"_moreButton\"] 隐藏规则静默失效（按钮复原显示），改 upstream::SESSION_HEADER_MORE_BUTTON_NEEDLE 与 mobile.css 的选择器",
     );
     // mobile.css 模型选择器图标化的三个锚点：data-slot 语义钩子
     // （dsh-client-ui-conversation/lib/client.js）+ 触发器两段文案的
@@ -971,6 +973,96 @@ fn probe_project(rt: &Path, dsh_home: &Path, c: &mut Checker) {
     }
 }
 
+/// 0.1.5 新增/变更的逆向面（跟版时必须逐条核对的那几处：流式上传路由、
+/// 免鉴权的 open-in-app 路由族、面板槽位重排、会话格式版本、命令服务旗标、
+/// minimal 预设工具面）。
+fn probe_015_faces(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    let read = |segments: &[&str]| {
+        fs::read_to_string(upstream::join_segments(&nm, segments)).unwrap_or_default()
+    };
+
+    // 1) 流式上传路由（proxy.rs 流式旁路的依据）
+    let upload = read(&["@deepseek-ai", "dsh-client-file-upload", "lib", "index.js"]);
+    c.check(
+        "上传路由声明存在且为流式（requestBody: streaming）",
+        upload.contains(upstream::UPLOAD_STREAM_PATH)
+            && upload.contains("requestBody: \"streaming\""),
+        format!("contains_route={}", upload.contains(upstream::UPLOAD_STREAM_PATH)),
+        "上传路由或流式声明变了：proxy.rs 的流式旁路会失配（大文件上传回到 502），改 upstream::UPLOAD_STREAM_PATH 与 is_streaming_body_route",
+    );
+
+    // 2) open-in-app 路由族（免鉴权层；代理通用透传，手机端适配评估依据）
+    let open_in = read(&["@deepseek-ai", "dsh-host-open-in-app", "lib", "index.js"]);
+    let missing: Vec<&str> = [
+        upstream::OPEN_IN_APP_APPS_ROUTE,
+        upstream::OPEN_IN_APP_ICON_PREFIX,
+        upstream::OPEN_IN_APP_OPEN_ROUTE,
+    ]
+    .into_iter()
+    .filter(|r| !open_in.contains(r))
+    .collect();
+    c.check(
+        "open-in-app 三条路由仍在（免鉴权层，代理透传）",
+        missing.is_empty(),
+        format!("missing={missing:?}"),
+        "上游改了 open-in-app 路由：改 upstream::OPEN_IN_APP_* 并复核手机端入口隐藏规则",
+    );
+
+    // 3) 面板槽位重排（0.1.2 的 conversation/details → 0.1.5 的 keyed main + rightbar）
+    let layout = read(&["@deepseek-ai", "dsh-client-ui-layout", "lib", "client.js"]);
+    c.check(
+        "布局仍暴露 rightbar 槽（0.1.5 面板重排标志）",
+        layout.contains(upstream::PANEL_SLOT_RIGHTBAR) && layout.contains(upstream::PANEL_SLOT_MAIN),
+        format!("path_len={}", layout.len()),
+        "槽位体系又变了：picker.rs 钉的 browse 表面（ui-workspace directory-flow）可能失配——真机点一次目录选择器；改 upstream::PANEL_SLOT_*",
+    );
+    let sidebar = read(&["@deepseek-ai", "dsh-client-ui-sidebar", "lib", "client.js"]);
+    c.check(
+        "侧栏仍暴露 sidebar.panellist 槽",
+        sidebar.contains(upstream::SIDEBAR_PANELLIST_SLOT),
+        format!("path_len={}", sidebar.len()),
+        "侧栏槽位变了：改 upstream::SIDEBAR_PANELLIST_SLOT（影响面板插件挂载）",
+    );
+
+    // 4) 会话格式版本（壳不读写会话日志，只钉版本漂移——用户数据单向）
+    let session = read(&["@deepseek-ai", "dsh-session", "lib", "index.js"]);
+    let want = format!(
+        "SESSION_FORMAT_VERSION = {}",
+        upstream::SESSION_FORMAT_VERSION_EXPECTED
+    );
+    c.check(
+        "会话格式版本仍是 V3",
+        session.contains(&want),
+        format!("want={want:?}"),
+        "会话格式又升版了：升级路径验收（acceptance）与发版说明的'不可降级读取'口径要跟着改，改 upstream::SESSION_FORMAT_VERSION_EXPECTED",
+    );
+
+    // 5) 命令服务附件旗标（预装插件 dsh-command-init 的兼容哨兵）
+    let commands = read(&["@deepseek-ai", "dsh-commands", "lib", "index.js"]);
+    c.check(
+        "命令定义仍有 attachments 旗标（预装 /init 插件兼容面）",
+        commands.contains(upstream::COMMANDS_ATTACHMENT_FLAG),
+        format!("path_len={}", commands.len()),
+        "命令注册面又变了（0.1.2 的 input.images → 0.1.5 的 input.attachments）：复核 resources/preseed-plugins/dsh-command-init，改 upstream::COMMANDS_ATTACHMENT_FLAG",
+    );
+
+    // 6) minimal 预设的工具面（0.1.5 起只剩持久 shell，文件编辑工具已移除）
+    let preset = read(&[
+        "@deepseek-ai",
+        "dsh-agent-presets",
+        "presets",
+        "minimal",
+        "agent.cordis.yml",
+    ]);
+    c.check(
+        "minimal 预设已不含文件编辑工具（0.1.5 单工具语义）",
+        !preset.contains(upstream::PRESET_MINIMAL_EDITOR_ABSENT_NEEDLE),
+        format!("path_len={}", preset.len()),
+        "上游把 str_replace_editor 装回 minimal 了：'极简模式只有持久 shell'的发版说明口径要改，改 upstream::PRESET_MINIMAL_EDITOR_ABSENT_NEEDLE",
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn upstream_contract() {
     let Some(rt) = runtime_dir() else {
@@ -985,6 +1077,7 @@ async fn upstream_contract() {
     probe_presets(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);
     probe_preseed_plugin_needles(&rt, &mut c);
+    probe_015_faces(&rt, &mut c);
     match spawn_dsh(&rt).await {
         Ok(dsh) => {
             probe_http(&dsh, &mut c).await;

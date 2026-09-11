@@ -1,10 +1,10 @@
 ﻿# 下载并组装内嵌运行时：Node.js win-x64 便携版 + @deepseek-ai/dsh（含 node_modules）。
 # 产物写入 src-tauri/runtime/<triplet>/，供 tauri.conf.json 的 bundle.resources 打包。
-# 用法：powershell -File scripts/fetch-runtime.ps1 [-NodeVersion 24.19.0] [-DshVersion 0.1.2-rc.1] [-CloudflaredVersion 2026.8.2]
+# 用法：powershell -File scripts/fetch-runtime.ps1 [-NodeVersion 24.19.0] [-DshVersion 0.1.5-rc.2] [-CloudflaredVersion 2026.8.2]
 [CmdletBinding()]
 param(
   [string]$NodeVersion = '24.19.0',
-  [string]$DshVersion = '0.1.2-rc.1',
+  [string]$DshVersion = '0.1.5-rc.2',
   [string]$CloudflaredVersion = '2026.8.2',
   [string]$PnpmVersion = '11.22.0',
   [string]$Triplet = 'windows-x64'
@@ -89,12 +89,19 @@ Write-Host "冒烟启动 dsh web --port $smokePort ..."
 # 与壳 spawn 形一致带 --no-open（openBrowser 默认 true，不带每次冒烟都弹系统浏览器）
 $job = Start-Job -ScriptBlock { param($n, $b, $p) & $n $b web --port $p --no-open 2>&1 } -ArgumentList $nodeExe, $bin, $smokePort
 $token = $null
-foreach ($i in 1..60) {
+$out = ''
+$smokeStart = Get-Date
+# 预算 120s：就绪行本身很快（手动冷启实测 ~5s），但本步紧跟在 npm install（500+
+# 包）+ prune（删约 2 万文件）之后——Defender 正在扫这批新文件、文件缓存全冷，
+# 就绪时间大概率被拉长。固定 30s 曾在 0.1.5 跟版首跑把这种环境抖动误报成
+# "就绪行契约漂移"（同一棵树随后手动起，5s 就绪）。
+foreach ($i in 1..240) {
   $out = (Receive-Job $job -Keep) | Out-String
   $m = [regex]::Match($out, 'dsh web: http://127\.0\.0\.1:\d+/\?token=([A-Za-z0-9_-]+)')
   if ($m.Success) { $token = $m.Groups[1].Value; break }
   Start-Sleep -Milliseconds 500
 }
+$smokeWait = [int]((Get-Date) - $smokeStart).TotalSeconds
 $gateOk = $false
 $ok = $false
 if ($token) {
@@ -117,10 +124,15 @@ Get-CimInstance Win32_Process -Filter "Name='node.exe'" |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 Stop-Job $job -ErrorAction SilentlyContinue
 Remove-Job $job -Force -ErrorAction SilentlyContinue
-if (-not $token) { throw 'dsh web 冒烟失败：stdout 未出现就绪行（token）——上游就绪行契约漂移？' }
+if (-not $token) {
+  # 失败必须自证：把 dsh 原始输出打出来（有报错=启动失败；空输出=真契约漂移）
+  Write-Host "--- 冒烟等待 ${smokeWait}s，dsh 输出（尾部 30 行）---" -ForegroundColor Yellow
+  ($out -split "`n" | Select-Object -Last 30) | ForEach-Object { Write-Host "  $_" }
+  throw "dsh web 冒烟失败：${smokeWait}s 内 stdout 未出现就绪行（token）——按上面的 dsh 输出判断：有报错=启动失败，空输出=就绪行契约漂移"
+}
 if (-not $gateOk) { throw 'dsh web 冒烟失败：无凭证 GET / 不是 401——BrowserAuth 门形态变了' }
 if (-not $ok) { throw 'dsh web 冒烟失败：token 交换后 GET / 未得 200' }
-Write-Host 'dsh web 冒烟通过（401 门 + token 交换 + 鉴权 GET / = 200）'
+Write-Host "dsh web 冒烟通过（就绪 ${smokeWait}s：401 门 + token 交换 + 鉴权 GET / = 200）"
 
 # 7. pnpm standalone（壳内置：dsh plugin 的 spawnSync("pnpm") 经 pnpm.cmd 解析到它；
 #    包结构 bin/pnpm.cjs -> ./pnpm.mjs -> ../dist/pnpm.mjs，dist 是 14MB 全量 bundle，

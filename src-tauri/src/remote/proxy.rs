@@ -439,6 +439,12 @@ async fn ensure_cookie(st: &ProxyState, force_refresh: bool) -> Option<String> {
 async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response {
     // 壳侧缓存击穿参数只在代理与浏览器之间有意义，转发前剥掉（dsh query 逐字校验）
     let path_and_query = &strip_cache_bust(path_and_query);
+    // 流式上传路由（dsh 0.1.5 的 /api/session/uploadFileBinary，requestBody:
+    // "streaming"）走独立路径：请求体不可重放、可能远超 REPLAY_BODY_LIMIT，
+    // 绝不能在这里整读缓冲（旧实现 64MiB 上限把手机大文件上传打成 502）
+    if crate::upstream::is_streaming_body_route(path_and_query) {
+        return forward_streaming(st, req, path_and_query).await;
+    }
     let Some(c) = st.creds.borrow().clone() else {
         return (StatusCode::SERVICE_UNAVAILABLE, "dsh 未就绪").into_response();
     };
@@ -463,7 +469,7 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
         &method,
         &url,
         cookie.as_deref(),
-        &body_bytes,
+        reqwest::Body::from(body_bytes.clone()),
         rewrite_bundle,
     )
     .await;
@@ -483,7 +489,7 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
                     &method,
                     &url,
                     Some(&fresh),
-                    &body_bytes,
+                    reqwest::Body::from(body_bytes.clone()),
                     rewrite_bundle,
                 )
                 .await
@@ -557,7 +563,61 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
         .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
 }
 
-/// 按剥头规则构造并发出转发请求（cookie 由调用方注入；body 整读以便 401 重放）。
+/// 流式上传转发（dsh 0.1.5 起 `POST /api/session/uploadFileBinary` 走
+/// `requestBody: "streaming"`，dsh 对它不限体积）。与 forward() 的两点根本差异：
+///   1. 请求体逐块透传、不整读缓冲——手机大文件上传不再撞 REPLAY_BODY_LIMIT，
+///      壳进程也不再囤积至多 64MiB；
+///   2. 体一旦被消费就无法重放，故不做 401 重放，改为上传前强制换一次 cookie：
+///      一次廉价的回环 cookie 交换，抵掉整个用户文件因 cookie 轮换而丢失的风险。
+///      换不到 cookie（creds 未就绪/交换失败）仍照常转发，dsh 的 401 原样透传——
+///      绝不把它误报成 502。
+/// rewrite_bundle=false：上传路由不是插件 bundle 形态，无需 identity 改写。
+async fn forward_streaming(st: ProxyState, req: Request, path_and_query: &str) -> Response {
+    let Some(c) = st.creds.borrow().clone() else {
+        return (StatusCode::SERVICE_UNAVAILABLE, "dsh 未就绪").into_response();
+    };
+    let url = format!("http://127.0.0.1:{}{}", c.port, path_and_query);
+    // 消费请求体前取方法/头副本；cookie 主动换新（不缓存旧值赌 401）
+    let method = req.method().clone();
+    let req_headers = req.headers().clone();
+    let cookie = ensure_cookie(&st, true).await;
+    let body = reqwest::Body::wrap_stream(req.into_body().into_data_stream());
+    let res = send_forwarded(
+        &st,
+        &req_headers,
+        &method,
+        &url,
+        cookie.as_deref(),
+        body,
+        false,
+    )
+    .await;
+    let res = match res {
+        Some(r) => r,
+        // 传输层失败（dsh 拒连/中途断链）：502，与 forward() 一致
+        None => return (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
+    };
+    // 响应照 forward() 尾部逐块回传：复制状态+头、剥逐跳头、体走 bytes_stream。
+    // 响应体流若中途出错，hyper 会中止该响应——客户端得到断连而非貌似完整的
+    // 截断 200（状态行发出后无法再改 502，这是 HTTP 语义边界；本路由响应体是
+    // dsh 回的小 JSON，实际不会走到）。绝不记录 token/cookie 值。
+    let mut builder = Response::builder().status(res.status());
+    for (name, value) in res.headers() {
+        if matches!(
+            name.as_str(),
+            "connection" | "transfer-encoding" | "keep-alive" | "upgrade"
+        ) {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Body::from_stream(res.bytes_stream()))
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
+/// 按剥头规则构造并发出转发请求（cookie 由调用方注入；body 由调用方决定整读或
+/// 流式——缓冲体交给 401 重放，流式体不可重放见 forward_streaming）。
 /// rewrite_bundle 由调用方按 path_and_query 判定传入——本函数拿到的 url 带
 /// scheme://host 前缀，就地重算会恒为 false（曾致 accept-encoding 不剥、真 dsh
 /// 压缩响应后改写路径整体失效）
@@ -567,7 +627,7 @@ async fn send_forwarded(
     method: &reqwest::Method,
     url: &str,
     cookie: Option<&str>,
-    body_bytes: &[u8],
+    body: reqwest::Body,
     rewrite_bundle: bool,
 ) -> Option<reqwest::Response> {
     let wants_html = headers
@@ -619,10 +679,7 @@ async fn send_forwarded(
     if let Some(c) = cookie {
         out = out.header(header::COOKIE, dsh_session::cookie_header(c));
     }
-    out.body(reqwest::Body::from(body_bytes.to_vec()))
-        .send()
-        .await
-        .ok()
+    out.body(body).send().await.ok()
 }
 
 /// 缓冲插件 bundle 响应并改写内测声明三元式。content-length/etag 作废（改写后长度与
@@ -893,13 +950,6 @@ mod tests {
                 .header(header::UPGRADE, "websocket");
         }
         b.body(Body::empty()).unwrap()
-    }
-
-    fn pq(r: &Request) -> String {
-        r.uri()
-            .path_and_query()
-            .map(|p| p.as_str().to_string())
-            .unwrap()
     }
 
     #[test]

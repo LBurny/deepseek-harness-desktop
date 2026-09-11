@@ -37,6 +37,9 @@ pub struct FakeDsh {
     pub api_hits: Arc<Mutex<Vec<(String, bool)>>>,
     /// 插件 bundle 命中记录（原始 path+query），供"缓存击穿参数须剥掉再转发"断言
     pub plugin_hits: Arc<Mutex<Vec<String>>>,
+    /// 流式上传累计接收字节（每收一块 push 一次 running total）：测试轮询它判断
+    /// "代理在客户端发完之前就把首块转给了 dsh"（缓冲实现永远看不到）
+    pub upload_progress: Arc<Mutex<Vec<usize>>>,
 }
 
 #[derive(Clone)]
@@ -51,6 +54,8 @@ struct FakeState {
     api_hits: Arc<Mutex<Vec<(String, bool)>>>,
     /// 插件 bundle 命中记录（原始 path+query）
     plugin_hits: Arc<Mutex<Vec<String>>>,
+    /// 流式上传累计接收字节（每收一块 push 一次 running total）
+    upload_progress: Arc<Mutex<Vec<usize>>>,
 }
 
 /// cookie 名固定假形态（真值 = dsh-auth-<base64url(sha256(authority))>，测试只认前缀）
@@ -275,6 +280,45 @@ async fn api(
         .into_response()
 }
 
+/// 流式上传路由（dsh 0.1.5 /api/session/uploadFileBinary 的 requestBody:"streaming"）。
+/// 与 api() 的差别：body 是原始二进制且体积不限，必须用 Body 提取器逐块读，且每收
+/// 一块把 running total 记进 upload_progress——代理若在转发前整读缓冲，这里的记录
+/// 在客户端发完前恒为空（upload_route_streams_without_buffering 靠它判定流式性）。
+/// 路由必须注册在 /api/{*rest} catch-all 之前：catch-all 用 String 提取器，二进制/
+/// 大体会提取失败。
+async fn upload_stream(
+    State(st): State<FakeState>,
+    headers: HeaderMap,
+    body: axum::body::Body,
+) -> Response {
+    let has_cookie = has_auth_cookie(&headers, &st.cookie_name);
+    st.api_hits.lock().unwrap().push((
+        dshdesktop_lib::upstream::UPLOAD_STREAM_PATH.to_string(),
+        has_cookie,
+    ));
+    if !has_cookie {
+        return unauthorized();
+    }
+    let mut total = 0usize;
+    let mut chunks = 0usize;
+    let mut stream = body.into_data_stream();
+    while let Some(chunk) = stream.next().await {
+        let Ok(chunk) = chunk else { break };
+        total += chunk.len();
+        chunks += 1;
+        st.upload_progress.lock().unwrap().push(total);
+    }
+    (
+        StatusCode::OK,
+        [(
+            "content-type",
+            HeaderValue::from_static("application/json"),
+        )],
+        json!({"bytes": total, "chunks": chunks}).to_string(),
+    )
+        .into_response()
+}
+
 /// streamId → endpoint（$events / session/follow）
 type Streams = Arc<RwLock<HashMap<String, String>>>;
 
@@ -363,12 +407,14 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
     let opens = Arc::new(Mutex::new(Vec::new()));
     let api_hits = Arc::new(Mutex::new(Vec::new()));
     let plugin_hits = Arc::new(Mutex::new(Vec::new()));
+    let upload_progress = Arc::new(Mutex::new(Vec::new()));
     let state = FakeState {
         scripted_tx,
         cookie_name: Arc::from(fake_cookie_name(port)),
         opens: opens.clone(),
         api_hits: api_hits.clone(),
         plugin_hits: plugin_hits.clone(),
+        upload_progress: upload_progress.clone(),
     };
     let app = Router::new()
         .route("/", axum::routing::get(page))
@@ -386,6 +432,12 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
         .route("/assets/big.js", axum::routing::get(asset_big_js))
         .route("/assets/small.js", axum::routing::get(asset_small_js))
         .route("/assets/logo.png", axum::routing::get(asset_logo_png))
+        // 流式上传必须先注册在 /api/{*rest} catch-all 之前（catch-all 用 String
+        // 提取器，二进制/大体会被拒）
+        .route(
+            dshdesktop_lib::upstream::UPLOAD_STREAM_PATH,
+            axum::routing::post(upload_stream),
+        )
         .route("/api/{*rest}", axum::routing::any(api))
         .route(
             dshdesktop_lib::upstream::DSH_MUX_PATH,
@@ -408,6 +460,7 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
         opens,
         api_hits,
         plugin_hits,
+        upload_progress,
     }
 }
 

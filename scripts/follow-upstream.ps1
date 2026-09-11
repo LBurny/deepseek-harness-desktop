@@ -92,6 +92,20 @@ function Get-DocBaseline {
   $null
 }
 
+# 文档基线同步的目标与「钉版引用」计数期望（主流程与 SelfTest 共用一份，
+# 防止两边各写一张表再次漂移）。计数只数**钉版引用**：文件里描述历史的版本串
+# 一律写成不带 -rc 的形态（如「旧版（0.1.1 线）」），否则计数对不上、同步整步
+# 失败——0.1.2 跟版就是因为 upstream.rs 里两处历史对照注释含旧版全串（整文件
+# 计数 3≠1），同步被静默 skip，头注烂在旧版本两个版本。
+function Get-DocSyncTargets {
+  @(
+    @{ Path = 'src-tauri\src\upstream.rs'; Expected = 1 },
+    @{ Path = 'docs\design.zh-CN.md';      Expected = 3 },
+    @{ Path = 'README.md';                 Expected = 1 },
+    @{ Path = 'README.zh-CN.md';           Expected = 1 }
+  )
+}
+
 # CHANGELOG 骨架：给了应用版本就开带日期的新段，否则挂到 Unreleased 下；
 # 已含同条目则幂等跳过。条目为英文，与文件既有风格一致。
 function Add-ChangelogEntry {
@@ -187,6 +201,13 @@ if ($SelfTest) {
     }
     T '钉版与 upstream.rs 文档基线一致' {
       Assert-Equal (Get-DocBaseline) (Get-FetchPin 'DshVersion') '基线一致性'
+    }
+    T '四文件钉版引用计数 == 文档同步期望' {
+      $pin = Get-FetchPin 'DshVersion'
+      foreach ($t in Get-DocSyncTargets) {
+        $c = ([regex]::Matches((Read-FileText (Join-Path $root $t.Path)).Text, [regex]::Escape($pin))).Count
+        Assert-Equal $c $t.Expected "$($t.Path) 的 '$pin' 计数"
+      }
     }
     T 'Add-ChangelogEntry dated + 幂等' {
       $p = Join-Path $tmp 'CHANGELOG.md'
@@ -336,18 +357,21 @@ if (-not $oldDoc) {
 } elseif ($oldDoc -eq $DshVersion) {
   Note "文档基线已是 $DshVersion，跳过"
 } else {
-  foreach ($t in @(
-    @{ Path = 'src-tauri\src\upstream.rs'; Expected = 1 },
-    @{ Path = 'docs\design.zh-CN.md';      Expected = 3 },
-    @{ Path = 'README.md';                 Expected = 1 },
-    @{ Path = 'README.zh-CN.md';           Expected = 1 }
-  )) {
+  $docFail = @()
+  foreach ($t in Get-DocSyncTargets) {
     $r = Set-VersionString (Join-Path $root $t.Path) $oldDoc $DshVersion $t.Expected
     switch ($r.Status) {
       'replaced' { Note "$($t.Path): $oldDoc → $DshVersion（$($r.Detail)）" }
       'already'  { Note "$($t.Path) 已是新版" }
-      default    { Warn "$($t.Path)：$($r.Detail)——已跳过，需人工核对" }
+      default    { $docFail += "$($t.Path)：$($r.Detail)" }
     }
+  }
+  if ($docFail.Count -gt 0) {
+    # 不再静默跳过：计数断言不符 = 文件里出现了非钉版引用的版本字面量（历史对照
+    # 注释/说明写成了全串），必须显式修掉，否则文档基线会悄悄烂掉。
+    throw ("文档基线同步失败（计数断言不符）：`n  - " + ($docFail -join "`n  - ") +
+      "`n修法：把历史对照/说明里的版本串改成不带 -rc 的写法（只留钉版引用），" +
+      "或调整 Get-DocSyncTargets 的 Expected，再重跑本命令。")
   }
 }
 

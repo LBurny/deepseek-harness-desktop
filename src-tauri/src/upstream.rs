@@ -4,16 +4,22 @@
 //! tests/upstream_contract.rs 红了就对照本文件逐条改（每条注明上游出处
 //! 与影响面）。事实清单的文档形态见 docs/design.zh-CN.md §15。
 //!
-//! 当前事实基线：@deepseek-ai/dsh 0.1.1-rc.2（子包为浮动区间，抓取时解析到
+//! 当前事实基线：@deepseek-ai/dsh 0.1.5-rc.2（子包为浮动区间，抓取时解析到
 //! 最新 rc；npm latest 标签可能滞后，fetch-runtime.ps1 须显式 -DshVersion）。
 //!
-//! 0.1.2 跟版（2026-09-04 起执行）：契约与 runbook 见
-//! docs/upstream-0.1.2-alpha.1-prep.zh-CN.md（§二~§五），执行计划见
-//! docs/superpowers/plans/2026-09-04-dsh-0.1.2-rc.1-upgrade.md——大改三件：
+//! 0.1.2 跟版（2026-09-04 执行）：契约与 runbook 见
+//! docs/upstream-0.1.2-alpha.1-prep.zh-CN.md（§二~§五）——大改三件：
 //! Web 鉴权（launch token + cookie，无关闭开关）、事件传输重写
 //!（/api/remote.mux + $events + per-session follow，events.mux/host 移除）、
-//! shipped 预设搬进 dsh-agent-presets 包。迁移期间新旧词表并存
-//!（旧 EVENTS_MUX_PATH 族待全接线完成后删除）。
+//! shipped 预设搬进 dsh-agent-presets 包。旧词表（EVENTS_MUX_PATH 族）已随接线完成删除。
+//!
+//! 0.1.5 跟版（2026-09-12 起执行）：契约与影响面见 docs/upstream-0.1.5-prep.zh-CN.md
+//!（§三逐项对照、§四按模块影响），执行计划见 docs/superpowers/plans/ 下 2026-09-12
+//! 的执行计划——逆向面几乎不动（40 余条探针仅 1 条红），改动集中在四处：
+//! 会话日志入口从"下载按钮"变"更多菜单"（CSS 本地名 sessionLogButton → moreButton，
+//! mobile.css 规则随之）、新增流式上传路由（壳代理须开流式旁路，见 remote/proxy.rs）、
+//! 面板槽位体系重排（conversation/details → keyed main + rightbar + sidebar.panellist）、
+//! 会话格式升到 V3（用户数据单向，升级后不可降级读取）。
 
 use std::path::{Path, PathBuf};
 
@@ -57,7 +63,7 @@ pub const DSH_PORT_FLAG: &str = "--port";
 pub const DSH_NO_OPEN_FLAG: &str = "--no-open";
 
 // ── 事件语义（notify/mod.rs 分类；0.1.2 起经 mux 下行）────
-/// session/follow 流 value.event.type 值（0.1.1-rc.2 时为 session/event 的
+/// session/follow 流 value.event.type 值（旧版（0.1.1 线）时为 session/event 的
 /// payload.event.type；数据形状同源，仅信封不同）
 /// 上游出处：dsh-agent-loop/lib/index.js 的 session.append（turn/start 带
 /// {turn}，turn/end 带 {turn, reason}）；tool/call 由工具执行时追加
@@ -69,7 +75,7 @@ pub const EVENT_TOOL_CALL: &str = "tool/call";
 pub const EVENT_SESSION_TITLE: &str = "session/title";
 /// turn/end 的 data.reason.kind 完成值
 pub const REASON_COMPLETED: &str = "completed";
-/// 会话 origin 子代理标记（0.1.1-rc.2：host/session-added payload.origin；
+/// 会话 origin 子代理标记（旧版（0.1.1 线）：host/session-added payload.origin；
 /// 0.1.2：$events 的 api-session/added args[0].origin）
 pub const ORIGIN_SUBAGENT: &str = "subagent";
 
@@ -100,6 +106,45 @@ pub const READY_URL_PREFIX: &str = "dsh web: ";
 /// client/connection/src/browser-auth.ts:16,106-108。影响：dsh_session.rs 换取与识别。
 pub const DSH_AUTH_COOKIE_PREFIX: &str = "dsh-auth-";
 
+// ── 0.1.5 新增 HTTP 面（remote/proxy.rs）──────────────────────────
+/// 流式请求体上传路由。上游出处：@deepseek-ai/dsh-client-file-upload 的
+/// FILE_UPLOAD_PATH，路由注册带 `requestBody:"streaming"`（dsh-client-connection
+/// 对 buffered 路由仍有 300MB 上限，streaming 路由不受该上限约束）。
+/// 影响面：proxy.rs 必须为它开流式旁路——整读会撞壳侧 REPLAY_BODY_LIMIT（64MB）
+/// 报 502，且大文件在壳进程里整份驻留（远程手机端上传大文件的必经之路）。
+pub const UPLOAD_STREAM_PATH: &str = "/api/session/uploadFileBinary";
+
+/// 流式路由判定（代理转发路径用；query 不参与路径比较）。
+pub fn is_streaming_body_route(path_and_query: &str) -> bool {
+    path_and_query.split('?').next().unwrap_or("") == UPLOAD_STREAM_PATH
+}
+
+/// "在应用中打开"路由族。上游出处：@deepseek-ai/dsh-host-open-in-app 的
+/// OPEN_IN_APP_* 常量；三条都**在鉴权门外**（与静态资产同层）。
+/// 影响面：代理是通用反代、无需特判（列出供手机端适配评估——手机没有可拉起的
+/// 桌面应用，该入口在 ≤700px 下应隐藏；兼作上游改版对照）。
+pub const OPEN_IN_APP_APPS_ROUTE: &str = "/open-in-app/apps";
+pub const OPEN_IN_APP_ICON_PREFIX: &str = "/open-in-app/icon";
+pub const OPEN_IN_APP_OPEN_ROUTE: &str = "/open-in-app/open";
+
+// ── 面板槽位（0.1.5 重排；client 端 slot 名，picker/mobile 适配对照用）──
+/// 上游出处：@deepseek-ai/dsh-client-ui-layout 的 slot 注册 +
+/// dsh-client-ui-sidebar 的 slots 契约。0.1.2 时代是 conversation + details
+/// （单值槽）；0.1.5 改为 keyed `main`（保留 key `conversation`）+ `rightbar`，
+/// sidebar 内新增 `panellist`，**details 槽删除**（原 Detail 面板移除）。
+/// 影响面：本仓代码不引用槽位名；但 picker.rs 钉的 browse 表面挂在 ui-workspace 的
+/// directory-flow 槽位——槽位体系重排后须在真机点一次目录选择器确认仍能起来。
+pub const PANEL_SLOT_MAIN: &str = "main";
+pub const PANEL_SLOT_MAIN_CONVERSATION_KEY: &str = "conversation";
+pub const PANEL_SLOT_RIGHTBAR: &str = "rightbar";
+pub const SIDEBAR_PANELLIST_SLOT: &str = "sidebar.panellist";
+
+// ── 会话格式版本（契约哨兵；壳不读写会话日志，只钉漂移）──────────
+/// 上游出处：@deepseek-ai/dsh-session 的 SESSION_FORMAT_VERSION（0.1.2 = 0，
+/// 0.1.5 = 3）。恢复旧会话时生成新格式日志并**保留原文件**，但升级后的会话
+/// 不支持降级读取——用户数据单向。影响面：跟版/回滚决策（发版后别回退 dsh 版本）。
+pub const SESSION_FORMAT_VERSION_EXPECTED: u32 = 3;
+
 // ── 0.1.2 事件词表（$events 流上的 cordis 事件名；prep §4.2 转发清单）──────
 /// 会话新增（emit，args[0]=SessionSummary；origin=="subagent" 标记子代理——取代旧
 /// host/session-added 的 payload.origin）。api/remotes/src/remote-events.ts:26-43。
@@ -115,6 +160,11 @@ pub const EVENT_USER_QUESTIONS_REQUEST: &str = "user-questions/request";
 /// 设置文档更新（emit，(ns, revision)——**无键名**，主题/语言跟随继续走文件轮询，
 /// 不订阅此事件；列出仅供契约探针核对转发清单）。
 pub const EVENT_SETTINGS_UPDATED: &str = "settings/document-updated";
+/// 0.1.5 新增转发事件（emit，(agentId, active:boolean)）：目标暂停/恢复的激活态变化。
+/// 上游出处：api/remotes/src/remote-events.ts 的 API_REMOTE_FORWARDED_EVENTS。
+/// 影响面：壳对未订阅事件按"忽略"处理（notify/mod.rs 只认自己那张表），列此仅为
+/// 记录上游词表增量，勿据此加通知（目标暂停不是用户回合完成）。
+pub const EVENT_GOAL_ACTIVATION_CHANGED: &str = "goal/activation-changed";
 
 // ── 设置文件（theme.rs 跟随 + 首启播种）──────────────────
 pub const SETTINGS_FILE: &str = "settings.yaml";
@@ -230,6 +280,11 @@ pub const PRESET_BROKEN_NEEDLE: &str = "dsh-tool-bash-persistent";
 /// 平台分支特征（内容出现 win32）。rc.8 起命中是**期望状态**（上游自修的
 /// 证据）；若哪天不再命中且破损签名仍在 = 上游回退了修复，契约套件翻红。
 pub const PRESET_PLATFORM_NEEDLE: &str = "win32";
+/// 0.1.5 起 minimal 预设删掉整个 filesystem 组（fs-local + str-replace-editor），
+/// 只剩持久 shell——"极简模式"从"持久 shell + 文件编辑"降为单工具（**用户可感**，
+/// 上游默认工具调整的一部分）。探针断言该串**不再出现**在 minimal 的
+/// agent.cordis.yml 里：它重新出现 = 上游把文件工具装回去了，发版说明口径要跟着改。
+pub const PRESET_MINIMAL_EDITOR_ABSENT_NEEDLE: &str = "str-replace-editor";
 
 // ── 远程代理（remote/proxy.rs 的 bundle 改写）────────────
 /// dsh 内测声明（WelcomeNoticeStore）的持久化选择三元式。
@@ -292,19 +347,25 @@ pub const PNPM_CMD_FILE: &str = "pnpm.cmd";
 /// 影响面：写错 = resolve 永远 404，"项目"标签空态。
 pub const WORKSPACE_STORE_SEGMENTS: &[&str] = &["storages", "workspace.json"];
 /// SPA 在 localStorage 记当前会话的键（值形 {"sessionId":"session-…"}，切会话即写）。
-/// 实测落盘：@deepseek-ai/dsh-client-runtime/lib/client.js。影响面：改名 =
-/// project.html 取不到当前会话（面板显示"未找到会话"）；契约套件 tree_find 守门。
+/// 实测落盘：0.1.2 在 @deepseek-ai/dsh-client-runtime（该包 0.1.2 后停发），
+/// **0.1.5 起在 @deepseek-ai/dsh-api-session-controller/lib/client.js** ——探针是
+/// 全树 tree_find，换包不影响判绿，但别照旧注释去找那个已消失的包。
+/// 影响面：改名 = project.html 取不到当前会话（面板显示"未找到会话"）。
 pub const LOCALSTORAGE_CURRENT_SESSION_KEY: &str = "dsh.sessions.current";
 /// workspace.json schema 锚点字段（dsh-workspace/lib/index.js 内必现）。
 pub const WORKSPACE_SCHEMA_NEEDLE: &str = "sessionIds";
 
 // ── 移动端注入样式锚点（remote/mobile.css）─────────────────────────
-/// 会话头部"Session log"下载按钮的 CSS Modules 本地名。实测落盘：
-/// @deepseek-ai/dsh-session-log-export/lib/client.js（按钮 CSS 文本内必现）。
-/// 影响面：mobile.css 的 [class*="_sessionLogButton"] 隐藏规则（手机端不看
-/// 日志，且药丸悬浮盖住"N 个后台任务运行中"文案）——上游改名则规则静默
-/// 失效（按钮复原显示，功能不损）；契约套件 tree_find 守门。
-pub const SESSION_LOG_BUTTON_NEEDLE: &str = "sessionLogButton";
+/// 会话头部"更多操作"图标按钮的 CSS Modules 本地名。实测落盘：
+/// @deepseek-ai/dsh-session-log-export/lib/client.js（CSS 文本与 JSX className
+/// 均必现；全 node_modules 仅此一包命中，无同名歧义）。
+/// **0.1.5 语义变更**：旧版是"Session log 下载按钮"（本地名 sessionLogButton，
+/// 文字药丸）；0.1.5 改为 28px 圆角图标按钮 moreButton（aria-label=header.more），
+/// 下载动作收进它弹出的菜单，整条注册进槽位 conversation.session.header.utilities。
+/// 影响面：mobile.css 的 [class*="_moreButton"] 规则（手机端不翻 session 日志，
+/// 且该按钮悬浮盖住"N 个后台任务运行中"文案）——上游改名则规则静默失效
+/// （按钮复原显示，功能不损）；契约套件 tree_find 守门。
+pub const SESSION_HEADER_MORE_BUTTON_NEEDLE: &str = "moreButton";
 
 /// 输入栏模型槽位的 data-slot 语义钩子。实测落盘：
 /// @deepseek-ai/dsh-client-ui-conversation/lib/client.js（InputBar 以
@@ -339,3 +400,9 @@ pub const CONTEXT_INJECTION_TITLE_NEEDLE: &str = "contextInjection";
 /// notice form 摘要的读取函数（同文件 noticeSummary(source)，读 source.summary
 /// 显示在折叠行标题旁）。影响面：改名则 /init 折叠行只剩插件名、一行摘要丢失。
 pub const NOTICE_SUMMARY_NEEDLE: &str = "noticeSummary";
+/// 命令定义的可选附件旗标名。上游出处：@deepseek-ai/dsh-commands 的
+/// register(definition) 校验（0.1.2 是 `input.images` 布尔，0.1.5 改名
+/// `input.attachments`）。我方 /init 插件**不带**该旗标（只用
+/// name/description/input.hint/handler），两边都兼容——本常量是兼容哨兵：
+/// 上游再动命令旗标/注册面时探针翻红，提醒复核预装插件。
+pub const COMMANDS_ATTACHMENT_FLAG: &str = "attachments";

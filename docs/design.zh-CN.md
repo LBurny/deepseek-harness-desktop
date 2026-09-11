@@ -234,7 +234,7 @@ pub trait Platform: Send + Sync {
 ```
 scripts/fetch-runtime.ps1
   1. 下载 Node v24.19.0 win-x64 zip，只取 node.exe
-  2. npm install --prefix dsh --omit=dev @deepseek-ai/dsh@0.1.2-rc.1
+  2. npm install --prefix dsh --omit=dev @deepseek-ai/dsh@0.1.5-rc.2
   3. 冒烟：node bin.js --help
   4. 调 scripts/prune-runtime.ps1 精简
 产物：src-tauri/runtime/windows-x64/（gitignore，不入库）
@@ -317,30 +317,34 @@ scripts/fetch-runtime.ps1
 
 **回滚**：新版 dsh 出严重问题、壳又要先发补丁时，`-DshVersion` 回退到上一可用版本重打包即可——用户数据全在 `dsh-home`，与 dsh 版本解耦。
 
-## 15. 附录：dsh 上游事实清单（0.1.2-rc.1）
+## 15. 附录：dsh 上游事实清单（0.1.5-rc.2）
 
 > 本表是文档形态；代码化身在 `src-tauri/src/upstream.rs`（单一事实源），
 > 自动核对由 `tests/upstream_contract.rs` 执行。跟版改了 upstream.rs 就同步本表。
 
 | 事实 | 值 |
 | --- | --- |
-| npm 包 | `@deepseek-ai/dsh@0.1.2-rc.1`（子包依赖为浮动区间，抓取时解析到最新 rc；npm latest 标签可能滞后于最新 rc，fetch 须显式 `-DshVersion`；dsh-web-app rc.8 起 openBrowser 默认 true） |
+| npm 包 | `@deepseek-ai/dsh@0.1.5-rc.2`（子包依赖为浮动区间，抓取时解析到最新 rc；npm latest 标签可能滞后于最新 rc，fetch 须显式 `-DshVersion`；dsh-web-app rc.8 起 openBrowser 默认 true） |
 | Node 要求 | `^22.19 \|\| >=24`（上游仓库声明；发布 tarball 不含 engines 字段，契约套件实测确认。随包内嵌 v24.19.0） |
 | 入口 | `node_modules/@deepseek-ai/dsh/lib/bin.js` |
 | Web 命令 | `bin.js web --port <N> --no-open`，仅绑 127.0.0.1；`--no-open` 抑制系统浏览器弹出（dsh-web-app rc.8 起 openBrowser 默认 true） |
 | 内测声明 | `dsh-client-ui-settings-models/lib/client.js` 的 welcome notice：`settings.yaml` 的 `ui-onboarding.welcomeNoticeVersion` ≠ 文案版本（如 `2026-08-13.1`，从 client.js 提取）时每次启动弹窗 → 壳 welcome.rs 启动期预写豁免；0.1.2 持久化三元式落 `dsh-client-ui-settings/lib/client.js`（接收者改 `ctx.remote.$host.isLoopback ? "host" : "memory"`，needle 须含接收者前缀否则改写出语法错误） |
 | 鉴权（0.1.2 BrowserAuth） | 无关闭开关（回环也在门内）：每进程 launch token 经 stdout 就绪行 `dsh web: http://127.0.0.1:<port>/?token=<t>` 打印（**晚于 HTTP 绑定**，须持续 pump）；`GET /?token=<t>` → 303 + Set-Cookie `dsh-auth-<b64url(sha256(authority))>=v1.…`（HttpOnly/SameSite=Strict，30 天，**绑 authority——换端口即失效**）；静态资产无门、`/api/*` 与 WS 全在门内，无凭证 GET / → 401 `dsh web authentication required` → 壳 dsh_session.rs 统一凭证（token 解析 + 现换 cookie） |
-| 事件通道 | 单 WS `/api/remote.mux`（0.1.2 起；旧 events.mux/events.host 已移除）。客户端帧 `{type:"open",streamId,endpoint,payload:{args}}` / `{type:"cancel"}`；服务端帧 `{type:"item"\|"end"\|"error",streamId,…}`（error 对象 0.1.2-rc.1 实测字段集 `["code","details","message"]`）；服务端 30s 心跳 Ping |
-| $events 事件桥 | open 端点 `$events`（**args 必须为空**）：首条 item `{type:"ready",clientId,host}`；随后 `{type:"emit",event,args[]}`（api-session/added、api-session/removed、settings/document-updated…）与 `{type:"waterfall",event,eventId,request}`（approval/request、user-questions/request）。**严禁实现 `$events/result` 回包**——任一客户端回 result 即抢先替用户结算审批 |
+| 事件通道 | 单 WS `/api/remote.mux`（0.1.2 起；旧 events.mux/events.host 已移除）。客户端帧 `{type:"open",streamId,endpoint,payload:{args}}` / `{type:"cancel"}`；服务端帧 `{type:"item"\|"end"\|"error",streamId,…}`（error 对象实测字段集 `["code","details","message"]`）；服务端 30s 心跳 Ping |
+| $events 事件桥 | open 端点 `$events`（**args 必须为空**）：首条 item `{type:"ready",clientId,host}`；随后 `{type:"emit",event,args[]}`（api-session/added、api-session/removed、settings/document-updated…）与 `{type:"waterfall",event,eventId,request}`（approval/request、user-questions/request）。0.1.5 转发清单新增 `goal/activation-changed`（emit；壳对未订阅事件一律忽略，别据此加通知——目标暂停不是用户回合完成）。**严禁实现 `$events/result` 回包**——任一客户端回 result 即抢先替用户结算审批 |
 | 会话跟随 | `session/follow` 端点，args 包 `{request:{address:{kind:"session",sessionId}}}`（typert wire 名 `request`，裸 address 被 gateway 拒 arguments-invalid）；下行 `{type:"snapshot"}`（历史重放）+ `{type:"event",event}`，event 形状同 0.1.1 的 session/event payload.event：完成判定 `turn/end`（`data.reason.kind`，实测 kind ∈ completed/error/aborted），回合结构 `turn/start`→(`tool/call` 每次工具调用一帧)→`turn/end`（壳据此拆任务完成/回答完成），标题 `session/title`；子代理标记用 `$events` 的 `api-session/added` `args[0].origin` |
 | RPC 信封 | POST `/api/<method>`，`{type:"client-request",rpcId,method,payload:{args}}` → 恒 200 `{type:"server-response",rpcId,result:{ok,value}}`；**参数按 typert 描述符 wire 名传**（session/list 形参 `_request`、session/follow 形参 `request`，裸对象被拒 arguments-invalid） |
 | 设置文件 | `$DSH_HOME/settings.yaml` → `ui-theme.preference: light\|dark\|system` |
 | 信任栅栏 | Host fence（loopback/trustedHosts）+ sec-fetch-site cross-site → 403、Origin.host ≠ Host → 403（代理剥浏览器标记头的依据不变）；0.1.2 起鉴权 401 优先级在栅栏之前 |
-| Agent 预设 | **0.1.2 起独立成包** `@deepseek-ai/dsh-agent-presets/presets/{minimal,…}`（node_modules 下）；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵） |
+| Agent 预设 | **0.1.2 起独立成包** `@deepseek-ai/dsh-agent-presets/presets/{minimal,…}`（node_modules 下）；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵）。**0.1.5 起 minimal 只剩持久 shell**：整个 `filesystem` 组被删（`fs-local` 与 `str-replace-editor` 都不再挂），极简模式从「持久 shell + 文件编辑」降为单工具——签名哨兵仍绿（`dsh-tool-bash-persistent` + win32 门控都在），故另加一条「已无 str-replace-editor」探针守语义变更 |
 | 目录选择器 browse | host `dsh-host-directory-picker-browse/lib/index.js`：`list()` 只认全限定路径、无盘符枚举入口；client `dsh-client-ui-directory-picker-browse/lib/client.js`：`showHidden` 默认 false 且开框重置、`displayCrumbs` 把 home 前缀折叠成"主页" → 壳 pickerpatch.rs 启动期原地补丁（`"dsh:drives"` 哨兵盘符层 + 默认显示隐藏 + 哨兵面包屑/禁用打开） |
-| 图片附件 | 输入仅拖拽/剪贴板两条入口；host `dsh-attachment` 只认 png/jpeg/webp/gif（sharp 校验，3.5MB/图、20 图/条）→ 壳 mobile.js 注入附件按钮走合成 paste 复用该管线（文档类型上游不支持） |
-| 预设根 | 0.1.1-rc.2 时代 composeProfile 强制重写 roots 的行为上游已删（prep §一）；`$DSH_HOME/.agent-presets` 用户根可正常生效——如需预设补丁理论上可走 patch 影子覆盖（当前无需求，签名哨兵继续盯 win32 修复不回退） |
+| 图片附件 | 0.1.2：输入仅拖拽/剪贴板两条入口；host `dsh-attachment` 只认 png/jpeg/webp/gif（sharp 校验，3.5MB/图、20 图/条）→ 壳 mobile.js 注入附件按钮走合成 paste 复用该管线（文档类型上游不支持）。**0.1.5 起上游自带通用文件上传**（任意类型、与图片同区混排、进度/取消/切会话续显，模型按已保存路径读），手机端「回形针」按钮的存在价值需真机重估（保留则确认与原生上传共存不冲突）——见真机验收清单 |
+| 预设根 | 旧版（0.1.1 线）时代 composeProfile 强制重写 roots 的行为上游已删（prep §一）；`$DSH_HOME/.agent-presets` 用户根可正常生效——如需预设补丁理论上可走 patch 影子覆盖（当前无需求，签名哨兵继续盯 win32 修复不回退） |
 | WebView2 下载 | 宿主不处理 DownloadStarting 即静默取消；wry 默认放行且抑制下载 UI → 壳 download.rs 显式接管 |
+| 会话格式（0.1.5） | `SESSION_FORMAT_VERSION` 0 → **3**：恢复旧会话时生成 V3 新日志、**保留原文件**，但升级后的会话不支持降级读取 → **用户数据单向**，发版后别回退 dsh 版本（壳不读写会话日志，只钉版本漂移） |
+| 流式上传与新增路由（0.1.5） | `POST /api/session/uploadFileBinary`（`dsh-client-file-upload`，`requestBody:"streaming"`，dsh 侧不限体积；普通 buffered `/api` 路由上限 300MB）→ **代理必须开流式旁路**（`upstream::is_streaming_body_route` → `forward_streaming`：逐块直通、先换 cookie、不重放）。另新增**免鉴权**的 `/open-in-app/*`（`apps`/`icon`/`open`，`dsh-host-open-in-app`）——通用反代即透传，手机端「在应用中打开」入口无意义、评估隐藏 |
+| 面板槽位（0.1.5） | `conversation`/`details`（单值槽）→ keyed `main`（保留 key `conversation`）+ `rightbar`，sidebar 内新增 `sidebar.panellist`，**`details` 槽删除**（原 Detail 面板移除）。影响：picker.rs 钉的 browse 表面挂在 `ui-workspace` 的 `directory-flow` 槽位，槽位重排后须真机点一次目录选择器；手机端 `_rightbarCol` 无面板打开时 0 宽（不侵入布局），打开文档/文件面板后的 ≤700px 形态待真机 |
+| 出站代理与 Windows 子进程（0.1.5） | 新增 `@deepseek-ai/dsh-http-proxy`：dsh 出站请求遵循 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY`，**回环永不走代理**（显式豁免 `localhost`/`127.0.0.1`/`::1` 与 `127.0.0.0/8`、IPv4-mapped）；`dsh-subprocess-local` 的 spawn/taskkill 新增 `windowsHide: platform === "win32"`（与壳的 CREATE_NO_WINDOW 并行，互不依赖） |
 | 许可证 | MIT（Copyright 2026 DeepSeek） |
 
 ## 16. 远程访问（Quick Tunnel + 内嵌鉴权代理）

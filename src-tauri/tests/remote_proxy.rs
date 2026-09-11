@@ -539,11 +539,12 @@ async fn injects_mobile_css_into_html_documents() {
         body.contains("DeepSeek Harness"),
         "splash 标题应就位：{body}"
     );
-    // 手机端隐藏 Session 日志下载按钮（药丸悬浮盖住"N 个后台任务运行中"文案）
+    // 手机端隐藏会话头部"更多操作"图标（0.1.5 前的 sessionLogButton 药丸改名而来，
+    // 该按钮悬浮盖住"N 个后台任务运行中"文案）
     assert!(
-        body.contains(r#"_sessionLogButton"][class*="_sessionLogButton"]"#)
+        body.contains(r#"_moreButton"][class*="_moreButton"]"#)
             && body.contains("display: none;"),
-        "移动端适配应含 sessionLog 按钮隐藏规则：{body}"
+        "移动端适配应含会话头部 moreButton 隐藏规则：{body}"
     );
 
     // 2. 无 </head> 的 HTML：原文透传
@@ -890,5 +891,144 @@ async fn stale_cookie_refreshes_on_401() {
 
     fake_a.shutdown.notify_one();
     fake_b.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 流式上传回归（本任务核心）：dsh 0.1.5 的 `/api/session/uploadFileBinary` 走
+/// requestBody:"streaming"，代理必须边收边转。用裸 TCP 手写 chunked 请求精确控制
+/// 两块的上线时机：chunk1 write+flush 后轮询假 dsh 的 upload_progress，直到它记录
+/// 到 ≥1 字节（3s 超时）才放 chunk2——只有"读一块转一块"的代理能等到；旧的整读
+/// 缓冲实现要等客户端发完最后一个 chunk 才转发，dsh 在等待窗口内收不到任何字节，
+/// `saw_first_chunk` 恒 false，本测试必失败（等待断言翻红）。
+///
+/// 为何不用 reqwest::Body::wrap_stream（本机实测）：hyper 客户端对 wrap_stream 的
+/// 流式请求体在下一帧到达前不 flush 已写入的 chunk（首块 1KB~256KB 都实测要等第二
+/// 帧才上线），"发 chunk1 → 等 dsh 收到 → 再发 chunk2"的时序永远观察不到首块。
+/// 裸 TCP 的 write+flush 才是真实上线边界，能忠实复现手机端边传边收的场景。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upload_route_streams_without_buffering() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy(Some(creds_for(fake.port))).await;
+
+    let mut s = tokio::net::TcpStream::connect(("127.0.0.1", proxy.port))
+        .await
+        .unwrap();
+    let head = format!(
+        "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: {}={}\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+        dshdesktop_lib::upstream::UPLOAD_STREAM_PATH,
+        proxy.port,
+        COOKIE_NAME,
+        token
+    );
+    s.write_all(head.as_bytes()).await.unwrap();
+    let chunk1 = vec![b'a'; 4096];
+    let chunk2 = vec![b'b'; 1024];
+    let total = chunk1.len() + chunk2.len();
+    s.write_all(format!("{:x}\r\n", chunk1.len()).as_bytes())
+        .await
+        .unwrap();
+    s.write_all(&chunk1).await.unwrap();
+    s.write_all(b"\r\n").await.unwrap();
+    s.flush().await.unwrap();
+
+    // 等假 dsh 记录到首字节；整读缓冲的代理在此必超时
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut saw_first_chunk = false;
+    while Instant::now() < deadline {
+        if fake.upload_progress.lock().unwrap().iter().any(|n| *n >= 1) {
+            saw_first_chunk = true;
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    assert!(
+        saw_first_chunk,
+        "代理必须在客户端发完前就把首块转给 dsh（整读缓冲实现必在此翻红）"
+    );
+
+    // 放出第二块并收尾（终止 chunk）
+    s.write_all(format!("{:x}\r\n", chunk2.len()).as_bytes())
+        .await
+        .unwrap();
+    s.write_all(&chunk2).await.unwrap();
+    s.write_all(b"\r\n0\r\n\r\n").await.unwrap();
+    s.flush().await.unwrap();
+
+    // 读响应（空闲 500ms 即停，避免 keep-alive 挂住）
+    let mut buf = Vec::new();
+    loop {
+        let mut tmp = [0u8; 4096];
+        match tokio::time::timeout(Duration::from_millis(500), s.read(&mut tmp)).await {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+            Ok(Ok(n)) => buf.extend_from_slice(&tmp[..n]),
+        }
+    }
+    let text = String::from_utf8_lossy(&buf);
+    assert!(text.starts_with("HTTP/1.1 200"), "上传应 200，实际响应：{text}");
+    let body = text.split("\r\n\r\n").nth(1).unwrap_or("").trim();
+    let v: Value =
+        serde_json::from_str(body).unwrap_or_else(|e| panic!("响应体应为 JSON：{body:?}（{e}）"));
+    assert_eq!(
+        v["bytes"].as_u64().unwrap() as usize,
+        total,
+        "dsh 应收到完整字节数，实际 {v}"
+    );
+    assert!(
+        v["chunks"].as_u64().unwrap() >= 2,
+        "dsh 应至少收到两块（分块真实上线），实际 {v}"
+    );
+
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 上传路由的 401 透传：代理拿不到 dsh-auth cookie 时，dsh 回的 401 必须原样
+/// 透传——绝不能被误转成 502（那是 forward_streaming 的传输失败码）。此处令
+/// token 交换失败（creds 用错 token）来制造"无 dsh-auth cookie"；代理门岗凭据
+/// 仍有效，否则先被 403 拦截、根本到不了转发路径。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn upload_route_requires_cookie() {
+    let (fake, _tx) = spawn_dsh().await;
+    // 错误 token：/?token= 交换被假 dsh 拒（401）→ ensure_cookie 返回 None →
+    // 转发不带 dsh-auth cookie → dsh 的 upload_stream 回 401
+    let bogus = Arc::new(DshCreds {
+        port: fake.port,
+        token: "bogus-token".into(),
+    });
+    let (proxy, token, _creds_tx) = start_proxy(Some(bogus)).await;
+    let url = format!(
+        "http://127.0.0.1:{}{}",
+        proxy.port,
+        dshdesktop_lib::upstream::UPLOAD_STREAM_PATH
+    );
+
+    let r = client()
+        .post(&url)
+        .header("cookie", format!("{COOKIE_NAME}={token}"))
+        .body("hello")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(
+        r.status(),
+        401,
+        "无 dsh-auth cookie 应透传 dsh 的 401，实际 {:?}",
+        r.status()
+    );
+    assert_ne!(r.status(), 502, "401 不得被误转成 502");
+
+    // 假 dsh 侧应记录到一次未携带 cookie 的上传命中（说明确实走到了 dsh）
+    let hits = fake.api_hits.lock().unwrap().clone();
+    assert!(
+        hits.iter().any(|(path, authed)| {
+            path == dshdesktop_lib::upstream::UPLOAD_STREAM_PATH && !*authed
+        }),
+        "假 dsh 应记录到一次未携带 cookie 的上传命中，实际 hits：{:?}",
+        hits
+    );
+
+    fake.shutdown.notify_one();
     proxy.shutdown().await;
 }
