@@ -480,6 +480,18 @@ if (-not (Test-Path $script:mirrorNotesDir)) {
     Info "  发布仓本地镜像说明目录存在: $script:mirrorNotesDir"
 }
 
+# 上传器自检（纯函数、零网络）：把 release-local.ps1 的说明正文 JSON 形状断言提前到
+# 这里跑。教训是 0.5.12 那版：正文被 PowerShell 5.1 的 Get-Content -Raw + ConvertTo-Json
+# 包成对象，一路跑到最后的双仓上传才 422（前面门禁白等 8 分钟）。上传器改坏了就在这拦下。
+$rlSelfTest = $releaseLocalScript
+if (Test-Path $rlSelfTest) {
+    & powershell -NoProfile -ExecutionPolicy Bypass -File $rlSelfTest -SelfTest *> $null
+    if ($LASTEXITCODE -ne 0) {
+        GateViolation "release-local.ps1 -SelfTest 未通过（说明正文 JSON 形状断言）——先修上传器再发版：powershell -File scripts/release-local.ps1 -SelfTest"
+    }
+    Info '  release-local.ps1 自检通过（说明正文 JSON 形状）'
+}
+
 # ---------------- 阶段 1：bump 三处 ----------------
 
 Info ''
@@ -621,6 +633,17 @@ TODO: 一段话中文概括（填完删除本行），再按编号小节展开�
     } else {
         Info '  两份说明文件齐全：无 TODO，格式 lint 通过（zh 链接版本号 / 中文标题 / 返回链接）'
     }
+    # 正文进 JSON 的形状预检（0.5.12 发版实踩，见 release-local.ps1 头注）：PowerShell 5.1
+    # 的 Get-Content -Raw 会在返回字符串上挂 PSPath/ReadCount 等 NoteProperty，而
+    # ConvertTo-Json 见到带属性字符串就按**对象**序列化（body 变成 {"value":…,"PSPath":…}），
+    # GitHub 回 422 "…is not a string"——且 PS 7 无此行为，同一份脚本两种结果（5.1 是流水线
+    # 实际用的解释器：package.json 里硬编码 powershell）。此处拦一道，别等跑完 8 分钟门禁
+    # 才在最后的双仓上传步炸。
+    $probe = (@{ body = [System.IO.File]::ReadAllText($notesEn) } | ConvertTo-Json) -replace '\s', ''
+    if (-not $probe.StartsWith('{"body":"', [StringComparison]::Ordinal)) {
+        GateViolation ("发版说明正文序列化成 JSON 后不是字符串（实测开头：{0}）——检查 release-local.ps1 的正文读取是否退回了 Get-Content -Raw" -f $probe.Substring(0, [Math]::Min(70, $probe.Length)))
+    }
+    Info '  正文 JSON 形状预检通过（body 为字符串，非对象）'
 }
 
 # ---------------- 阶段 4：AGENTS.md 版本指针 ----------------

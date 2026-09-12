@@ -287,6 +287,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
   0.1.16 实踩；settings.rs 有锚定测试）；`bundle.resources` 相对路径映射（`..` 会变 `_up_`，别用）
 - **子进程控制台**：`Platform::configure_child_command` 设 CREATE_NO_WINDOW；`kill_process_tree` 的 taskkill 同样必须带（GUI 主进程没有控制台，不带标志系统会为它新分配可见控制台窗口——退出/重启时闪 cmd）。复现"无控制台父进程"不能用 CREATE_NO_WINDOW 拉中间进程（那只是隐藏控制台，子孙会静默继承），须在中间进程里 FreeConsole()。验收判据是**可见 ConsoleWindowClass 窗口**（conhost 进程存在≠窗口可见）
 - **PowerShell 5.1**：含中文的 .ps1 必须 UTF-8 **带 BOM**（注意 ZCode Edit 工具改完会丢 BOM，须补回）；别用 PS 改写 `settings.yaml`（会引入 BOM 导致 yaml-rust 解析失败，主题静默回退）
+- **脚本按 5.1 写，而 5.1 与 7 行为不同——别混着跑（0.5.12 发版实踩）**：`package.json` 的 `release`/`release:dry` 硬编码 `powershell`（Windows PowerShell 5.1），所以流水线跑在 5.1；手工用 `pwsh`（PS 7）跑同一份脚本会走进不同分支。最典型的一处：**5.1 的 `Get-Content -Raw` 会在返回字符串上挂 `PSPath`/`ReadCount` 等 NoteProperty，`ConvertTo-Json` 见到带属性字符串就按对象序列化**（值变成 `{"value":…,"PSPath":…}`）——0.5.12 的 Release 正文就这么被 GitHub 422 拒了，而 PS 7 下同一写法正常（0.5.11 的正文正是在 pwsh 下"侥幸"写上去的，别据此以为旧写法可用）。凡"文件内容进 JSON 正文"一律用 `[System.IO.File]::ReadAllText`（跨解释器稳定）。防线已有三道：`release-local.ps1 -SelfTest`（正文 JSON 形状断言，5.1/7 双跑皆绿）、发布流水线 [0/9] 前置检查会先跑该自检、[3/9] 有形状预检——0.5.12 的教训是它一路跑到最后的上传步才炸，白等 8 分钟门禁
 - **脚本里别用 Process.MainWindowHandle**：debug exe 还持有可见控制台与 Tao/托盘辅助窗口，句柄会指错；按 class "Tauri Window" 枚举进程顶层窗口（verify-no-size-flash.ps1 / verify-window-state.ps1 的 FindByClass 模式）
 - **Tauri setup 无 tokio 上下文**：spawn_supervised 必须经 `tauri::async_runtime::block_on`
 - **Tauri `resource_dir()` 返回 `\\?\` 扩展路径**：Node 加载器不认（EISDIR 崩溃），`runtime::strip_verbatim` 已处理，别绕过 ensure_runtime 自己拼路径

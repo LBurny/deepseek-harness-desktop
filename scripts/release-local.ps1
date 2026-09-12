@@ -32,7 +32,8 @@
 #       Release 转成草稿（按 tag 查 404 → 重跑会再建一个，出重复），删后需手动清草稿。
 param(
     [string]$Version,   # 缺省读 src-tauri/tauri.conf.json 的 version
-    [string]$NotesPath  # Release 说明 Markdown 文件（UTF-8）；两仓同文，缺省 GitHub 自动生成
+    [string]$NotesPath, # Release 说明 Markdown 文件（UTF-8）；两仓同文，缺省 GitHub 自动生成
+    [switch]$SelfTest   # 纯函数自检（不动网络/不改远端），退出码 0/1
 )
 
 $ErrorActionPreference = 'Stop'
@@ -44,19 +45,64 @@ if (-not $Version) {
     $Version = $conf.version
 }
 $tag = "v$Version"
-# 0=发布仓（对外分发门面，资产红线）、1=源码仓（已公开，源码+exe 存档）
-$repos = @('LBurny/deepseek-harness-desktop-releases', 'LBurny/deepseek-harness-desktop')
-
-if (-not $env:GH_TOKEN) { throw 'GH_TOKEN 环境变量未设置（双仓上传 API 必需）' }
-if ($NotesPath -and -not (Test-Path $NotesPath)) { throw "NotesPath 不存在: $NotesPath" }
 
 # 说明正文读取：必须用 .NET 直读，不能用 Get-Content -Raw。
 # PS 5.1 的 Get-Content -Raw 会在返回的字符串上挂 PSPath/PSParentPath/ReadCount
 # 等 NoteProperty，而 ConvertTo-Json 见到带属性字符串就按**对象**序列化，正文变成
 # {"value":"…","PSPath":"…","ReadCount":1} → GitHub 回 422 "…is not a string"
-# （0.5.12 发版实踩：Release 首次创建走 POST 分支必踩；PATCH 分支同款写法）。文件为
-# 无 BOM UTF-8，ReadAllText 默认按 UTF-8 解码，正合适。
+# （0.5.12 发版实踩：POST 分支必踩，PATCH 分支同款写法；PS 7 无此行为，故同一份脚本
+# 在两种解释器下结果不同——package.json 的 release 走 powershell 5.1，手工用 pwsh 跑
+# 就看不到这个坑，0.5.11 的正文正是这么"侥幸"写上去的）。文件为无 BOM UTF-8，
+# ReadAllText 默认按 UTF-8 解码，正合适；-SelfTest 有回归断言钉死形状。
 function Read-NotesText([string]$Path) { [System.IO.File]::ReadAllText($Path) }
+
+# ── SelfTest：说明正文的 JSON 形状（0.5.12 发版踩坑的回归哨兵）──────────
+# 断言"正文读成干净字符串、序列化后是 JSON 字符串标量"。同一断言在 PS 5.1 与 PS 7
+# 下都必须过——这正是修法的要求：Read-NotesText 用 .NET 直读，不依赖解释器行为。
+# （诊断信息里附带旧写法在**当前**解释器下的表现：5.1 会包成对象、7 不会。仅打印
+# 不断言，因为它是解释器特性，不是本脚本的契约。）
+if ($SelfTest) {
+    $total = 0; $fails = 0
+    function T([string]$Name, [scriptblock]$Body) {
+        $script:total++
+        try { & $Body; Write-Host "  [通过] $Name" }
+        catch { $script:fails++; Write-Host "  [失败] $Name：$($_.Exception.Message)" -ForegroundColor Red }
+    }
+    function Assert-Equal($A, $B, [string]$Msg) { if ($A -ne $B) { throw "$Msg（期望 '$B'，实得 '$A'）" } }
+    Write-Host "release-local SelfTest（PowerShell $($PSVersionTable.PSVersion)）"
+    $tmp = Join-Path $env:TEMP ("release-local-selftest-" + [guid]::NewGuid().ToString('N') + '.md')
+    try {
+        [System.IO.File]::WriteAllText($tmp, "# 中文说明`n`n中文正文 English link`n", (New-Object System.Text.UTF8Encoding($false)))
+        T 'Read-NotesText 返回干净字符串（无 NoteProperty）' {
+            $s = Read-NotesText $tmp
+            Assert-Equal $s.GetType().FullName 'System.String' '类型'
+            Assert-Equal ([bool]($s.PSObject.Properties['PSPath'] -ne $null)) $false 'PSPath 属性应不存在'
+            Assert-Equal $s.Contains('中文正文') $true '内容'
+        }
+        T '正文序列化后是 JSON 字符串标量（POST/PATCH 两分支共用）' {
+            $json = (@{ body = (Read-NotesText $tmp) } | ConvertTo-Json) -replace '\s', ''
+            Assert-Equal $json.StartsWith('{"body":"') $true "实测开头 $($json.Substring(0,[Math]::Min(40,$json.Length)))"
+        }
+        T 'Create 体三键齐全且正文为字符串' {
+            $createBody = @{ tag_name = 'v9.9.9'; name = 'v9.9.9' }
+            $createBody.body = (Read-NotesText $tmp)
+            $createBody.generate_release_notes = $false
+            $json = ($createBody | ConvertTo-Json) -replace '\s', ''
+            Assert-Equal $json.Contains('"body":"#中文说明') $true 'body 应为字符串'
+            Assert-Equal $json.Contains('"tag_name":"v9.9.9"') $true 'tag_name'
+            Assert-Equal $json.Contains('"generate_release_notes":false') $true 'generate_release_notes'
+        }
+        $oldJson = (@{ body = (Get-Content -Raw -Encoding UTF8 $tmp) } | ConvertTo-Json) -replace '\s', ''
+        Write-Host ("  [信息] 旧写法（Get-Content -Raw）在本解释器下：{0}" -f $(if ($oldJson.StartsWith('{"body":"')) { '正常（PS 7 行为）' } else { '包成对象（PS 5.1 行为，即 0.5.12 的 422 根因）' }))
+    } finally { Remove-Item $tmp -Force -ErrorAction SilentlyContinue }
+    Write-Host ("SelfTest：{0}/{1} 通过" -f ($total - $fails), $total)
+    exit $(if ($fails -eq 0) { 0 } else { 1 })
+}
+# 0=发布仓（对外分发门面，资产红线）、1=源码仓（已公开，源码+exe 存档）
+$repos = @('LBurny/deepseek-harness-desktop-releases', 'LBurny/deepseek-harness-desktop')
+
+if (-not $env:GH_TOKEN) { throw 'GH_TOKEN 环境变量未设置（双仓上传 API 必需）' }
+if ($NotesPath -and -not (Test-Path $NotesPath)) { throw "NotesPath 不存在: $NotesPath" }
 $headers = @{
     Authorization = "Bearer $env:GH_TOKEN"
     Accept        = 'application/vnd.github+json'
