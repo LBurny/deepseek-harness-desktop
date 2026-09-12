@@ -44,9 +44,11 @@ src-tauri/src/
                     子进程 PATH 前置内嵌 node 目录（npx/npm/node 绑定运行时版本，
                     MCP `npx` 命令不落系统旧 node——机器 B 实踩）+ profile 的
                     node_modules/.bin（插件自带 CLI 按名可解析）；指数退避、stop/restart
-                    子进程 PATH 前置内嵌 node 目录（npx/npm/node 绑定运行时版本，
-                    MCP `npx` 命令不落系统旧 node——机器 B 实踩）+ profile 的
-                    node_modules/.bin（插件自带 CLI 按名可解析）；指数退避、stop/restart
+  locks.rs          spawn 前陈旧锁自愈：删 DSH_HOME 里持有者已退出的 *.lock
+                    （dsh 写锁是 <file>.lock 兄弟文件、只在 finally 里删、上游不做
+                    孤儿恢复，而壳只能 taskkill /F 硬杀 → 硬杀残留即"应用再也起不来"，
+                    机器 B 实踩；判定保守：pid 死了才删、活着留、无 pid 要够老，限深
+                    3 层、跳过 node_modules、不进 junction，逐条落 events.log）
   dsh_session.rs    0.1.2 BrowserAuth 凭证模块：launch token 解析（parse_ready_line）+
                     token 换 cookie（exchange_cookie，303 + Set-Cookie dsh-auth-*，
                     绑 127.0.0.1:<port> authority——换端口即失效要重换）；凭证只在内存、
@@ -234,7 +236,11 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
   在 Release 页，点击跳转发布仓的 `docs/release-notes/v<ver>.zh.md`——该目录
   随镜像进发布仓（H:\My_Software\deepseek-harness-desktop-releases，先推它再
   PATCH，外链才不 404），主仓同目录存档。0.5.11 之前各版只有一条 Full Changelog
-  链接，太模糊，别再犯。
+  链接，太模糊，别再犯。**只改正文别重传资产**：`release-local.ps1 -NotesPath <file>
+  -NotesOnly`（0.5.13 起）只 PATCH 两仓已发布 Release 的正文、不碰 exe/sha256——
+  说明写错字/坏链接时用；不带 `-NotesOnly` 的幂等重跑会先删同名资产再传，为改几行字
+  删掉公开安装包不值当。发布流水线 [9/9] 终验会读回**线上正文**断言含说明文件首行原样
+  （拦编码/转义/截断，见 §关键约定 的 5.1 条目）。
 - **弃用 CI 发布的原因（0.4.9 实踩）**：私有仓库 tag 触发的 release run 跑满 30~70 分钟
   （Actions 缓存按 ref 隔离，tag run 读不到自己存的缓存、只能等 main 预热），而本地构建
   3~5 分钟 + release-local.ps1 上传总共几分钟。release.yml 已降为 workflow_dispatch 手动备用。
@@ -280,6 +286,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 - **流式上传必须走旁路（0.1.5 实踩）**：`remote/proxy.rs` 的 `forward()` 为支持 401 换 cookie 后重放，会把请求体**整读**（`REPLAY_BODY_LIMIT = 64MiB`）；而 dsh 0.1.5 的 `/api/session/uploadFileBinary` 是**流式、服务端无上限**——不旁路则手机端经隧道传大文件必撞壳侧 64MiB 上限报 502「读取请求体失败」，且大文件在壳进程里整份驻留。`forward()` 开头 `is_streaming_body_route` 命中即转 `forward_streaming`：逐块 `wrap_stream` 直通、**上传前强制换一次 cookie、不做 401 重放**（体一旦被消费无法重放；换来的一次廉价回环交换抵掉整份文件丢失的风险），换不到 cookie 时 dsh 的 401 原样透传、绝不误报 502。回归 `upload_route_streams_without_buffering` 钉死"客户端发完之前代理已把首块转给 dsh"——**注意**：hyper 客户端对 `wrap_stream` 请求体在下一帧到达前不 flush（1KB~256KB 首块均实测），所以测试客户端必须用裸 TCP 手写 chunked 才能观察到首块上线
 - **会话数据单向（0.1.5）**：dsh 恢复旧会话时生成 V3 新日志（原文件保留），但**升级后的会话旧版读不回**——发版说明必须明示"不可降级"，回滚 dsh 版本不能当预案；验收必须覆盖"保留 DSH_HOME 的升级首启"（`acceptance.ps1` 卸旧不删 DSH_HOME 的那条路径）
 - **右栏/文档预览是手机端新增适配面（0.1.5）**：`_rightbarCol` 在无面板打开时是 **0 宽列**（实测不侵入布局），但打开文档/文件面板后的 ≤700px 形态要看真机；"在应用中打开"入口在手机上无意义（可能拉起 PC 端应用），评估隐藏；旧「Session log 药丸」在 0.1.5 变成会话头部 `moreButton` 图标（下载动作收进菜单），mobile.css 锚点已随之改
+- **dsh 写锁不会自愈 → 硬杀一次就可能永久起不来（0.5.13 修，机器 B 实踩）**：dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（`wx` 独占创建、内容 `${pid}\n`、只在 finally 里删），上游注释明确 **orphan recovery is an operator action**——竞争方永不删别人的锁。Windows 上壳只能 `taskkill /T /F`（TerminateProcess）硬杀，dsh 装在 profile-boot 里的 SIGTERM/SIGINT 优雅退场拿不到信号，于是"恰好持锁时被杀"就把锁永久留在 DSH_HOME：之后**每次启动**都在 boot 阶段等锁超时（`.credentials.yaml` 的凭证写入预算 30s，`DOCUMENT_LOCK_WAIT_MS`）、插件树加载失败（`failed to apply loader entry connection (@deepseek-ai/dsh-client-connection)`）、进程退出，壳只看到"就绪行没出现（token）→ 上游 READY_URL_PREFIX 契约漂移？"，重试多少次都一样。硬杀窗口每次启动都在（凭证锁每 boot 建一次又删），MCP 冷装的分钟级 boot 里用户等不及退出正好落进去。**壳侧对策**：`locks.rs` 每次 spawn 前清持有者已退出的 `*.lock`（判定保守：pid 死了才删、活着且镜像是 node 的留、无 pid 要够老 `UNPARSEABLE_LOCK_MIN_AGE`；限深 3 层、跳过 node_modules、不进 junction；逐条落 events.log）。**手工排障**：`powershell -File scripts/check-dsh-locks.ps1`（只列：锁文件 + 内容 pid + 存活判定；加 `-Remove` 清掉持有者已退出的，活锁不删）——0.5.12 及更老版本的用户卡这的时候先用它急救；注意 pid 活着的锁是真持有者（可能是用户自己终端里的 dsh），删了会破坏上游写序列化。复现/验证套路（临时 home + 真运行时**副本**，别用 src-tauri/runtime 原地跑以免自更新动到钉版树）：干净 home 能起 → 塞死 pid 的锁后 boot 卡 `timed out waiting for the writer lock` → 删锁即恢复
 - **跟版脚本文档锚点纪律**：`follow-upstream.ps1` 的文档基线同步是**计数断言式**的（`Get-DocSyncTargets`：`upstream.rs=1 / design.zh-CN.md=3 / README×2=1`），旧版本串取自 `upstream.rs` 头注「事实基线」行。**改 upstream.rs / design 时不得引入钉版全串以外的版本字面量**——历史对照一律写成不带 `-rc` 的形态（如「旧版（0.1.1 线）」），否则计数不符。0.1.2 跟版就因 upstream.rs 里两处历史注释含旧版全串（整文件计数 3≠1）导致**四个文件全部被静默 skip**、头注烂了两个版本；现已改为计数不符时**整步显式报错**，SelfTest 也加了"四文件计数 == 期望"断言（13/13）
 - **运行时布局**：暂存 `src-tauri/runtime/<triplet>/`，tauri.conf `resources` 用映射形式
   `{ "runtime": "runtime", "resources/sounds": "sounds" }`，安装后落 `<install>/runtime/<triplet>/`
@@ -287,7 +294,11 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
   0.1.16 实踩；settings.rs 有锚定测试）；`bundle.resources` 相对路径映射（`..` 会变 `_up_`，别用）
 - **子进程控制台**：`Platform::configure_child_command` 设 CREATE_NO_WINDOW；`kill_process_tree` 的 taskkill 同样必须带（GUI 主进程没有控制台，不带标志系统会为它新分配可见控制台窗口——退出/重启时闪 cmd）。复现"无控制台父进程"不能用 CREATE_NO_WINDOW 拉中间进程（那只是隐藏控制台，子孙会静默继承），须在中间进程里 FreeConsole()。验收判据是**可见 ConsoleWindowClass 窗口**（conhost 进程存在≠窗口可见）
 - **PowerShell 5.1**：含中文的 .ps1 必须 UTF-8 **带 BOM**（注意 ZCode Edit 工具改完会丢 BOM，须补回）；别用 PS 改写 `settings.yaml`（会引入 BOM 导致 yaml-rust 解析失败，主题静默回退）
-- **脚本按 5.1 写，而 5.1 与 7 行为不同——别混着跑（0.5.12 发版实踩）**：`package.json` 的 `release`/`release:dry` 硬编码 `powershell`（Windows PowerShell 5.1），所以流水线跑在 5.1；手工用 `pwsh`（PS 7）跑同一份脚本会走进不同分支。最典型的一处：**5.1 的 `Get-Content -Raw` 会在返回字符串上挂 `PSPath`/`ReadCount` 等 NoteProperty，`ConvertTo-Json` 见到带属性字符串就按对象序列化**（值变成 `{"value":…,"PSPath":…}`）——0.5.12 的 Release 正文就这么被 GitHub 422 拒了，而 PS 7 下同一写法正常（0.5.11 的正文正是在 pwsh 下"侥幸"写上去的，别据此以为旧写法可用）。凡"文件内容进 JSON 正文"一律用 `[System.IO.File]::ReadAllText`（跨解释器稳定）。防线已有三道：`release-local.ps1 -SelfTest`（正文 JSON 形状断言，5.1/7 双跑皆绿）、发布流水线 [0/9] 前置检查会先跑该自检、[3/9] 有形状预检——0.5.12 的教训是它一路跑到最后的上传步才炸，白等 8 分钟门禁
+- **脚本按 5.1 写，而 5.1 与 7 行为不同——别混着跑（0.5.12 发版实踩）**：`package.json` 的 `release`/`release:dry` 硬编码 `powershell`（Windows PowerShell 5.1），所以流水线跑在 5.1；手工用 `pwsh`（PS 7）跑同一份脚本会走进不同分支。两处已实踩的差异：
+  1. **`Get-Content -Raw` 会在返回的字符串上挂 `PSPath`/`ReadCount` 等 NoteProperty，`ConvertTo-Json` 见到带属性字符串就按对象序列化**（值变成 `{"value":…,"PSPath":…}`）——0.5.12 的 Release 正文就这么被 GitHub 422 拒了，而 PS 7 下同一写法正常（0.5.11 的正文正是在 pwsh 下"侥幸"写上去的，别据此以为旧写法可用）。凡"文件内容进 JSON 正文"一律用 `[System.IO.File]::ReadAllText`（跨解释器稳定）。
+  2. **`Invoke-RestMethod` 收到 `string` 体、而 `-ContentType` 不带 `charset` 时按 ISO-8859-1 编码**：非 ASCII 全变 `?`（`English | [中文说明](…#中文说明)` 上线成 `English | [????](…#????)`，链接锚点一起烂；PS 7 按 UTF-8 故正常）。正文一律经 `release-local.ps1` 的 `Get-JsonBodyBytes` 发字节体（`-ContentType 'application/json; charset=utf-8'`），别再让调用点自己拼 `-Body`。顺带纠正旧注释：**5.1 的 `ConvertTo-Json` 不会把中文转 `\uXXXX`**，中文原样进 JSON，编码责任全在发送这一步。
+  3. 含中文的 .ps1 必须 UTF-8 **带 BOM**（5.1 按 ANSI 代码页读无 BOM 文件，本机 936 → 中文乱码甚至吃掉字符串引号）；Edit 工具改完会丢 BOM，须补回。
+  防线四道：`release-local.ps1 -SelfTest`（正文 JSON 形状 + 上行字节 UTF-8 + `-Body` 静态检查，5.1/7 双跑皆绿）、发布流水线 [0/9] 前置检查先跑该自检、[3/9] 有形状预检、[9/9] 终验读回**线上正文**断言含说明文件首行原样（编码/转义/截断都拦得住）——0.5.12 的教训是它一路跑到最后的上传步才炸，白等 8 分钟门禁，而且线上烂了一小时没人发现
 - **脚本里别用 Process.MainWindowHandle**：debug exe 还持有可见控制台与 Tao/托盘辅助窗口，句柄会指错；按 class "Tauri Window" 枚举进程顶层窗口（verify-no-size-flash.ps1 / verify-window-state.ps1 的 FindByClass 模式）
 - **Tauri setup 无 tokio 上下文**：spawn_supervised 必须经 `tauri::async_runtime::block_on`
 - **Tauri `resource_dir()` 返回 `\\?\` 扩展路径**：Node 加载器不认（EISDIR 崩溃），`runtime::strip_verbatim` 已处理，别绕过 ensure_runtime 自己拼路径
@@ -439,7 +450,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 271 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 282 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会在屏幕上短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 

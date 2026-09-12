@@ -41,6 +41,7 @@ dsh 本身提供 `dsh web` 命令：在本机 127.0.0.1 上启动一个 Web UI �
 │  presets.rs  启动期改写 shipped minimal 预设为 win32 pwsh 变体（签名门控）│
 │  runtime.rs  运行时定位：原地运行 / 只读回退部署 / 旧副本清理               │
 │  process.rs  DshProcess 监督循环：spawn、就绪探测、指数退避重启             │
+│  locks.rs    陈旧锁自愈：spawn 前清 DSH_HOME 里持有者已退出的 *.lock        │
 │  notify/     WS 订阅 dsh 事件(mux+host 双下行) → 分类/台账 → 原生通知      │
 │  theme.rs    轮询 dsh 主题设置 → DWM 标题栏着色                            │
 │  progress.rs 首启进度模型：阶段权重、百分比映射、结构化事件负载             │
@@ -131,6 +132,7 @@ Failed（不再自动重启，前端/托盘可手动 restart）
 - **端口**：`free_port()` 让 OS 分配空闲端口——返回到使用之间存在竞态窗口，靠"就绪超时即杀、换端口重试"兜底；`wait_ready` 轮询 `http://127.0.0.1:<port>/` 直到拿到**任意** HTTP 响应（不要求 200）。
 - **wait_token 是静默超时而非固定时长（0.5.6 起）**：等 token 就绪行期间，pump 每收到一行 stdout/stderr 都刷新活动时间，持续静默才计时（普通预算 60s）；见到 npm 冷装警告行（`npm warn exec … will be installed`，npx 解析未缓存包、MCP 条目联网安装的标志）切 install 长预算 10min（npm fetch 可能数分钟无输出），absolute 10min 封顶防"一直打印但永不就绪"挂死。旧固定 60s 在冷装场景把快装完的进程杀树、白等一轮再靠 npm 缓存余温重启（0.5.5 实踩：上游 MCP 包发版后的首次启动必现）。Ready 前落耗时分解行 `[dshdesktop] ready: port=N total=Xs http=Ys token=Zs`——诊断面板"上次启动"行的数据源（格式锚定 diagnostics::parse_boot_timing 与 tests/process.rs）。
 - **stop/restart**：两个 `tokio::sync::Notify`。stop 置 shutdown 标志并通知，循环杀掉进程树（`taskkill /T /F`，dsh 可能派生 python 等子孙）后进入 `Stopped`；restart 在循环存活时通知其立即重来，循环已退出（Failed/Stopped）时重新 spawn 一个监督循环。
+- **陈旧锁自愈（0.5.13 起，`locks.rs`）**：每次 spawn 前扫 DSH_HOME 里持有者已退出的 `*.lock` 并删除。dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（`wx` 独占创建、内容 `${pid}\n`、只在 finally 里删，上游明确不做孤儿恢复），而 Windows 上壳只能用 `taskkill /F` 硬杀——恰好持锁时被杀就把锁永久留在盘上，之后每次启动都在 boot 阶段等锁超时（`.credentials.yaml` 的凭证写入预算 30s）、插件树加载失败、进程退出，壳只看到"就绪行没出现"，重试多少次都一样（机器 B：应用再也起不来）。判定保守：pid 可解析且进程已退出（或被无关进程复用 pid）才删，内容不是 pid 的要够老（5min）才删，持有者活着且镜像是 node 的一律保留；扫描限深 3 层、跳过 node_modules、不进符号链接/junction。每条判定进 events.log，误删可追溯。上游一旦自己做孤儿恢复，`tests/upstream_contract.rs` 的锁探针翻红提醒撤掉。
 - **Job Object 防孤儿**：spawn 成功后立即 `Platform::register_child(pid)` 把子进程挂进全局 `KILL_ON_JOB_CLOSE` Job（`platform/windows.rs` 的 `job` 模块，句柄刻意永不关闭）。本进程以任何方式退出——包括被 NSIS 安装器/任务管理器强杀——内核都在最后句柄回收时连带终止全部成员及其子孙。0.1.8 之前没有这层保护：安装器只杀主程序，孤儿 node.exe/cloudflared.exe 锁住 runtime 目录导致重装中止（"Can't write: ...\cloudflared.exe"）。cloudflared 监督循环（remote/tunnel.rs）同样注册。
 - **tokio 陷阱**：`Child::kill()` 返回 future，不 await 就不执行；泄漏的子进程若继承了 stdout 管道，外层等管道 EOF 会永远阻塞（集成测试曾因此假挂起）。所有子路径都必须 `kill_on_drop` + 显式 `child.wait().await` + 测试里 stdio 全 null。
 

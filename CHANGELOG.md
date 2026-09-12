@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **陈旧锁自愈（`locks.rs`）**：每次启动 dsh 前清扫 `DSH_HOME` 里持有者已退出的 `*.lock`。dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（`wx` 独占创建、内容为 pid、只在 `finally` 里删），上游明确不做孤儿恢复；而壳在 Windows 上只能 `taskkill /T /F` 硬杀（dsh 的 SIGTERM 优雅退场在 TerminateProcess 下拿不到信号），恰好持锁时被杀就把锁永久留在盘上——此后每次启动都在 boot 阶段等锁超时（凭证写入预算 30s）、插件树加载失败、进程退出，壳只看到"就绪行没出现"，重试多少次都一样，用户视角是**应用再也起不来**（机器 B 实踩：`.credentials.yaml.lock`）。判定保守：pid 可解析且进程已退出（或被无关进程复用了 pid）才删，内容不是 pid 的要够老（5 分钟）才删，持有者活着且镜像是 node 的一律保留；扫描限深 3 层、跳过 `node_modules`、不进符号链接/junction；每条判定落 events.log。真机复现链已验：干净 home 能起（且锁文件每次 boot 都会建又删，故硬杀窗口每次启动都存在）→ 塞入死 pid 的锁后 dsh 卡 `timed out waiting for the writer lock` → 删锁即恢复。回归：`locks` 单元测试 10 条（含真平台接线）+ `tests/process.rs::spawn_heals_stale_dsh_lock_files` 钉住"确实接在 spawn 路径上"
+- 契约套件新增 2 条锁探针：`dsh-atomic-write` 的锁形状（`wx` 建 `.lock` 兄弟 + 内容 pid）与"上游仍不自愈孤儿锁"（`never removes an existing lock`）——上游一旦自己做陈旧锁回收，自愈就该撤掉，探针翻红提醒
+
+### Fixed
+
+- **v0.5.12 的 Release 正文首行中文被写成 `????`**（线上已就地修正，双仓同文）：正文首行 `English | [中文说明](…#中文说明)` 上线后成了 `English | [????](…#????)`，链接文本与跳转锚点一起烂掉（页面照常打开、资产与标签全对，不点进去看不出）。根因是同一条多解释器差异的**另一半**：`Invoke-RestMethod` 收到 `string` 体而 `-ContentType` 不带 `charset` 时按 **ISO-8859-1** 编码，非 ASCII 一律变 `?`（`powershell` 5.1；PS 7 按 UTF-8 故 0.5.11 侥幸正常）。现所有 JSON 正文经新的 `Get-JsonBodyBytes` 发 UTF-8 **字节**体（`-ContentType 'application/json; charset=utf-8'`），并纠正旧注释的错误说法（5.1 的 `ConvertTo-Json` **不会**把中文转 `\uXXXX`，中文原样进 JSON，编码责任全在发送这一步）。防线补到四道：`release-local.ps1 -SelfTest` 增加"上行正文按 UTF-8 字节发送"与"所有 JSON 调用点都经字节助手"两条断言、[0/9] 前置自检、[3/9] 形状预检、[9/9] 终验读回线上正文断言含说明文件首行原样。本机实测矩阵（本地收包器抓原始上行字节）：5.1 + string → `?`；5.1 + string + `charset=utf-8` → 正常；5.1 + 字节体 → 正常；7 三种都正常
+- `release-local.ps1` 支持 `-NotesOnly`：只 PATCH 两仓已发布 Release 的正文，不先删后传 exe/sha256（改错别字/坏链接不必为几行字动公开安装包）；`-NotesOnly` 找不到 Release 时直接报错，不会建出无资产的空发布页
+
 ## [0.5.12] - 2026-09-12
 
 ### Changed
