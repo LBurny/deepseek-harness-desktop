@@ -854,6 +854,19 @@ if ($DryRun) {
     $shaFile = "${exePath}.sha256"
     if (-not (Test-Path $shaFile)) { Die "找不到 sha256 文件: $shaFile（release-local.ps1 应已生成）" }
     $shaLine = (Get-Content $shaFile -Raw).Trim()
+
+    # 正文保真终验：读回线上正文，断言含说明文件首行原样（0.5.12 实踩——说明首行的
+    # `English | [中文说明](…#中文说明)` 上线后成了 `English | [????](…#????)`，只因为
+    # PS 5.1 把字符串体按 ISO-8859-1 编码，链接文本和锚点一起烂掉，而资产/标签全对、
+    # 页面照常打开，人眼不点进去看不出。首行原样比对能同时拦住编码、转义、截断三类问题。
+    if ($notesEnAbs -and (Test-Path $notesEnAbs)) {
+        $notesFirstLine = ([System.IO.File]::ReadAllLines($notesEnAbs))[0].Trim()
+        $latestBody = [string]$latest.body
+        if (-not $latestBody.Contains($notesFirstLine)) {
+            Die "终验失败（Release 正文保真）: 线上正文不含说明文件首行。`n  期望: $notesFirstLine`n  实得首行: $(($latestBody -split "`n")[0])`n  —— 多解释器编码问题？发版跑 powershell 5.1，正文必须经 Get-JsonBodyBytes 发字节体"
+        }
+        Write-Host '  终验通过: 线上 Release 正文含说明文件首行（编码/转义/截断均无碍）'
+    }
     Write-Host '  终验通过: 发布仓 releases/latest 的 tag 与资产集合符合预期'
     Write-Host "  Release 页: $($latest.html_url)"
     Write-Host "  SHA256: $shaLine"
