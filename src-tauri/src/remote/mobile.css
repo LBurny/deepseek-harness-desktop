@@ -160,6 +160,38 @@
   }
 
   /*
+   * 输入区底栏等距排版：原生工具行的 flex gap 虽恒为 12px，但各件盒子宽度不一
+   * （"+"/附件 28px 实心圆、权限/模型触发器 44~46px 且 padding 左 8 右 4 不对称、
+   * 发送键 34px），触发器尾部还各拖一枚 chevron——视觉间距实测 12/20/32/22/18px
+   * 全不一样（0.5.13 手机实拍，用户反馈"都不等距"）。手机端惯例栏内只留图标
+   * （与上方模型触发器藏文案同理）：① 行内两枚触发器 chevron 一并藏掉——本地名
+   * _chevron 实测落盘两包（dsh-client-ui-model-selection 的 svg 与
+   * dsh-client-ui-permission-presets 的 span），工具行内没有别的 chevron；
+   * ② 行内全部按钮统一 32×32 盒、padding 归零、内容居中（发送键 34→32 一并
+   * 拉齐，主操作靠蓝色填充区分而非尺寸），配合组内恒 12px gap 得 44px 均匀
+   * 节拍；组间仍由 space-between 留白分隔，宽至 700px 组距随之拉大属原生行为。
+   * 锚点 scoped 到输入卡片工具行 [class*="_row"]:has(> [class*="_tools"])：
+   * _tools 本地名全 node_modules 仅会话包独有，而 _trailing 与
+   * dsh-client-ui-input-trigger 弹窗组件撞名（其 _trailing 是行尾 inline-flex
+   * 段），故右侧组选择器必须挂在"含 _tools 的 _row"之下，不能裸匹配
+   * [class*="_trailing"]。_row/_tools 这类词做字节探针太泛（任意 JS 串都含
+   * "tools"），契约套件只守 _chevron（upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE），
+   * 行形状靠跟版时手机端七步法回归。上游改名则规则静默失效、回到原生不等距
+   * 排版，功能不损。实测 360/390/500/700px 组内间距恒 12px 无溢出，720px
+   * 断点外原生全名药丸恢复。
+   */
+  [class*="_row"]:has(> [class*="_tools"]) [class*="_chevron"] {
+    display: none;
+  }
+  [class*="_row"]:has(> [class*="_tools"]) :is([class*="_tools"], [class*="_trailing"]) button {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    flex: 0 0 auto;
+    justify-content: center;
+  }
+
+  /*
    * 输入框字号抬到 16px：iOS WKWebView（含微信内置浏览器）聚焦 font-size<16px
    * 的输入框时自动放大整页、收起键盘后不复原（0.5.4 手机实拍实踩——标签栏与
    * 输入框被推出可视区）。proxy.rs 已把 viewport meta 改写为禁缩放形态作为主

@@ -831,6 +831,33 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         let hit = tree_find(&nm, needle.as_bytes(), Some("client.js"), 4 << 20, 4);
         c.check(desc, hit.is_some(), format!("hit={hit:?}"), advice);
     }
+    // mobile.css 底栏等距排版的去 chevron 锚点：_chevron 本地名在 14 个包里
+    // 都有，全树探测恒绿无意义——定向探两枚触发器各自所在的包（模型选择器 +
+    // 权限模式），探针根收窄到包目录
+    for (pkg, desc) in [
+        (
+            "@deepseek-ai/dsh-client-ui-model-selection",
+            "模型选择器触发器仍含 _chevron 本地名",
+        ),
+        (
+            "@deepseek-ai/dsh-client-ui-permission-presets",
+            "权限模式触发器仍含 _chevron 本地名",
+        ),
+    ] {
+        let hit = tree_find(
+            &nm.join(pkg),
+            upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE.as_bytes(),
+            Some("client.js"),
+            4 << 20,
+            4,
+        );
+        c.check(
+            desc,
+            hit.is_some(),
+            format!("hit={hit:?}"),
+            "上游改了类名：mobile.css 底栏等距规则藏不住触发器 chevron（尾部多一枚箭头、视觉间距退回不等），改 upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE 与 mobile.css 的选择器",
+        );
+    }
 }
 
 /// 预装 /init 插件的 UI 折叠锚点（preseed 插件靠 source.kind="plugin"+notice

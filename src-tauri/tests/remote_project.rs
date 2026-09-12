@@ -228,6 +228,60 @@ fn model_trigger_iconified_rule() {
     );
 }
 
+/// 输入区底栏等距排版规则锚定（0.5.14）：原生工具行 flex gap 恒 12px 但各件
+/// 盒子宽度不一（28 实心圆 / 44~46 触发器 padding 左 8 右 4 / 发送 34），视觉
+/// 间距实测 12/20/32/22/18px 全不一样（手机实拍用户反馈）。修法=行内 chevron
+/// 一并隐藏 + 全按钮统一 32×32 盒。本测试钉三件事：去 chevron 规则挂在行锚点
+/// 下且 display:none、统一盒规则尺寸声明齐全、两条规则都在 700px 断点内且
+/// _trailing 不得裸匹配（与 dsh-client-ui-input-trigger 弹窗组件撞名，必须
+/// 挂在"含 _tools 的 _row"之下）。
+#[test]
+fn composer_toolbar_even_spacing_rule() {
+    let css = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("remote")
+            .join("mobile.css"),
+    )
+    .unwrap();
+    let media = css.find("@media (max-width: 700px)").unwrap();
+    let row_anchor = "[class*=\"_row\"]:has(> [class*=\"_tools\"])";
+
+    let chev = format!(
+        "{row_anchor} [class*=\"_{}\"]",
+        dshdesktop_lib::upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE
+    );
+    let pos = css
+        .find(&chev)
+        .unwrap_or_else(|| panic!("mobile.css 缺选择器 {chev}（触发器 chevron 会在等距排版里露出）"));
+    let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+    assert!(
+        css[pos..end].contains("display: none"),
+        "{chev} 规则块缺 display: none"
+    );
+    assert!(pos > media, "{chev} 规则须落在 700px 断点内");
+
+    let uniform = format!("{row_anchor} :is([class*=\"_tools\"], [class*=\"_trailing\"]) button");
+    let upos = css
+        .find(&uniform)
+        .unwrap_or_else(|| panic!("mobile.css 缺选择器 {uniform}（底栏按钮盒子不统一、间距退回不等）"));
+    let uend = css[upos..].find('}').map(|i| upos + i).unwrap();
+    for decl in ["width: 32px", "height: 32px", "padding: 0"] {
+        assert!(
+            css[upos..uend].contains(decl),
+            "{uniform} 规则块缺 {decl}"
+        );
+    }
+    assert!(upos > media, "{uniform} 规则须落在 700px 断点内");
+
+    // _trailing 撞名护栏：等距规则里的 _trailing 前必须带行锚点；
+    // 裸写 "[class*="_trailing"] button" 会扫到 input-trigger 弹窗的行尾段
+    assert!(
+        !css.contains("[class*=\"_trailing\"] button"),
+        "mobile.css 出现裸匹配 _trailing 的按钮规则——会误伤 dsh-client-ui-input-trigger 弹窗"
+    );
+}
+
 /// 回合统计行的搬移锚定（0.5.13 修）：上游 0.1.5 给 StatsPills 行挂了稳定钩子
 /// `data-composer-stats`，且分隔点"·"挪进了药丸 label 内部——旧锚点
 /// （composerStack 内"直接子代含 ≥2 个 _sep 的 _root"）在 0.1.5 全部失配，

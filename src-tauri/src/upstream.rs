@@ -389,6 +389,15 @@ pub const MODEL_TRIGGER_EFFORT_NEEDLE: &str = "triggerEffort";
 /// 显示）。影响面：mobile.css 的图标化规则靠它把原生图标在 700px 断点内点亮——
 /// 上游改名则手机端模型触发器只剩一个 chevron（我们自造的火花图标已退役）。
 pub const MODEL_TRIGGER_ICON_NEEDLE: &str = "triggerIcon";
+/// 输入卡片工具行两枚触发器"展开箭头"的 CSS Modules 本地名。实测落盘两包：
+/// @deepseek-ai/dsh-client-ui-model-selection/lib/client.js（模型触发器的
+/// svg._chevron）与 @deepseek-ai/dsh-client-ui-permission-presets/lib/client.js
+/// （权限模式触发器的 span._chevron）。影响面：mobile.css 的底栏等距排版规则
+/// 把工具行内 chevron 一并隐藏（栏内只留图标，与藏触发器文案同理）——上游
+/// 改名则 chevron 复原显示、视觉间距退回不等，功能不损。注：该词在 14 个包里
+/// 都有，全树探测恒绿无意义，契约套件对上述两包分别定向探测；等距规则的行
+/// 锚点（_row:has(> _tools)）本地名太泛无法做字节探针，靠跟版七步法回归。
+pub const COMPOSER_TRIGGER_CHEVRON_NEEDLE: &str = "chevron";
 
 // ── 回合统计行（composer 下方 StatsPills；mobile.js/mobile.css 的搬移锚点）──
 /// composer 输入区下方回合统计行的稳定钩子属性（"N 轮 N 步" + token 用量两枚
