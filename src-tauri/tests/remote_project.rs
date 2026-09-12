@@ -228,6 +228,64 @@ fn model_trigger_iconified_rule() {
     );
 }
 
+/// 回合统计行的搬移锚定（0.5.13 修）：上游 0.1.5 给 StatsPills 行挂了稳定钩子
+/// `data-composer-stats`，且分隔点"·"挪进了药丸 label 内部——旧锚点
+/// （composerStack 内"直接子代含 ≥2 个 _sep 的 _root"）在 0.1.5 全部失配，
+/// 表现为统计行留在输入区下方、信息页恒为空态（手机实拍）。本测试钉住三件事：
+/// 新钩子在 mobile.js/mobile.css 两处接线、旧锚点不得复活、面板里只藏行级分隔符。
+#[test]
+fn composer_stats_row_anchors() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("remote");
+    let js = std::fs::read_to_string(dir.join("mobile.js")).unwrap();
+    let css = std::fs::read_to_string(dir.join("mobile.css")).unwrap();
+    let media = css.find("@media (max-width: 700px)").unwrap();
+    let hook = dshdesktop_lib::upstream::COMPOSER_STATS_ROW_HOOK;
+
+    // mobile.js：找行走新钩子（找不到时回空态文案）
+    assert!(
+        js.contains(&format!("querySelector('[{hook}]')")),
+        "mobile.js 的 findStatsRoot 须用 [{hook}] 找统计行"
+    );
+    // 旧锚点不得复活：旧找行循环靠"_composerStack 内 _root + 直接子代 _sep 计数"
+    assert!(
+        !js.contains("_composerStack\"] [class*=\"_root\"]"),
+        "mobile.js 又出现旧版找行循环（0.1.5 的行没有直接子代 _sep，恒失配）"
+    );
+
+    // mobile.css：增强生效时隐藏原行（统计移入信息页），断点内
+    let hide = format!("html[data-dshmobile-enhanced] [{hook}]");
+    let pos = css
+        .find(&hide)
+        .unwrap_or_else(|| panic!("mobile.css 缺隐藏规则 {hide}"));
+    let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+    assert!(css[pos..end].contains("display: none"), "{hide} 规则块缺 display: none");
+    assert!(pos > media, "{hide} 规则须落在 700px 断点内");
+
+    // 兜底路径（JS 失效）：换行居中而不是截断
+    let fallback = format!("html:not([data-dshmobile-enhanced]) [{hook}]");
+    let fpos = css
+        .find(&fallback)
+        .unwrap_or_else(|| panic!("mobile.css 缺兜底规则 {fallback}"));
+    let fend = css[fpos..].find('}').map(|i| fpos + i).unwrap();
+    assert!(css[fpos..fend].contains("flex-wrap: wrap"), "{fallback} 规则块缺 flex-wrap: wrap");
+    assert!(fpos > media, "{fallback} 规则须落在 700px 断点内");
+
+    // 旧隐藏规则不得复活（0.1.5 行没有直接子代 _sep，:has 永假 = 永不隐藏）
+    assert!(
+        !css.contains("]:has(> [class*=\"_sep\"])"),
+        "mobile.css 又出现旧版 :has(> _sep) 统计行锚点（0.1.5 起恒失配）"
+    );
+    // 面板里只藏行级分隔符（直接子代），药丸内部的"·"必须保留
+    assert!(
+        css.contains("[data-dshmobile-info-body] [data-dshmobile-stats] > [class*=\"_sep\"]"),
+        "mobile.css 的面板分隔符规则须限定行级直接子代"
+    );
+    assert!(
+        !css.contains("[data-dshmobile-info-body] [class*=\"_sep\"] {"),
+        "mobile.css 又把面板里所有 _sep 都藏了（会把药丸内部的 · 藏掉，计数与速率文本粘连）"
+    );
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn project_endpoints_end_to_end() {
     let home = make_home();

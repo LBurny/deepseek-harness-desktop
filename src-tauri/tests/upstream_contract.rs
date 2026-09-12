@@ -822,6 +822,11 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
             "插件 client.js 仍含 triggerIcon 本地名",
             "上游改了类名：手机端模型触发器点不亮原生图标、只剩一个 chevron（自造火花图标已退役），改 upstream::MODEL_TRIGGER_ICON_NEEDLE 与 mobile.css 的选择器",
         ),
+        (
+            upstream::COMPOSER_STATS_ROW_HOOK,
+            "插件 client.js 仍含 data-composer-stats 统计行钩子",
+            "上游改了钩子：手机端统计行留在输入区下方且信息页恒为空态（mobile.js 找行与 mobile.css 隐藏规则都锚它），改 upstream::COMPOSER_STATS_ROW_HOOK 与 mobile.js/mobile.css",
+        ),
     ] {
         let hit = tree_find(&nm, needle.as_bytes(), Some("client.js"), 4 << 20, 4);
         c.check(desc, hit.is_some(), format!("hit={hit:?}"), advice);

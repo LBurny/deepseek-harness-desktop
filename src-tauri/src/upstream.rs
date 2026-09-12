@@ -390,6 +390,17 @@ pub const MODEL_TRIGGER_EFFORT_NEEDLE: &str = "triggerEffort";
 /// 上游改名则手机端模型触发器只剩一个 chevron（我们自造的火花图标已退役）。
 pub const MODEL_TRIGGER_ICON_NEEDLE: &str = "triggerIcon";
 
+// ── 回合统计行（composer 下方 StatsPills；mobile.js/mobile.css 的搬移锚点）──
+/// composer 输入区下方回合统计行的稳定钩子属性（"N 轮 N 步" + token 用量两枚
+/// 药丸）。实测落盘：@deepseek-ai/dsh-client-ui-chat/lib/client.js 的 StatsPills
+/// root（`div data-composer-stats`；conversation 包只是对它 `:has()` 补样式，元素
+/// 只有 chat 这一处）。关键结构：分隔点"·"在药丸 label **内部**，root 的直接子代
+/// 只有 .anchor——旧版"直接子代含 ≥2 个 _sep"的行形状已不存在，mobile.js 的找行
+/// 与 mobile.css 的隐藏/换行规则在 0.1.5 全部失配（行留在输入区下方、信息页恒为
+/// 空态，0.5.13 手机实拍），已双双改锚到这个属性。影响面：上游改名则手机端统计
+/// 行回不来的同时信息页恒空；契约套件守门。
+pub const COMPOSER_STATS_ROW_HOOK: &str = "data-composer-stats";
+
 // ── 预装 /init 插件的 UI 折叠锚点（resources/preseed-plugins/dsh-command-init）──
 /// 消息渲染的"用户气泡 vs 折叠上下文行"分支。实测落盘：
 /// @deepseek-ai/dsh-client-ui-chat/lib/client.js（0.1.2 起聊天渲染从

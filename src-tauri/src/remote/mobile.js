@@ -45,16 +45,15 @@
           : 'No turn stats yet. Finish a turn and timing/token usage shows up here.',
     }
 
-    // 统计行 = 输入区栈内、输入卡片之外、直接子代带 ≥2 个分隔符的 root
+    // 统计行 = composer 里的 StatsPills 行，上游给它挂了稳定钩子 data-composer-stats
+    // （dsh-client-ui-chat，回合数/步数 + token 用量两枚药丸）。0.1.5 的分隔点"·"
+    // 在药丸 label **内部**，旧版"root 直接子代含 ≥2 个 _sep"的形状已不存在——
+    // 旧锚点会让本函数找不到行（信息页永远显示空态）且 mobile.css 的隐藏规则
+    // 一并失配（原行留在输入区下方），双双改到这个钩子上。
     const findStatsRoot = (chatRoot) => {
-      for (const r of chatRoot.querySelectorAll('[class*="_composerStack"] [class*="_root"]')) {
-        if (r.closest('[class*="_card"]')) continue
-        let seps = 0
-        for (const c of r.children) {
-          if ((c.className || '').includes('_sep')) seps++
-        }
-        if (seps >= 2) return r
-      }
+      const row = chatRoot.querySelector('[data-composer-stats]')
+      if (row) return row
+      // 兜底：统计行还没渲染（steps=0 且无 token 用量时上游返回 null），交给空态文案
       return null
     }
 

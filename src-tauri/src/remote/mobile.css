@@ -250,15 +250,19 @@
   }
 
   /*
-   * 回合统计行（N 轮 · N 步 | LLM 耗时 | 首 token … | 缓存命中 | 输入输出）
-   * 内容约 460px 宽、单行 nowrap，手机 294px 必然从中截断（"首 token 平…"）。
-   * 正常路径：mobile.js 在"对话/轨迹"旁加"信息"标签，统计行整体移入面板
-   * （克隆同步，见 mobile.js），打 data-dshmobile-enhanced 后原行隐藏。
-   * 兜底路径（JS 失效/未命中节点）：信息全保留，隐藏 | 分隔符、改弹性换行
+   * 回合统计行（N 轮 N 步 | token 用量两枚药丸，dsh-client-ui-chat 的 StatsPills）
+   * 内容单行 nowrap，手机宽度必然从中截断（"38.1K tok ·…"贴着屏幕下缘）。
+   * 正常路径：mobile.js 在"对话/轨迹"旁加"信息"标签，统计行克隆进面板（见
+   * mobile.js），打 data-dshmobile-enhanced 后原行隐藏。
+   * 兜底路径（JS 失效/统计行未渲染）：信息全保留，隐藏分隔点、改弹性换行
    * （约两行居中），条目内部不断行。
-   * 锚点：输入区栈（composerStack）内"直接子代含分隔符的 root"即统计行。
+   * 锚点：上游 0.1.5 给该行挂的稳定属性 data-composer-stats。旧锚点
+   * （composerStack 内"直接子代含分隔符的 _root"）在 0.1.5 已失配——分隔点"·"
+   * 挪进了药丸 label 内部，root 的直接子代只剩 .anchor，:has(> _sep) 永假，
+   * 原行就留在输入区下方不走了（0.5.13 手机实拍）。选择器特异性
+   * (0,2,1) 高于上游 (0,1,0)，与注入顺序无关。
    */
-  html:not([data-dshmobile-enhanced]) [class*="_composerStack"] [class*="_root"]:has(> [class*="_sep"]) {
+  html:not([data-dshmobile-enhanced]) [data-composer-stats] {
     display: flex;
     flex-wrap: wrap;
     justify-content: center;
@@ -268,13 +272,13 @@
     white-space: normal;
     overflow: visible;
   }
-  html:not([data-dshmobile-enhanced]) [class*="_composerStack"] [class*="_root"]:has(> [class*="_sep"]) > [class*="_sep"] {
+  html:not([data-dshmobile-enhanced]) [data-composer-stats] [class*="_sep"] {
     display: none;
   }
-  html:not([data-dshmobile-enhanced]) [class*="_composerStack"] [class*="_root"]:has(> [class*="_sep"]) > span {
+  html:not([data-dshmobile-enhanced]) [data-composer-stats] span {
     white-space: nowrap;
   }
-  html[data-dshmobile-enhanced] [class*="_composerStack"] [class*="_root"]:has(> [class*="_sep"]) {
+  html[data-dshmobile-enhanced] [data-composer-stats] {
     display: none;
   }
 
@@ -357,7 +361,10 @@
     font-size: 13px;
     color: var(--dsw-alias-label-primary);
   }
-  [data-dshmobile-info-body] [class*="_sep"] {
+  /* 旧形状（0.1.2 线）行内直接子代分隔符不再显示；0.1.5 的分隔点在药丸 label
+     内部（"N 轮 N 步 · 38 tok/s"），只能藏行级的，别把药丸内部的也藏了——
+     否则计数与速率文本会粘在一起 */
+  [data-dshmobile-info-body] [data-dshmobile-stats] > [class*="_sep"] {
     display: none;
   }
   [data-dshmobile-empty] {
