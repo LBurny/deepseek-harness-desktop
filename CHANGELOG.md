@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.12] - 2026-09-12
+
 ### Changed
 
 - **dsh 运行时 0.1.2-rc.1 → 0.1.5-rc.2**（fetch-runtime.ps1 钉版；跟版预研与影响面见 `docs/upstream-0.1.5-prep.zh-CN.md`，执行计划见 `docs/superpowers/plans/` 下 2026-09-12 的执行计划）。上游要点：**会话格式升 V3**——恢复旧会话时生成 V3 新日志并保留原文件，但**升级后的会话不可降级读取（用户数据单向）**；Web 新增流式文件上传（任意类型，进度/取消/切会话续显）与右侧栏（多标签/分栏/全屏，Markdown/代码/HTML/PDF/图片预览，包括子代理与未激活会话的文件，**原 Detail 面板移除**）；Web minimal 预设只剩持久 shell（`str_replace_editor` 与 `fs-local` 整组移除，极简模式从双工具降为单工具）；出站请求开始遵循 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY`（回环显式豁免 `127.0.0.0/8`）；Windows 本地子进程新增 `windowsHide`；MCP 工具列表遇重复分页游标不再挂住启动；插件面板槽位重排（`conversation`/`details` → keyed `main` + `rightbar` + `sidebar.panellist`）。**逆向面实测几乎不动**：契约套件 37 条探针仅 1 条漂移（见下）

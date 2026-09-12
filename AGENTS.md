@@ -201,7 +201,7 @@ pnpm release                # 一条命令发版（bump+收编+测试+构建+验
 
 - **版本号进位规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——
   `0.4.0 → 0.4.1 → … → 0.4.9 → 0.5.0 → 0.5.1 → …`。每 10 个小版本进一位"大版本"，
-  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.11，下一版 0.5.12。
+  不按 semver 的 feature/breaking 语义跳版（0.x 阶段只数发版次数）。当前 0.5.12，下一版 0.5.13。
 - **发版步骤（0.4.9 起本地发布，弃用 CI release；0.5.3 起发布仓分发，2026-09-04 起 release-local.ps1 双仓上传）**：
   **0.5.12 起：`pnpm release` 一条命令跑完下面整条链路**（参数 -Version / -CommitMsg /
   -SkipAcceptance / -DryRun 演练 / -SelfTest 自检白名单与门禁缓存逻辑；跑前工作区必须
