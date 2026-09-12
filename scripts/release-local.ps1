@@ -49,6 +49,14 @@ $repos = @('LBurny/deepseek-harness-desktop-releases', 'LBurny/deepseek-harness-
 
 if (-not $env:GH_TOKEN) { throw 'GH_TOKEN 环境变量未设置（双仓上传 API 必需）' }
 if ($NotesPath -and -not (Test-Path $NotesPath)) { throw "NotesPath 不存在: $NotesPath" }
+
+# 说明正文读取：必须用 .NET 直读，不能用 Get-Content -Raw。
+# PS 5.1 的 Get-Content -Raw 会在返回的字符串上挂 PSPath/PSParentPath/ReadCount
+# 等 NoteProperty，而 ConvertTo-Json 见到带属性字符串就按**对象**序列化，正文变成
+# {"value":"…","PSPath":"…","ReadCount":1} → GitHub 回 422 "…is not a string"
+# （0.5.12 发版实踩：Release 首次创建走 POST 分支必踩；PATCH 分支同款写法）。文件为
+# 无 BOM UTF-8，ReadAllText 默认按 UTF-8 解码，正合适。
+function Read-NotesText([string]$Path) { [System.IO.File]::ReadAllText($Path) }
 $headers = @{
     Authorization = "Bearer $env:GH_TOKEN"
     Accept        = 'application/vnd.github+json'
@@ -92,7 +100,7 @@ foreach ($repo in $repos) {
         # 忽略自定义 body）；ConvertTo-Json 会把中文转 \uXXXX 转义，JSON 传输无碍
         $createBody = @{ tag_name = $tag; name = $tag }
         if ($NotesPath) {
-            $createBody.body = (Get-Content -Raw -Encoding UTF8 $NotesPath)
+            $createBody.body = (Read-NotesText $NotesPath)
             $createBody.generate_release_notes = $false
         } else {
             $createBody.generate_release_notes = $true
@@ -103,7 +111,7 @@ foreach ($repo in $repos) {
     }
     if ($NotesPath) {
         # 已存在的 Release 也 PATCH 正文：改完说明重跑本脚本即生效（幂等）
-        $patchBody = @{ body = (Get-Content -Raw -Encoding UTF8 $NotesPath) } | ConvertTo-Json
+        $patchBody = @{ body = (Read-NotesText $NotesPath) } | ConvertTo-Json
         Invoke-RestMethod -Method Patch -Uri "$apiBase/releases/$($release.id)" -Headers $headers -UserAgent $ua -Body $patchBody -ContentType 'application/json' | Out-Null
         Write-Host "[$repo] 已更新 Release 说明（来自 $NotesPath）"
     }
