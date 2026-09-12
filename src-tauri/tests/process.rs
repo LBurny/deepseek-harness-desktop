@@ -340,3 +340,35 @@ async fn ready_implies_token_captured_and_logs_redacted() {
     proc.stop().await;
     wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spawn_heals_stale_dsh_lock_files() {
+    // 每次 spawn 前必须清掉 DSH_HOME 里的陈旧锁（持有者已退出的 *.lock）并落日志。
+    // 缺这一步，dsh 会在 boot 阶段等这把锁超时（凭证写入预算 30s）、插件树加载失败、
+    // 进程退出，而壳只看到"就绪行没出现"，重试多少次都一样——用户视角是"应用坏了"
+    // （机器 B 实踩：.credentials.yaml.lock 被硬杀残留）。
+    // 活持有者的保留分支在 locks.rs 单元测试里用真平台钉（此处 TestPlatform 的
+    // process_alive 是桩，恒 false，无法表达"活着"）。
+    let work = tempfile::tempdir().unwrap();
+    let paths = fixture_paths(work.path());
+    std::fs::create_dir_all(&paths.home).unwrap();
+    let stale = paths.home.join(".credentials.yaml.lock");
+    std::fs::write(&stale, "4294967295\n").unwrap();
+    let unrelated = paths.home.join(".credentials.yaml");
+    std::fs::write(&unrelated, "secret: x\n").unwrap();
+
+    let (events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let proc = DshProcess::spawn_supervised(Arc::new(TestPlatform), paths, token_tx, emit);
+    wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
+
+    assert!(!stale.exists(), "死 pid 的陈旧锁必须在 spawn 前被清掉");
+    assert!(unrelated.exists(), "非 .lock 文件不能被碰");
+    wait_event(
+        &events,
+        |e| matches!(e, ProcessEvent::Log(l) if l.contains("[locks] 清理陈旧锁")),
+        Duration::from_secs(5),
+    );
+    proc.stop().await;
+    wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
+}

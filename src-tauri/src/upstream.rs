@@ -406,3 +406,25 @@ pub const NOTICE_SUMMARY_NEEDLE: &str = "noticeSummary";
 /// name/description/input.hint/handler），两边都兼容——本常量是兼容哨兵：
 /// 上游再动命令旗标/注册面时探针翻红，提醒复核预装插件。
 pub const COMMANDS_ATTACHMENT_FLAG: &str = "attachments";
+
+// ── dsh 跨进程写锁（locks.rs 陈旧锁自愈的依据）─────────────────
+/// 锁文件的命名：目标文件的**兄弟**路径 `<filename>.lock`。上游出处：
+/// @deepseek-ai/dsh-atomic-write/lib/index.js 的 withFileLock（`wx` 独占创建、
+/// 内容 `${process.pid}\n`、只在 finally 里 rm）。关键性质：**竞争方永不删除
+/// 已存在的锁**（源码注释原文 orphan recovery is an operator action），过期只
+/// 报错、不猜所有权。影响面：持有方被硬杀（Windows 的 TerminateProcess）即永久
+/// 残留 → 之后每次启动都在 boot 阶段超时，应用再也起不来（机器 B 实踩：
+/// `.credentials.yaml.lock` 卡住 dsh-client-connection 的 apply，插件树加载失败、
+/// 进程直接退出，壳只看到"就绪行没出现"）。locks.rs::heal_stale_locks 在每次
+/// spawn 前按 pid 存活性清理；上游一旦自己做孤儿恢复、或改锁名/内容格式，
+/// tests/upstream_contract.rs 的锁探针会翻红，届时撤掉自愈。
+pub const LOCK_FILE_SUFFIX: &str = ".lock";
+/// 凭证写入的锁等待预算（上游常量 DOCUMENT_LOCK_WAIT_MS = 30000）。出处同上的
+/// 调用方 @deepseek-ai/dsh-credentials-local/lib/index.js。影响面：诊断面板/日志
+/// 里解释"卡 30s 才报错"的数值来源。
+pub const CREDENTIALS_LOCK_WAIT_SECS: u64 = 30;
+/// 陈旧锁扫描的最大目录深度（相对 DSH_HOME；0=根层）与跳过的目录名。
+/// 锁的落点都在 home 根与浅层（credentials.yaml / settings.yaml 及其它状态文件），
+/// node_modules 下是插件树（深且无锁），整棵跳过。
+pub const LOCK_SCAN_MAX_DEPTH: usize = 3;
+pub const LOCK_SCAN_SKIP_DIRS: &[&str] = &["node_modules"];

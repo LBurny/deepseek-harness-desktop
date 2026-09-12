@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod download;
 pub mod dsh_session;
 pub mod i18n;
+pub mod locks;
 pub mod mcp;
 pub mod notify;
 pub mod pagebridge;

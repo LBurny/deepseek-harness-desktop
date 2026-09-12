@@ -698,6 +698,35 @@ fn probe_mcp(rt: &Path, dsh_home: &Path, c: &mut Checker) {
     }
 }
 
+fn probe_locks(rt: &Path, c: &mut Checker) {
+    // locks.rs 陈旧锁自愈的前提：上游的写锁仍是 `<file>.lock` 兄弟文件、`wx`
+    // 独占创建、内容为 pid，且**没有**孤儿恢复（竞争方永不删别人的锁）。
+    // 上游一旦自己做陈旧锁回收，自愈就该撤掉——那时这条探针翻红提醒。
+    let src = fs::read_to_string(upstream::join_segments(
+        &upstream::dsh_node_modules_dir(rt),
+        &["@deepseek-ai", "dsh-atomic-write", "lib", "index.js"],
+    ))
+    .unwrap_or_default();
+    let lock_shape = src.contains("flag: \"wx\"")
+        && src.contains("`${filename}.lock`")
+        && src.contains("`${process.pid}\\n`");
+    c.check(
+        "dsh-atomic-write 锁形状（wx 建 .lock 兄弟 + 内容 pid）",
+        lock_shape,
+        format!("found_bytes={}", src.len()),
+        "锁的命名/创建方式/内容变了：改 upstream::LOCK_FILE_SUFFIX 与 locks.rs 的 pid 解析（自愈会失配）",
+    );
+    // 上游注释那句话自己折了行（orphan recovery is an operator + action 分两行），
+    // 所以取同段里不跨行的前半句当 needle。
+    let operator_action = src.contains("never removes an existing lock");
+    c.check(
+        "上游仍不自愈孤儿锁（contender never removes an existing lock）",
+        operator_action,
+        format!("has_orphan_note={operator_action}"),
+        "上游加了陈旧锁自动回收：撤掉 locks.rs::heal_stale_locks 与其锚定测试（壳不再需要替它兜底）",
+    );
+}
+
 fn probe_remote_needles(rt: &Path, c: &mut Checker) {
     // proxy.rs 的 bundle 改写前提：插件 client.js 里仍含内测声明三元式
     // （实测落盘：node_modules/@deepseek-ai/dsh-client-ui-settings/lib/client.js）
@@ -1075,6 +1104,7 @@ async fn upstream_contract() {
     probe_picker(&rt, &mut c);
     probe_pickerpatch(&rt, &mut c);
     probe_presets(&rt, &mut c);
+    probe_locks(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);
     probe_preseed_plugin_needles(&rt, &mut c);
     probe_015_faces(&rt, &mut c);
