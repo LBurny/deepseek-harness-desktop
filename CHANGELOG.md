@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.13] - 2026-09-12
+
 ### Added
 
 - **陈旧锁自愈（`locks.rs`）**：每次启动 dsh 前清扫 `DSH_HOME` 里持有者已退出的 `*.lock`。dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（`wx` 独占创建、内容为 pid、只在 `finally` 里删），上游明确不做孤儿恢复；而壳在 Windows 上只能 `taskkill /T /F` 硬杀（dsh 的 SIGTERM 优雅退场在 TerminateProcess 下拿不到信号），恰好持锁时被杀就把锁永久留在盘上——此后每次启动都在 boot 阶段等锁超时（凭证写入预算 30s）、插件树加载失败、进程退出，壳只看到"就绪行没出现"，重试多少次都一样，用户视角是**应用再也起不来**（机器 B 实踩：`.credentials.yaml.lock`）。判定保守：pid 可解析且进程已退出（或被无关进程复用了 pid）才删，内容不是 pid 的要够老（5 分钟）才删，持有者活着且镜像是 node 的一律保留；扫描限深 3 层、跳过 `node_modules`、不进符号链接/junction；每条判定落 events.log。真机复现链已验：干净 home 能起（且锁文件每次 boot 都会建又删，故硬杀窗口每次启动都存在）→ 塞入死 pid 的锁后 dsh 卡 `timed out waiting for the writer lock` → 删锁即恢复。回归：`locks` 单元测试 10 条（含真平台接线）+ `tests/process.rs::spawn_heals_stale_dsh_lock_files` 钉住"确实接在 spawn 路径上"
