@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **v0.5.12 的 Release 正文首行中文被写成 `????`**（线上已就地修正，双仓同文）：正文首行 `English | [中文说明](…#中文说明)` 上线后成了 `English | [????](…#????)`，链接文本与跳转锚点一起烂掉（页面照常打开、资产与标签全对，不点进去看不出）。根因是同一条多解释器差异的**另一半**：`Invoke-RestMethod` 收到 `string` 体而 `-ContentType` 不带 `charset` 时按 **ISO-8859-1** 编码，非 ASCII 一律变 `?`（`powershell` 5.1；PS 7 按 UTF-8 故 0.5.11 侥幸正常）。现所有 JSON 正文经新的 `Get-JsonBodyBytes` 发 UTF-8 **字节**体（`-ContentType 'application/json; charset=utf-8'`），并纠正旧注释的错误说法（5.1 的 `ConvertTo-Json` **不会**把中文转 `\uXXXX`，中文原样进 JSON，编码责任全在发送这一步）。防线补到四道：`release-local.ps1 -SelfTest` 增加"上行正文按 UTF-8 字节发送"与"所有 JSON 调用点都经字节助手"两条断言、[0/9] 前置自检、[3/9] 形状预检、[9/9] 终验读回线上正文断言含说明文件首行原样。本机实测矩阵（本地收包器抓原始上行字节）：5.1 + string → `?`；5.1 + string + `charset=utf-8` → 正常；5.1 + 字节体 → 正常；7 三种都正常
 - `release-local.ps1` 支持 `-NotesOnly`：只 PATCH 两仓已发布 Release 的正文，不先删后传 exe/sha256（改错别字/坏链接不必为几行字动公开安装包）；`-NotesOnly` 找不到 Release 时直接报错，不会建出无资产的空发布页
+- **手机端模型选择器上的重复图标**（0.1.5 适配回退）：窄屏上触发器里同时出现"火花 + 数据"两枚图标。dsh 0.1.5 的模型触发器自带 `triggerIcon`（`IconDataOutline16`），而我们从 0.4.x 起用 `::before` + mask SVG 补过一枚火花图标（当时上游只有文案 + chevron）——上游补上图标后两枚就并排了。现删掉自造图标、`mobile.css` 改为在 700px 断点内点亮上游那一枚（上游只在容器 ≤360px 时显示它，361~700px 区间不点亮就一个图标都不剩）。真浏览器实测（390/500/700/720px 四档量 DOM）：≤700px 稳定为「原生图标 + chevron」，>700px 回到「模型名 · 推理等级 + chevron」文本态；把退役前的规则临时注入即可复现旧的"两枚"。回归：`tests/remote_project.rs::model_trigger_iconified_rule` 加三条断言（原生图标须点亮、不得再出现 `::before` 自造图标、不得再出现 mask SVG），契约探针加 `MODEL_TRIGGER_ICON_NEEDLE`
 
 ## [0.5.12] - 2026-09-12
 

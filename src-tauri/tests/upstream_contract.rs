@@ -817,6 +817,11 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
             "插件 client.js 仍含 triggerEffort 本地名",
             "上游改了类名：图标化后推理等级文案露出（无 key 机器显示 \"Default\" 裸文本药丸挤换行），改 upstream::MODEL_TRIGGER_EFFORT_NEEDLE 与 mobile.css 的选择器",
         ),
+        (
+            upstream::MODEL_TRIGGER_ICON_NEEDLE,
+            "插件 client.js 仍含 triggerIcon 本地名",
+            "上游改了类名：手机端模型触发器点不亮原生图标、只剩一个 chevron（自造火花图标已退役），改 upstream::MODEL_TRIGGER_ICON_NEEDLE 与 mobile.css 的选择器",
+        ),
     ] {
         let hit = tree_find(&nm, needle.as_bytes(), Some("client.js"), 4 << 20, 4);
         c.check(desc, hit.is_some(), format!("hit={hit:?}"), advice);

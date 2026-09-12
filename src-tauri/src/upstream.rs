@@ -384,6 +384,11 @@ pub const MODEL_TRIGGER_LABEL_NEEDLE: &str = "triggerLabel";
 /// 影响面：图标化规则须把两段文案一起隐藏，漏掉此段则裸文本药丸把
 /// trailing 组挤换行（0.4.7 实踩）。
 pub const MODEL_TRIGGER_EFFORT_NEEDLE: &str = "triggerEffort";
+/// 模型触发器"图标"段的 CSS Modules 本地名（同包同 trigger 内的
+/// IconDataOutline16；上游默认 display:none，只在 @container width<=360px 时
+/// 显示）。影响面：mobile.css 的图标化规则靠它把原生图标在 700px 断点内点亮——
+/// 上游改名则手机端模型触发器只剩一个 chevron（我们自造的火花图标已退役）。
+pub const MODEL_TRIGGER_ICON_NEEDLE: &str = "triggerIcon";
 
 // ── 预装 /init 插件的 UI 折叠锚点（resources/preseed-plugins/dsh-command-init）──
 /// 消息渲染的"用户气泡 vs 折叠上下文行"分支。实测落盘：

@@ -148,16 +148,15 @@
   [data-slot="conversation.input.model"] [class*="_triggerEffort"] {
     display: none;
   }
-  /* 模型触发器原生只有文案 + chevron，文案隐藏后补一枚火花图标；
-     mask + currentColor 让图标跟随主题文字色（深浅色都正确） */
-  [data-slot="conversation.input.model"] [class*="_trigger"]::before {
-    content: "";
-    flex: 0 0 auto;
-    width: 15px;
-    height: 15px;
-    background: currentColor;
-    -webkit-mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l1.8 4.7L14.5 7.5l-4.7 1.8L8 14l-1.8-4.7L1.5 7.5l4.7-1.8z'/%3E%3C/svg%3E") center / contain no-repeat;
-    mask: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M8 1l1.8 4.7L14.5 7.5l-4.7 1.8L8 14l-1.8-4.7L1.5 7.5l4.7-1.8z'/%3E%3C/svg%3E") center / contain no-repeat;
+  /* 原生模型图标：0.1.5 起触发器自带一枚 triggerIcon（IconDataOutline16），但上游
+     只在容器 ≤360px 时显示（@container 查询里 display:block，默认 display:none）。
+     我们把两段文案藏到 700px，而 361~700px 区间上游不显示图标 → 触发器只剩一个箭头，
+     故在断点内显式点亮原生图标（选择器特异性高于上游的 display:none，与注入顺序无关）。
+     历史：上游还没有图标时，这里是我们自己用 ::before 补的一枚火花 SVG；0.1.5 上游
+     自带图标后就成了「我们的火花 + 上游的数据图标」两枚并排（手机端实拍，用户反馈
+     "重复了"），已删掉自造的、只留上游那一枚。 */
+  [data-slot="conversation.input.model"] [class*="_triggerIcon"] {
+    display: block;
   }
 
   /*

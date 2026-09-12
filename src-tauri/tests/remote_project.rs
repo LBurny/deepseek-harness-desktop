@@ -167,8 +167,10 @@ fn session_log_pill_hidden_rule() {
 }
 
 /// 模型选择器图标化规则锚定：触发器两段文案（模型名 + 推理等级）都必须
-/// 隐藏在 data-slot 钩子下。漏掉推理等级段的表现：无 API key 机器上段内
-/// 显示 providerDefault 文案 "Default"（有 key 显示 "High" 等等级名），
+/// 隐藏在 data-slot 钩子下，且**只能剩一枚图标**——上游 0.1.5 自带 triggerIcon，
+/// 我们过去补的自造火花（::before + mask SVG）会与它并排成两枚（手机端实拍，
+/// 用户反馈"星星和数据库图标重复了"）。漏掉推理等级段的表现：无 API key 机器上
+/// 段内显示 providerDefault 文案 "Default"（有 key 显示 "High" 等等级名），
 /// 裸文本药丸把 trailing 组挤换行（0.4.7 实踩，见 mobile.css 注释）。
 #[test]
 fn model_trigger_iconified_rule() {
@@ -197,6 +199,33 @@ fn model_trigger_iconified_rule() {
         );
         assert!(pos > media, "{sel} 规则须落在 700px 断点内");
     }
+
+    // 原生图标须在断点内显式点亮（上游只在容器 ≤360px 时显示它，361~700px 区间
+    // 不点亮就一个图标都没有）
+    let icon_sel = format!(
+        "{slot} [class*=\"_{}\"]",
+        dshdesktop_lib::upstream::MODEL_TRIGGER_ICON_NEEDLE
+    );
+    let icon_pos = css
+        .find(&icon_sel)
+        .unwrap_or_else(|| panic!("mobile.css 缺选择器 {icon_sel}（模型触发器会没有图标）"));
+    let icon_end = css[icon_pos..].find('}').map(|i| icon_pos + i).unwrap();
+    assert!(
+        css[icon_pos..icon_end].contains("display: block"),
+        "{icon_sel} 规则块缺 display: block"
+    );
+    assert!(icon_pos > media, "{icon_sel} 规则须落在 700px 断点内");
+
+    // 自造图标必须已退役：模型触发器上不允许再挂 ::before 画图标
+    let diy = format!("{slot} [class*=\"_trigger\"]::before");
+    assert!(
+        !css.contains(&diy),
+        "mobile.css 又给模型触发器补了自造图标 {diy}——会与上游 triggerIcon 并排成两枚"
+    );
+    assert!(
+        !css.contains("-webkit-mask: url(\"data:image/svg+xml"),
+        "mobile.css 又出现 mask SVG 自造图标（模型触发器的火花图标已随 0.1.5 退役）"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
