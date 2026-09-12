@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.14] - 2026-09-12
+
+### Fixed
+
+- **会话头部"打开方式"的选择（VS Code / 文件资源管理器）重启后回默认值**：用户选了 VS Code，重启应用又变回文件资源管理器。根因不在选择本身——这份选择由上游插件 `dsh-client-ui-open-in-app` 存在浏览器 localStorage（`dsh-client-store` 的 `persist: { name: "dsh.open-in-app.choice" }`，无服务端副本，代码注释也写明"shared across sessions and browser restarts"），而 localStorage 按 **origin（含端口）** 隔离；壳此前每次 spawn 都 `free_port()` 让 OS 随机分配端口，等于每次启动都是全新源站，于是每次都读不到上次写的值、回退到探测到的第一个应用（Windows 上即文件资源管理器）。实锤：WebView2 的 `Local Storage\leveldb` 里同一个库并存 7 个 `http://127.0.0.1:<port>` 源站，每个源站各存各的 `open-in-app.choice`，最新一条确实写着 `"vscode"`——写在当次启动的端口下，下次启动读不到。同一条船上还有另外三个走 localStorage 的偏好（`dsh.conversation.contentWidth` 会话内容宽度、`dsh.sessions.current` 当前会话、`dsh.trajectory.duration` 轨迹时长），所以修法选在源站层而不是逐个补偏好：`port.rs` 新增**记忆端口**——Ready 时把实际绑上的端口写进壳数据目录 `dsh-port.txt`，下次启动探活通过就复用它（2s 重试预算覆盖上个进程刚退、监听套接字尚未回收的瞬间），端口确实被占则换新端口并在 Ready 后改写记忆，一轮收敛；同一轮内的重试回避记忆端口，保住"启动失败即换端口重试"的原有兜底（否则会在旧端口上反复撞、白等满 5 轮才 Failed）。首次升级后需重新选一次打开方式——旧选择留在已废弃的随机源站下，读不回来（浏览器存储按源站隔离，无跨源迁移途径）。回归：`port.rs` 单元测试 6 条（记忆读写往返/损坏与低端口拒绝/空闲复用/被占回退/短暂占用等待/低端口不复用）+ `tests/process.rs::port_is_reused_across_launches`（首个进程 Ready 后落盘、第二个进程读回同一端口并落 `reusing remembered port` 日志）
+
+- **手机端输入框底栏排版不等距**（用户手机实拍反馈）：工具行的 flex gap 虽恒为 12px，但各件盒子宽度不一（"+"/附件 28px 实心圆、权限/模型触发器 44~46px 且 padding 左 8 右 4 不对称、发送键 34px），触发器尾部还各拖一枚 chevron——视觉间距实测 12/20/32/22/18px 全不一样。现按手机端"栏内只留图标"惯例（与藏触发器文案同一逻辑）：行内两枚触发器 chevron 一并隐藏（本地名 `_chevron` 实测落盘两包——dsh-client-ui-model-selection 的 svg 与 dsh-client-ui-permission-presets 的 span，新增 `upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE` 与两条按包定向的契约探针；该词在 14 个包里都有，全树探测恒绿无意义），行内全部按钮统一 32×32 盒、padding 归零、内容居中（发送键 34→32 一并拉齐，主操作靠蓝色填充区分而非尺寸），组内间距恒 12px、44px 均匀节拍，组间仍由 space-between 留白分隔。选择器 scoped 到 `[class*="_row"]:has(> [class*="_tools"])`——`_tools` 全 node_modules 仅会话包独有，而 `_trailing` 与 dsh-client-ui-input-trigger 弹窗组件撞名（其 `_trailing` 是行尾 inline-flex 段），裸匹配会误伤弹窗。真浏览器实测（临时裸 dsh 实例 + Playwright 注入适配层量 DOM）：360/390/500/700px 组内间距恒 12px 无溢出，720px 断点外原生全名药丸恢复，暗色主题与首页新建会话态（无用量环）同验。回归：`tests/remote_project.rs::composer_toolbar_even_spacing_rule`（两条规则的锚点/关键声明/断点位置 + `_trailing` 裸匹配护栏）
+
 ## [0.5.13] - 2026-09-12
 
 ### Added

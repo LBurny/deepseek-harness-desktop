@@ -29,13 +29,14 @@ src-tauri/src/
                     就绪行是 launch token 唯一来源（pump 先捕获再脱敏转发）；wait_token 静默
                     超时 + npm 冷装警告切 10min 长预算；Ready 落耗时分解行；子进程 PATH 前置
                     内嵌 node 目录 + profile 的 node_modules/.bin；指数退避、stop/restart；
-                    **spawn 前先跑 locks.rs 陈旧锁自愈**
+                    **端口优先复用记忆值**；**spawn 前先跑 locks.rs 陈旧锁自愈**
   locks.rs          陈旧锁自愈：spawn 前删 DSH_HOME 里持有者已退出的 *.lock（见坑区）
   dsh_session.rs    BrowserAuth 凭证：launch token 解析 + token 换 cookie（绑 127.0.0.1:<port>
                     authority，换端口即失效）；凭证只在内存、日志脱敏（token 经 redact_token）
   runtime.rs        ensure_runtime：可写则原地运行内嵌运行时，只读则回退部署副本；
                     `\\?\` 扩展路径经 strip_verbatim（别绕过它自己拼）
-  port.rs           free_port（有竞态窗口需重试）+ wait_ready
+  port.rs           选端口：优先复用记忆端口（dsh-port.txt，Web 源站跨启动稳定）+
+                    free_port 兜底（有竞态窗口需重试）+ wait_ready
   i18n.rs           壳界面语言跟随 dsh locale.preference；文案 pick(zh,en) 二选一
   pagebridge.rs     主窗口观测桥：error/unhandledrejection/console.error → events.log
                     （限流+截断+脱敏）；#root 心跳驱动 lib.rs 自愈看门狗
@@ -89,7 +90,7 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 
 ## 版本与发布
 
-- **版本号规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——`0.4.0 → … → 0.4.9 → 0.5.0`，不按 semver 语义跳版（0.x 阶段只数发版次数）。当前 0.5.13，下一版 0.5.14。
+- **版本号规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——`0.4.0 → … → 0.4.9 → 0.5.0`，不按 semver 语义跳版（0.x 阶段只数发版次数）。当前 0.5.14，下一版 0.5.15。
 - **发版**：`pnpm release` 一条命令跑完整链路（参数 -Version / -CommitMsg / -SkipAcceptance / -DryRun / -SelfTest；跑前工作区必须干净——本次改动先单独 commit，docs/release-notes/、CHANGELOG、三处版本文件、AGENTS.md 允许脏并会被收编；说明文件缺失会脚手架后退出，填完重跑）。机械步骤：bump 三处 → CHANGELOG 收编（补回空 Unreleased）→ 说明脚手架+格式 lint → 版本指针 → cargo test → build → acceptance 真机验收 → commit/tag/push → 镜像说明 → release-local 双仓上传 → 匿名 API 终验（读回线上正文须含说明文件首行原样）。**门禁缓存**：`%LOCALAPPDATA%\DSHDesktop\release-cache\v<ver>.json`（head 未变或 diff 只含白名单文件即秒级跳过）。
 - **双语说明（0.5.11 起）**：`docs/release-notes/` 每版两文件（`v<ver>.md` 英文正文传 -NotesPath，`v<ver>.zh.md` 中文）；正文首行 `English | [中文说明](<发布仓 blob 链接>#中文说明)`，中文不内联、点击跳发布仓（该目录随镜像进发布仓，**先推镜像再 PATCH** 外链才不 404）；只改正文用 `-NotesOnly`（不碰资产）。0.5.11 前只有一条 Full Changelog 链接，别再犯。
 - **弃用 CI 发布（0.4.9 起）**：私有仓 tag 触发跑满 30~70min（Actions 缓存按 ref 隔离），本地 3~5min。release.yml 降为 workflow_dispatch 备用；CI 只剩 build.yml（push main 触发，兼作 rt 运行时缓存预热）。
@@ -116,7 +117,7 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 - **resource_dir() 返回 `\\?\` 扩展路径**：Node 加载器不认，`runtime::strip_verbatim` 已处理，别绕过 ensure_runtime 自己拼。
 - **events.log 是壳+dsh 事件的统一持久层**（1MB 截断，诊断面板回填读尾部）：写入统一走 append_debug_line，无时间戳的行自动补本地前缀（排查启动时序读行首）。
 - **fixture 用 .cjs**（根 package.json 是 type:module，use-fixture-runtime.ps1 会铺 CJS 桩）；`#[tokio::test]` 带 sleep 须 `flavor="multi_thread"`。
-- **dev 模式不拷贝 bundle.resources**：内置音效手动复制到 target/debug/sounds/；真实运行时放 src-tauri/runtime 下跑 dev 会被 dsh 自更新触发 watcher 重建循环——复制到 src-tauri 外用 DSHDESKTOP_RUNTIME_DIR 指向。
+- **dev 模式不拷贝 bundle.resources**：内置音效手动复制到 target/debug/sounds/；真实运行时放 src-tauri/runtime 下跑 dev 会被 dsh 自更新触发 watcher 重建循环——复制到 src-tauri 外用 DSHDESKTOP_RUNTIME_DIR 指向。dev 与安装版共用壳数据目录（`%LOCALAPPDATA%\DSHDesktop`，含端口记忆 dsh-port.txt）——同时运行会互相顶掉各自记住的端口（都在跑、各用各的仍正常，只是源站偏好会在两个端口间来回；验端口复用别开着安装版）。
 - **NSIS 离线**：直连不稳时用 ghproxy.net 预置 `%LOCALAPPDATA%\tauri\NSIS`（含 nsis_tauri_utils.dll，SHA1 须匹配）。
 - **托盘 quit 顺序**：远程开着时**不杀隧道**（suspend_for_exit 保链接），只 stop dsh 等 1.5s 再 exit；杀子进程树用 `taskkill /T /F`。
 - **安装器只杀主程序**：子进程全靠 Job Object 随父死亡回收 + nsis-hooks 杀树/清扫；缺层则运行中重装必现 "Can't write: …\cloudflared.exe"。
@@ -145,10 +146,11 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 - **dsh 写锁不自愈 → 硬杀一次可能永久起不来（0.5.13 修）**：锁是 `<file>.lock` 兄弟文件（wx 建、内容 pid、只 finally 删，上游明确 orphan recovery is an operator action）；壳只能 taskkill /F 硬杀，dsh 的 SIGTERM 优雅退场拿不到信号——持锁时被杀即永久残留，之后每次启动在 boot 阶段等锁超时（凭证写入 30s）、插件树失败退出，壳只见"就绪行没出现"。对策：locks.rs 每次 spawn 前清持有者已退出的 `*.lock`（pid 死了才删/活着且镜像是 node 的留/无 pid 要够老；限深 3 层、跳过 node_modules、不进 junction；逐条落 events.log）。旧版急救：`scripts/check-dsh-locks.ps1`（-Remove 只清死锁）。
 - **模型触发器的图标只有一枚（0.1.5 起）**：上游自带 triggerIcon（默认 display:none，容器 ≤360px 才亮）；壳旧 ::before 火花补丁与它并排成两枚——已删自造、mobile.css 在 700px 断点点亮上游那枚（361~700px 区间否则一个图标都不剩）。回归 model_trigger_iconified_rule + 契约探针 MODEL_TRIGGER_ICON_NEEDLE。
 - **回合统计行搬移锚点是 `data-composer-stats`（0.1.5 起）**：StatsPills 行的分隔点"·"在药丸 label 内部，旧锚点（直接子代 ≥2 个 _sep / `:has(> _sep)`）恒失配——行留在输入区下方、信息页恒空态。mobile.js/css 已改锚该属性；面板只藏行级分隔符（药丸内部的 · 保留，否则计数与速率文本粘连）。契约探针 COMPOSER_STATS_ROW_HOOK。
+- **dsh 端口必须跨启动稳定，否则客户端偏好全丢**：上游把若干 UI 偏好存在浏览器 localStorage（`dsh-client-store` 的 `persist`，无服务端副本）——会话头部"打开方式"选择（`dsh.open-in-app.choice`，VS Code / 文件资源管理器）、会话宽度 `dsh.conversation.contentWidth`、当前会话 `dsh.sessions.current`、轨迹时长 `dsh.trajectory.duration`；而 localStorage 按 **origin（含端口）** 隔离，早先每次 spawn 都 `free_port()` 随机取端口 = 每次全新源站 → 用户选的 VS Code 重启就变回文件资源管理器（0.5.14 修，实锤：WebView2 的 Local Storage leveldb 里同库并存 7 个 `http://127.0.0.1:<port>` 源站，每个各存各的）。对策 = port.rs 记忆端口：Ready 时把端口写进壳数据目录 `dsh-port.txt`，下次启动探活通过就复用（2s 重试预算；被占则换新端口并在 Ready 后改写记忆，一轮收敛；同一轮重试回避它防"在旧端口反复撞"）。
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 283 个，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 292 个，其中 1 条 ignored，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 
