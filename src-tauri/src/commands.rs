@@ -37,12 +37,7 @@ pub async fn restart_dsh(state: State<'_, SharedState>) -> Result<(), String> {
 
 /// events.log 固定落位：DSH home 上级（%LOCALAPPDATA%\DSHDesktop\events.log）
 fn events_log_path(state: &SharedState) -> std::path::PathBuf {
-    state
-        .runtime
-        .home
-        .parent()
-        .unwrap_or(std::path::Path::new("."))
-        .join("events.log")
+    state.runtime.state_dir().join("events.log")
 }
 
 #[tauri::command]

@@ -1,5 +1,5 @@
 use crate::platform::Platform;
-use crate::port::{free_port, wait_ready};
+use crate::port::wait_ready;
 use crate::runtime::RuntimePaths;
 use std::ffi::OsString;
 use std::path::Path;
@@ -171,6 +171,10 @@ impl DshProcess {
     async fn supervise_loop(&self) {
         let mut failures = 0u32;
         let mut backoff = Duration::from_millis(500);
+        // 记忆端口的失败回避：记忆端口这一轮没起来（探活后被别人抢了等），
+        // 同一轮重试不再选它——否则 port.rs 的"换端口重试"会退化成在同一个
+        // 端口上反复撞，白等满 MAX_FAILURES 轮才 Failed
+        let mut avoid: Option<u16> = None;
         loop {
             if self.inner.shutdown.load(Ordering::SeqCst) {
                 break;
@@ -190,13 +194,27 @@ impl DshProcess {
             // 启动计时：从进入 Starting 到 Ready 的分解（HTTP 绑定 / 等 token 行），
             // Ready 时落日志——诊断面板"上次启动"行与用户报"启动慢"的定位数据源
             let spawned_at = tokio::time::Instant::now();
-            let port = match free_port() {
+            // Web 源站必须跨启动稳定：dsh 客户端的偏好（"打开方式"选择、会话宽度
+            // 等）走浏览器 localStorage，而 localStorage 按 origin（含端口）隔离
+            // ——每次随机端口 = 每次全新源站，用户选过的偏好重启即回默认值
+            // （上游 dsh-client-store 的 persist 只写 localStorage，无服务端副本）。
+            // 故优先复用上次真正绑上的端口（port.rs 的 dsh-port.txt）。
+            let state_dir = self.inner.paths.state_dir().to_path_buf();
+            let remembered =
+                crate::port::load_remembered(&state_dir).filter(|p| Some(*p) != avoid);
+            let port = match crate::port::pick_port(remembered, crate::port::REUSE_GRACE).await {
                 Ok(p) => p,
                 Err(e) => {
                     self.set_state(DshState::Failed(format!("no free port: {e}")));
                     break;
                 }
             };
+            let reused = remembered == Some(port);
+            if reused {
+                self.log(format!(
+                    "[dshdesktop] reusing remembered port {port} (stable web origin)"
+                ));
+            }
             self.log(format!(
                 "[dshdesktop] starting dsh web --port {port} (node={}, bin={}, cwd={})",
                 self.inner.paths.node_exe.display(),
@@ -276,6 +294,9 @@ impl DshProcess {
                     self.inner.platform.kill_process_tree(pid);
                     let _ = child.wait().await;
                     self.inner.pid.store(0, Ordering::SeqCst);
+                    if reused {
+                        avoid = Some(port);
+                    }
                     failures += 1;
                     if failures >= MAX_FAILURES {
                         self.set_state(DshState::Failed("dsh token never captured".into()));
@@ -297,11 +318,21 @@ impl DshProcess {
                     total.saturating_sub(http_elapsed),
                 ));
                 self.set_state(DshState::Ready { port });
+                // 记住本次真正绑上的端口：下次启动回同一 Web 源站，客户端偏好
+                // （localStorage）才读得回来。写失败只影响下次回到随机端口。
+                if let Err(e) = crate::port::remember(&state_dir, port) {
+                    self.log(format!(
+                        "[dshdesktop] 端口记忆写入失败（下次启动换随机端口）: {e}"
+                    ));
+                }
             } else {
                 self.log("[dshdesktop] dsh not ready within 60s, killing");
                 self.inner.platform.kill_process_tree(pid);
                 let _ = child.wait().await;
                 self.inner.pid.store(0, Ordering::SeqCst);
+                if reused {
+                    avoid = Some(port);
+                }
                 failures += 1;
                 if failures >= MAX_FAILURES {
                     self.set_state(DshState::Failed("dsh failed to become ready".into()));

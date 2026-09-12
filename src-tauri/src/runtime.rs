@@ -22,6 +22,15 @@ pub struct RuntimePaths {
     pub cloudflared_exe: PathBuf,
 }
 
+impl RuntimePaths {
+    /// 壳数据目录（DSH_HOME 的上级，如 `%LOCALAPPDATA%\DSHDesktop`）：events.log、
+    /// settings.json、ui-zoom.txt、dsh-port.txt 都落这里。home 恒为 base 下的
+    /// `dsh-home`，故上级即 base。
+    pub fn state_dir(&self) -> &Path {
+        self.home.parent().unwrap_or(Path::new("."))
+    }
+}
+
 /// 确定运行时路径。
 /// 安装目录可写（默认的按用户安装）时**原地运行**内嵌运行时，省掉约 300MB 的
 /// 部署副本；安装目录只读（如装到 Program Files）时回退为复制到应用数据目录

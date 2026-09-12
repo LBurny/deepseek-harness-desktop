@@ -372,3 +372,53 @@ async fn spawn_heals_stale_dsh_lock_files() {
     proc.stop().await;
     wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
 }
+
+/// 回归：dsh 端口必须跨启动复用（"重启应用"= 新的 DshProcess + 同一壳数据目录）。
+/// Web 源站 `http://127.0.0.1:<port>` 是浏览器 localStorage 的隔离键，端口随机
+/// 变化等于每次都是全新源站——上游持久化偏好（会话头部"打开方式"选择 VS Code /
+/// 文件资源管理器、会话宽度、轨迹时长等，走 dsh-client-store 的 persist 只写
+/// localStorage）重启即回默认值，用户看到的是"选择不持久化"。这里钉住端口记忆：
+/// 第一次 Ready 把实际端口落盘，第二次启动读回同一端口。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn port_is_reused_across_launches() {
+    let work = tempfile::tempdir().unwrap();
+    let (_events, emit) = collect_events();
+    let (token_tx, _token_rx) = watch::channel::<Option<Arc<str>>>(None);
+    let first =
+        DshProcess::spawn_supervised(Arc::new(TestPlatform), fixture_paths(work.path()), token_tx, emit);
+    let first_port = match wait_for_state(
+        &first,
+        |s| matches!(s, DshState::Ready { .. }),
+        Duration::from_secs(30),
+    ) {
+        DshState::Ready { port } => port,
+        other => panic!("首次启动未就绪：{other:?}"),
+    };
+    first.stop().await;
+    wait_for_state(&first, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
+
+    // 记忆文件落在壳数据目录（fixture 的 home 上级，与 events.log/ui-zoom.txt 同级）
+    let memo = std::fs::read_to_string(work.path().join("dsh-port.txt")).unwrap();
+    assert_eq!(memo.trim(), first_port.to_string(), "Ready 后必须把实际端口落盘");
+
+    let (events2, emit2) = collect_events();
+    let (token_tx2, _token_rx2) = watch::channel::<Option<Arc<str>>>(None);
+    let second =
+        DshProcess::spawn_supervised(Arc::new(TestPlatform), fixture_paths(work.path()), token_tx2, emit2);
+    let second_port = match wait_for_state(
+        &second,
+        |s| matches!(s, DshState::Ready { .. }),
+        Duration::from_secs(30),
+    ) {
+        DshState::Ready { port } => port,
+        other => panic!("第二次启动未就绪：{other:?}"),
+    };
+    assert_eq!(second_port, first_port, "第二次启动必须复用记忆端口（Web 源站稳定）");
+    wait_event(
+        &events2,
+        |e| matches!(e, ProcessEvent::Log(l) if l.contains("reusing remembered port")),
+        Duration::from_secs(5),
+    );
+    second.stop().await;
+    wait_for_state(&second, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));
+}
