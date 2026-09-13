@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.15] - 2026-09-13
+
+### Fixed
+
+- **配置 MCP 服务后启动长时间卡在「正在准备运行时…」**（用户反馈：装了两个 MCP 后启动要等半分多钟）。根因链实锤：dsh-web-app 的 `announceReady()` 有意等 `loader.await()`（全部 cordis 插件 settle）才打 stdout 就绪行，而 dsh-mcp-client 的 `apply()` 无条件 `await connection.ready`；用户侧的 MCP 都用 npx 浮动 spec（未钉版本），每次启动要做 registry 往返解析（冷装 >2-3min），于是每个 MCP 服务的连接耗时全额叠进启动等待（用户实机 36.6s）。关键源码事实：`failOnStartupError=false`（默认）时这个 await 的结果只服务 throw 分支——纯拖延；工具注册走 startConnection 内部 generation 链、dispose() 独立 await settling+syncChain，不 await 对功能性零影响。修复：新增 `mcpgate.rs` 启动期原地补丁（与 pickerpatch 同款签名门控 + marker 幂等 + tmp+rename 原子写 + 漂移整组停手）：`failOnStartupError=true` 保留上游语义原样抛错；`false`（默认）改为后台观察，连接失败只记 ctx.logger.error 不再卡就绪行。确定性实测（sleeper MCP 复现）：84s → 5.1s。代价已知并文档化：界面打开后最初几秒 MCP 工具可能尚未注册（连上自动补注册）。回归：`mcpgate` 单元测试 4 条 + 契约套件 `probe_mcpgate`（marker 在即通过、否则钉上游原文 needle）
+- **会话头部「打开方式」按钮比其它按钮晚两三秒出现**（用户反馈）。根因：apps store 初值 `null`，组件在 `GET /open-in-app/apps` 应答前返回 null 不渲染；宿主机探测是每进程一次的懒加载（`resolutions ??=`），实测冷 2861ms，图标另要 271ms。修复：新增 `oiacache.rs` 同款签名门控补丁，给 apps store 加 `persist: { name: "dsh.open-in-app.apps" }`——`createSnapshotStore` 的 persist 走 `JSON.stringify/parse`，数组透明持久化（同文件 choice store 是既有先例）；0.5.14 的端口记忆保住源站跨启动稳定后，localStorage 缓存才真正跨启动有效。按钮第一帧按缓存渲染，真实探测落地后静默校正。验证方法学：新 Playwright profile 的页面管道本身要 10-21s 会掩盖按钮门禁，改用 route-delay A/B（`page.route` 把 `/open-in-app/apps` 延迟 20s 再 fulfill）——有缓存：按钮与头部同帧（delta=0），fetch 仍在飞；清缓存：按钮 2561ms 后才出现且钉在 fetch resolve 上。边界已知：首次启动无缓存走原节奏；已卸载的应用在缓存期可能残留，探测落地即校正。回归：`oiacache` 单元测试 4 条 + 契约套件 `probe_oiacache`
+
 ## [0.5.14] - 2026-09-12
 
 ### Fixed
