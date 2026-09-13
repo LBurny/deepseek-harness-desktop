@@ -263,6 +263,54 @@ pub const PICKER_CLIENT_NEWFOLDER_DISABLED_NEEDLE: &str =
 pub const PICKER_CLIENT_LOCALE_ZH_NEEDLE: &str = r#""browser.showHidden": "显示隐藏文件""#;
 pub const PICKER_CLIENT_LOCALE_EN_NEEDLE: &str = r#""browser.showHidden": "Show hidden files""#;
 
+// ── MCP 就绪门禁运行时补丁（mcpgate.rs；MARKER 与补丁内容是我方产物）──
+// 两件上游刻意设计叠加出 Windows 桌面壳的启动拖尾：(1) dsh-web-app 的
+// announceReady() 先 `loader.await()` 全部插件 settle 才打印就绪行（launch
+// token 唯一来源）；(2) dsh-mcp-client apply() 无条件 `await connection.ready`
+// （源码注释明示刻意）。而用户 MCP 常走 `cmd /c npx 裸名/@latest`，每次启动
+// 都做一次 npm registry 解析——网络好时 +1.5~3s/个，网络差时实测单次启动
+// 36.6s（就绪行被 MCP 首次连接钉死）。读源码确认：failOnStartupError=false
+// （默认）时该 await 的 outcome 仅服务 throw 分支，纯粹拖延就绪行；连接与
+// 工具注册由 startConnection 内部 generation 链独立推进（连上自动注册），
+// dispose 自行 await settling+syncChain（退出语义不依赖该 await）。
+// 补丁 = apply() 尾部两行改写：failOnStartupError=true 保留上游语义（await+
+// throw），false 改为后台观察（失败经 ctx.logger.error 落 dsh 日志）。
+/// dsh-mcp-client 包内文件（基准同 PICKER_HOST_BROWSE_FILE_SEGMENTS）。
+pub const MCP_CLIENT_FILE_SEGMENTS: &[&str] = &[
+    "@deepseek-ai",
+    "dsh-mcp-client",
+    "lib",
+    "index.js",
+];
+/// 门禁针：apply() 尾部的 startup-await 行（apply 改写的第一行锚点；
+/// 上游出处 dsh-mcp-client/lib/index.js rc 原文，唯一出现）。
+pub const MCP_CLIENT_GATE_NEEDLE: &str = "\tconst outcome = await connection.ready;\n";
+/// 门禁针：failOnStartupError throw 行（与上行相邻，同一次替换的第二行锚点）。
+pub const MCP_CLIENT_GATE_THROW_NEEDLE: &str = "\tif (outcome.error !== void 0 && config.failOnStartupError) throw new Error(`mcp-client(${config.serverName}): initial connection or tool synchronization failed`, { cause: outcome.error });";
+
+// ── open-in-app 可用性缓存补丁（oiacache.rs；MARKER 与补丁内容是我方产物）──
+// 会话头部"打开方式"按钮渲染前组件 return null，直到两个异步门同时到位：
+// 会话 cwd + GET /open-in-app/apps 的可用性列表。后者是每 dsh 进程一次的
+// 冷探测（resolutions ??= 懒加载，Windows 全目录登记册+文件探针，实测冷
+// 2861ms、热 0ms），应用每重启重付一次——用户感知为"按钮总比头部其它
+// 元素晚两三秒蹦出来"。壳 0.5.14 起端口跨启动稳定（localStorage 源站不再
+// 漂移），客户端持久化真正可用：补丁给 apps store 加 persist（dsh-client-store
+// 的 persist 走 JSON.stringify/parse，数组透明持久化；choice store 已有
+// persist 先例），第二次起启动首帧按上次缓存渲染，后台真实探测落地后静默
+// 校正。代价：首次装机无缓存仍是原节奏；已卸载应用在探测落地前短暂残留
+// （点一次报错后消失）。
+/// open-in-app 客户端 bundle 的包内文件路径（基准同 PICKER_HOST_BROWSE_FILE_SEGMENTS）。
+pub const OIA_CLIENT_FILE_SEGMENTS: &[&str] = &[
+    "@deepseek-ai",
+    "dsh-client-ui-open-in-app",
+    "lib",
+    "client.js",
+];
+/// 缓存针：apps store 的 null 初值行（补丁锚点；上游出处 client.js rc 原文，
+/// 唯一出现；choice store 是同文件另一处带 persist 参数的调用，别混淆）。
+pub const OIA_CLIENT_APPS_STORE_NEEDLE: &str =
+    "\t\t\tapps = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(null);";
+
 // ── 预设签名（presets.rs 只读探测；补丁器已于 rc.8 退役，MARKER 与补丁
 // 内容曾是我方产物，随补丁器一并删除）──────────────────────────────────
 /// minimal 预设目录的 **node_modules 相对路径**（基准 = dsh_node_modules_dir）。

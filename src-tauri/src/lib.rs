@@ -20,6 +20,8 @@ pub mod port;
 pub mod preseed;
 pub mod picker;
 pub mod pickerpatch;
+pub mod mcpgate;
+pub mod oiacache;
 pub mod presets;
 pub mod process;
 pub mod progress;
@@ -491,6 +493,26 @@ pub fn run() {
                 append_debug_line(
                     &debug_log,
                     &format!("pickerpatch: browse drives/hidden -> {browse_outcome:?}"),
+                );
+            }
+            // MCP 就绪门禁补丁：dsh 就绪行刻意等全部插件 settle（含 MCP 首次
+            // 连接），npx 型 MCP 的 registry 解析把启动拖到数十秒。签名门控、
+            // 失败只记 events.log（回退上游行为）；必须在 spawn_supervised 之前。
+            let mcpgate_outcome = mcpgate::patch_mcp_ready_gate(&paths);
+            if mcpgate_outcome != mcpgate::McpGateOutcome::AlreadyPatched {
+                append_debug_line(
+                    &debug_log,
+                    &format!("mcpgate: nonblocking ready -> {mcpgate_outcome:?}"),
+                );
+            }
+            // open-in-app 可用性缓存补丁：按钮等每进程一次的 ~2.9s 冷探测，
+            // 持久化后第二次起首帧即渲染（细节见 upstream.rs 段注）。签名门控、
+            // 失败只记 events.log；必须在 spawn_supervised 之前。
+            let oiacache_outcome = oiacache::patch_oia_apps_cache(&paths);
+            if oiacache_outcome != oiacache::OiaCacheOutcome::AlreadyPatched {
+                append_debug_line(
+                    &debug_log,
+                    &format!("oiacache: persist apps -> {oiacache_outcome:?}"),
                 );
             }
             // 预安装插件播种（/init 命令等）：随包插件首启种入 profile 并经官方

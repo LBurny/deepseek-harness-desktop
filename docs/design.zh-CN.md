@@ -424,3 +424,20 @@ dsh 新建工作区要选文件夹，选择器有两套交互，启动时由 `di
 - *耦合规则*：客户端是哨兵功能的安全前提（本地化 crumb + 禁用"打开"），其签名漂移/文件缺失时整组停手——只改 host 会放出能把哨兵选成工作区的半成品。
 
 **跟版门禁**：`probe_picker` 契约探测——shipped bundle patch 仍含 `id: directory-picker` 的 auto 行（disable 目标）、两个 browse 包仍在依赖闭包（insert 行能被 Loader 解析）；`probe_pickerpatch` 核对两包内文件的全部补丁 needle（host 2 处 + client 8 处），上游改版即红；上游若默认 browse 即可删 picker.rs。`remote_proxy.rs` 的注入测试断言 `_millerRow` 规则随 mobile.css 注入。
+
+## 20. MCP 就绪门禁补丁（mcpgate.rs）
+
+dsh 就绪行由 `dsh-web-app` 的 `announceReady()` 打印，它先 `loader.await()` 等**全部插件 settle** 才输出（launch token 唯一来源，见 §4）；而 `dsh-mcp-client` 的 `apply()` 无条件 `await connection.ready`（上游源码注释明示刻意）。两件设计叠加出启动拖尾：用户 MCP 常走 `cmd /c npx 裸名/@latest`，每次启动都做一次 npm registry 解析（网络好时 +1.5~3s/个），网络差时实测单次启动 **36.6s**——就绪行被 MCP 首次连接钉死，splash 一直转。读源码确认：`failOnStartupError=false`（默认）时该 await 的 outcome 只服务 throw 分支，纯粹拖延就绪行；连接与工具注册由 `startConnection` 内部 generation 链独立推进（连上自动注册），dispose 自行 await settling+syncChain（退出语义不依赖它）。
+
+**mcpgate.rs 运行时补丁**（pickerpatch.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_mcpgate` 守门）：`failOnStartupError=true` 保留上游语义（await + throw），false 改为后台观察（`.then` 里失败经 `ctx.logger.error` 落 dsh 日志，不阻断启动）。调用点在 lib.rs 的 spawn_supervised 之前，失败只记 events.log。
+
+**漂移停手**：apply() 尾部两行形态变了（needle 缺失或多次出现）即整组停手，回退上游行为（启动重新变慢）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_mcpgate` 对已打补丁的树认 marker、对未打补丁的树逐字核对两行锚点（已改写的树 needle 必然失配，属预期形态）；上游若自己改成不阻塞（如 lazy 配置项）即可删 mcpgate.rs 与本探测。
+
+## 21. open-in-app 可用性缓存补丁（oiacache.rs）
+
+会话头部"打开方式"按钮渲染前组件 `return null`，直到两个异步门同时到位：会话 cwd + `GET /open-in-app/apps` 的可用性列表。后者是**每 dsh 进程一次的冷探测**（`resolutions ??=` 懒加载，Windows 全目录登记册 + 文件探针，实测冷 **2861ms**、热 0ms），应用每重启重付一次——用户感知为"按钮总比头部其它元素晚两三秒蹦出来"。壳 0.5.14 起端口跨启动稳定（localStorage 源站不再漂移，见 §19），客户端持久化才真正可用：`dsh-client-store` 的 persist 走 `JSON.stringify`/`JSON.parse`（数组透明持久化），同文件的 choice store（`dsh.open-in-app.choice`）已有 persist 先例。
+
+**oiacache.rs 运行时补丁**（pickerpatch.rs/mcpgate.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_oiacache` 守门）：给 apps store 的 `createSnapshotStore(null)` 加 `persist: { name: "dsh.open-in-app.apps" }`，第二次起启动首帧按上次缓存渲染，后台真实探测落地后静默校正。初值仍是 `null`——首次装机无缓存时行为与上游一致（按钮等首个探测）。代价：已卸载应用在探测落地前短暂残留（点一次报错后消失）。调用点在 lib.rs 的 spawn_supervised 之前，失败只记 events.log。
+
+**漂移停手**：apps store 的 null 初值行形态变了（needle 缺失或多次出现）即停手，回退上游行为（按钮恢复晚出现）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_oiacache` 对已打补丁的树认 marker、对未打补丁的树逐字核对 needle（已改写的树 needle 必然失配，属预期形态）；上游若自己 persist 了 apps 列表即可删 oiacache.rs 与本探测。补丁后 bundle 内容哈希变化使 rev 自动失效，浏览器自动重新拉取，无缓存陈旧问题。
+

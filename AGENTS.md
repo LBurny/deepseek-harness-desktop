@@ -57,6 +57,12 @@ src-tauri/src/
   picker.rs         目录选择器钉 browse：启动幂等写 cordis.patch.yml 官方 overlay
   pickerpatch.rs    browse 选择器运行时补丁（签名门控+marker 幂等原地改写；客户端签名漂移
                     整组停手）
+  mcpgate.rs        dsh-mcp-client 就绪门禁补丁（failOnStartupError=false 时不 await
+                    connection.ready——npx 型 MCP 的 registry 解析曾把就绪行拖 36s；
+                    签名门控+marker 幂等，细节见 upstream.rs 段注）
+  oiacache.rs       open-in-app 可用性缓存补丁（apps store 加 persist——按钮原本等
+                    每进程一次 ~2.9s 冷探测才渲染；第二次起首帧即渲染，细节见
+                    upstream.rs 段注）
   welcome.rs        内测声明豁免播种（失败只记 events.log，回退 dsh 原生弹一次）
   update.rs         检查更新：发布仓 releases/latest + 下载 *_x64-setup.exe；install_update
                     必传 /UPDATE /P /R（见坑区）

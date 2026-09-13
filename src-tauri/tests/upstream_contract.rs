@@ -988,6 +988,39 @@ fn probe_pickerpatch(rt: &Path, c: &mut Checker) {
     );
 }
 
+/// mcpgate.rs 的就绪门禁补丁签名（needle 逐字核对；上游改版即红）
+fn probe_mcpgate(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    let file = upstream::join_segments(&nm, upstream::MCP_CLIENT_FILE_SEGMENTS);
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    // 已打补丁的树（含 marker）门禁行已被改写，needle 必然失配——属预期形态，
+    // 不算上游漂移；未打补丁的树才逐字核对两行锚点。
+    let patched = text.contains("dshdesktop-mcpgate:");
+    let pristine_ok = text.matches(upstream::MCP_CLIENT_GATE_NEEDLE).count() == 1
+        && text.matches(upstream::MCP_CLIENT_GATE_THROW_NEEDLE).count() == 1;
+    c.check(
+        "dsh-mcp-client apply() 就绪门禁两行仍在（补丁锚点）",
+        !text.is_empty() && (patched || pristine_ok),
+        format!("path={}", file.display()),
+        "mcp-client apply() 形态变了：改 upstream::MCP_CLIENT_GATE_*_NEEDLE 与 mcpgate.rs 的 GATE_FROM/GATE_TO；若上游自己改成不阻塞（如 lazy 配置项），删除 mcpgate.rs 与本探测",
+    );
+}
+
+/// oiacache.rs 的 apps store 缓存补丁签名（needle 逐字核对；上游改版即红）
+fn probe_oiacache(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    let file = upstream::join_segments(&nm, upstream::OIA_CLIENT_FILE_SEGMENTS);
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    let patched = text.contains("dshdesktop-oiacache:");
+    let pristine_ok = text.matches(upstream::OIA_CLIENT_APPS_STORE_NEEDLE).count() == 1;
+    c.check(
+        "open-in-app client.js apps store null 初值行仍在（补丁锚点）",
+        !text.is_empty() && (patched || pristine_ok),
+        format!("path={}", file.display()),
+        "open-in-app 客户端形态变了：改 upstream::OIA_CLIENT_APPS_STORE_NEEDLE 与 oiacache.rs 的 STORE_FROM/STORE_TO；若上游自己 persist 了 apps 列表，删除 oiacache.rs 与本探测",
+    );
+}
+
 /// 远程"项目"标签依赖的上游事实（project.rs/project.html；上游改版即红）
 fn probe_project(rt: &Path, dsh_home: &Path, c: &mut Checker) {
     let nm = upstream::dsh_node_modules_dir(rt);
@@ -1140,6 +1173,8 @@ async fn upstream_contract() {
     probe_plugins_cli(&rt, &mut c);
     probe_picker(&rt, &mut c);
     probe_pickerpatch(&rt, &mut c);
+    probe_mcpgate(&rt, &mut c);
+    probe_oiacache(&rt, &mut c);
     probe_presets(&rt, &mut c);
     probe_locks(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);
