@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-09-16
+
+### Changed
+
+- **dsh 运行时 0.1.5-rc.2 → 0.1.6-alpha.1**（fetch-runtime.ps1 钉版；tarball 逐针预研+执行计划见 `docs/superpowers/plans/` 2026-09-16 执行计划）。上游要点：Web 侧边栏新增终端（多标签/Shell 选择/刷新恢复，Windows 走 ConPTY 实测无可见控制台窗口）；设置新增已归档会话列表；文件、Skill 引用及交付文件链接默认由侧边栏预览；输入框加号菜单重组（文件添加入口移入菜单，独立附件按钮移除）；MCP 升级官方 SDK v2（协议协商/工具分页/无工具服务器）并支持资源发现与 URI 模板；Headless 支持 stdin 任务、`--session-id` 续会话、`--json` 逐行事件；新增实验性 Browser Use / Computer Use / Auto review；DeepSeek 默认改用 Messages 协议（手动配过旧官方根地址的需移除或改为 `https://api.deepseek.com/anthropic`）；可选插件启动失败不再影响其他可用插件；修复会话最近更新排序。**壳侧零适配改动**：契约套件全绿（tree_find 类探针自动跟随包搬家——trigger 三针 conversation→model-selection、contextInjection/noticeSummary→chat、welcome 三元式→dsh-client-ui-settings 且字节不变，proxy 改写天然跟随）；mcpgate/pickerpatch/oiacache/welcome 四组签名门控补丁 needle 全部原样命中（mcpgate 跨 MCP SDK v2 重写仍存活）；会话格式仍 V3（升级单向口径不变）
+- **手机端附件路径自动回退实证**：上游移除独立附件按钮后，mobile.js 的原生附件探测（aria-label `/附件|attach/`）对新「添加文件或调用指令」加号按钮失配，按设计回退为自动注入我方「添加图片附件」按钮（与上游加号菜单文件入口并存，两个入口都能用）。临时实例 MCP 浏览器 390px 实证全过：无横向溢出、`data-composer-stats` 统计行、模型触发器图标化、moreButton 隐藏、断点扫 500/700/720、侧栏终端交互、文件侧栏预览开合
+
 ## [0.5.15] - 2026-09-13
 
 ### Fixed
