@@ -236,7 +236,7 @@ pub trait Platform: Send + Sync {
 ```
 scripts/fetch-runtime.ps1
   1. 下载 Node v24.19.0 win-x64 zip，只取 node.exe
-  2. npm install --prefix dsh --omit=dev @deepseek-ai/dsh@0.1.5-rc.2
+  2. npm install --prefix dsh --omit=dev @deepseek-ai/dsh@0.1.6-alpha.1
   3. 冒烟：node bin.js --help
   4. 调 scripts/prune-runtime.ps1 精简
 产物：src-tauri/runtime/windows-x64/（gitignore，不入库）
@@ -319,14 +319,14 @@ scripts/fetch-runtime.ps1
 
 **回滚**：新版 dsh 出严重问题、壳又要先发补丁时，`-DshVersion` 回退到上一可用版本重打包即可——用户数据全在 `dsh-home`，与 dsh 版本解耦。
 
-## 15. 附录：dsh 上游事实清单（0.1.5-rc.2）
+## 15. 附录：dsh 上游事实清单（0.1.6-alpha.1）
 
 > 本表是文档形态；代码化身在 `src-tauri/src/upstream.rs`（单一事实源），
 > 自动核对由 `tests/upstream_contract.rs` 执行。跟版改了 upstream.rs 就同步本表。
 
 | 事实 | 值 |
 | --- | --- |
-| npm 包 | `@deepseek-ai/dsh@0.1.5-rc.2`（子包依赖为浮动区间，抓取时解析到最新 rc；npm latest 标签可能滞后于最新 rc，fetch 须显式 `-DshVersion`；dsh-web-app rc.8 起 openBrowser 默认 true） |
+| npm 包 | `@deepseek-ai/dsh@0.1.6-alpha.1`（子包依赖为浮动区间，抓取时解析到最新 rc；npm latest 标签可能滞后于最新 rc，fetch 须显式 `-DshVersion`；dsh-web-app rc.8 起 openBrowser 默认 true） |
 | Node 要求 | `^22.19 \|\| >=24`（上游仓库声明；发布 tarball 不含 engines 字段，契约套件实测确认。随包内嵌 v24.19.0） |
 | 入口 | `node_modules/@deepseek-ai/dsh/lib/bin.js` |
 | Web 命令 | `bin.js web --port <N> --no-open`，仅绑 127.0.0.1；`--no-open` 抑制系统浏览器弹出（dsh-web-app rc.8 起 openBrowser 默认 true） |

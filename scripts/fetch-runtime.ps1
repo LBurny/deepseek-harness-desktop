@@ -1,10 +1,10 @@
 ﻿# 下载并组装内嵌运行时：Node.js win-x64 便携版 + @deepseek-ai/dsh（含 node_modules）。
 # 产物写入 src-tauri/runtime/<triplet>/，供 tauri.conf.json 的 bundle.resources 打包。
-# 用法：powershell -File scripts/fetch-runtime.ps1 [-NodeVersion 24.19.0] [-DshVersion 0.1.5-rc.2] [-CloudflaredVersion 2026.8.2]
+# 用法：powershell -File scripts/fetch-runtime.ps1 [-NodeVersion 24.19.0] [-DshVersion 0.1.6-alpha.1] [-CloudflaredVersion 2026.8.2]
 [CmdletBinding()]
 param(
   [string]$NodeVersion = '24.19.0',
-  [string]$DshVersion = '0.1.5-rc.2',
+  [string]$DshVersion = '0.1.6-alpha.1',
   [string]$CloudflaredVersion = '2026.8.2',
   [string]$PnpmVersion = '11.22.0',
   [string]$Triplet = 'windows-x64'
