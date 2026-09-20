@@ -269,7 +269,7 @@ scripts/fetch-runtime.ps1
 
 | 层 | 内容 | 命令 |
 | --- | --- | --- |
-| Rust 单元测试（234） | runtime 部署/回退/路径归一化/复制进度回调、progress 阶段权重与百分比映射、theme BOM 解析与首启播种、notify 帧分类/子代理台账/摘要、LogRing 淘汰、port 分配/就绪探测/记忆端口读写与复用（含占用回退、短暂占用等待、低端口拒绝）、platform 基础、zoom clamp/持久化/钩子脚本内嵌设置、settings 模型/校验/持久化/提示音枚举/通知规则门控与旧键迁移、skills frontmatter 解析/列表/启停/删除/导入冲突、mcp patch 解析/启停/删除/upsert 校验与高级键保留/种子 marker/三源解析与导入冲突、remote 隧道 URL 解析与 token 脱敏 | `cd src-tauri && cargo test` |
+| Rust 单元测试（251） | runtime 部署/回退/路径归一化/复制进度回调、progress 阶段权重与百分比映射、theme BOM 解析与首启播种、notify 帧分类/子代理台账/摘要、LogRing 淘汰、port 分配/就绪探测/记忆端口读写与复用（含占用回退、短暂占用等待、低端口拒绝）、platform 基础、zoom clamp/持久化/钩子脚本内嵌设置、settings 模型/校验/持久化/提示音枚举/通知规则门控与旧键迁移、skills frontmatter 解析/列表/启停/删除/导入冲突、mcp patch 解析/启停/删除/upsert 校验与高级键保留/种子 marker/三源解析与导入冲突、remote 隧道 URL 解析与 token 脱敏、四个前端补丁模块（pickerpatch/mcpgate/oiacache/revealshow）的签名匹配与 marker 幂等 | `cd src-tauri && cargo test` |
 | 进程集成测试（9，tests/process.rs） | 用 `tests/fixtures/fake-dsh.cjs`（可脚本化崩溃的假 dsh）验证 就绪→HTTP 200→stop、崩溃→自动重启→二次 Ready、**端口跨启动复用（Web 源站稳定：首个进程 Ready 落盘 `dsh-port.txt`、第二个进程读回同一端口）** | 同上 |
 | 通知集成测试（2，tests/notify_ws.rs） | fixture 双 WS 端点发事件帧，验证 approval 过滤、turn/end 完成通知（含标题）、子代理过滤 | 同上 |
 | 远程访问集成测试（16，tests/remote_{proxy,tunnel,manager,project}.rs） | 门岗 403/302/cookie/转发/浏览器标记头剥离（防 dsh 信任栅栏 403）/WS 桥接/503/停服释放端口、门岗中间件覆盖壳自有路由回归、fake-cloudflared URL 解析与崩溃重启、manager 全链路（缺文件 error、up→stop、start 幂等）、"项目"标签 resolve/list/file 全链路与路径逃逸 403/体积 413/下载头 | 同上 |
@@ -277,6 +277,8 @@ scripts/fetch-runtime.ps1
 | 端到端验收（scripts/acceptance.ps1） | 卸载旧版 → 静默安装 → 启动 → 等 dsh 就绪 → 单实例/无可见控制台/主题/截图 全项校验 | `powershell -File scripts/acceptance.ps1 -SetupExe <exe>` |
 
 改进程/通知/主题逻辑后：`cargo test` + 重装走一遍 acceptance.ps1。
+
+**开发环境（2026-09-21）**：pnpm 内容存储改为 user 级 `storeDir = F:\Code\pnpm-store`（原 `H:\.pnpm-store` 已迁出删除）——项目盘与 store 不同盘时 pnpm 无法硬链接、安装走 copy 模式（本仓在 H: 上即如此）；`src-tauri/target` 无上限增长（实测曾达 182GB / 34 万文件），清理时**必须保留 `target/release/bundle/nsis/`**（历版安装包原件 + 发布门禁缓存依赖），删后下次 `cargo test` / `pnpm tauri build` 全量重编一次。细节与两个坑（重装删残 node_modules、别用 robocopy 搬 store）见 AGENTS.md 坑区。
 
 **调试手段优先级**：诊断面板（应用内） → `%LOCALAPPDATA%\DSHDesktop\events.log`（每个进程事件一行，1MB 截断；面板依赖应用内交互，卡启动时只有它能看） → `scripts/check-node.ps1` / `get-attr20.ps1` / `shot-window.ps1` 等外部脚本。
 
