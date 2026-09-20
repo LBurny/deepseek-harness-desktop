@@ -63,6 +63,9 @@ src-tauri/src/
   oiacache.rs       open-in-app 可用性缓存补丁（apps store 加 persist——按钮原本等
                     每进程一次 ~2.9s 冷探测才渲染；第二次起首帧即渲染，细节见
                     upstream.rs 段注）
+  revealshow.rs     资源管理器"显示/打开所在文件夹"补丁（dsh-native-command 的
+                    windowsHide 把 explorer 窗口压成不可见；只豁免 explorer.exe，
+                    细节见 upstream.rs 段注）
   welcome.rs        内测声明豁免播种（失败只记 events.log，回退 dsh 原生弹一次）
   update.rs         检查更新：发布仓 releases/latest + 下载 *_x64-setup.exe；install_update
                     必传 /UPDATE /P /R（见坑区）
@@ -152,11 +155,12 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 - **dsh 写锁不自愈 → 硬杀一次可能永久起不来（0.5.13 修）**：锁是 `<file>.lock` 兄弟文件（wx 建、内容 pid、只 finally 删，上游明确 orphan recovery is an operator action）；壳只能 taskkill /F 硬杀，dsh 的 SIGTERM 优雅退场拿不到信号——持锁时被杀即永久残留，之后每次启动在 boot 阶段等锁超时（凭证写入 30s）、插件树失败退出，壳只见"就绪行没出现"。对策：locks.rs 每次 spawn 前清持有者已退出的 `*.lock`（pid 死了才删/活着且镜像是 node 的留/无 pid 要够老；限深 3 层、跳过 node_modules、不进 junction；逐条落 events.log）。旧版急救：`scripts/check-dsh-locks.ps1`（-Remove 只清死锁）。
 - **模型触发器的图标只有一枚（0.1.5 起）**：上游自带 triggerIcon（默认 display:none，容器 ≤360px 才亮）；壳旧 ::before 火花补丁与它并排成两枚——已删自造、mobile.css 在 700px 断点点亮上游那枚（361~700px 区间否则一个图标都不剩）。回归 model_trigger_iconified_rule + 契约探针 MODEL_TRIGGER_ICON_NEEDLE。
 - **回合统计行搬移锚点是 `data-composer-stats`（0.1.5 起）**：StatsPills 行的分隔点"·"在药丸 label 内部，旧锚点（直接子代 ≥2 个 _sep / `:has(> _sep)`）恒失配——行留在输入区下方、信息页恒空态。mobile.js/css 已改锚该属性；面板只藏行级分隔符（药丸内部的 · 保留，否则计数与速率文本粘连）。契约探针 COMPOSER_STATS_ROW_HOOK。
+- **「在文件资源管理器中显示」点了没反应**：文件卡片菜单（「在文件资源管理器中显示」/「打开所在文件夹」）走 dsh-native-command 的 `revealNativePath()` → `execFile("explorer.exe", ["/select,", <file url>], { windowsHide: true })`；libuv 的 windowsHide 在子进程 STARTUPINFO 上置 `STARTF_USESHOWWINDOW + SW_HIDE`，而 Explorer 文件夹窗口走 `SW_SHOWDEFAULT` 继承隐藏态——实测窗口确实建出来了（路径/选中都对、HTTP 204 照常回，故 UI 回「已请求…」）但 `IsWindowVisible=false`。对策 = revealshow.rs 启动期原地补丁（签名门控+marker 幂等）：`windowsHide: !/explorer\.exe$/i.test(command)`，**只豁免 explorer.exe**（powershell 的 `Invoke-Item` 走 ShellExecute 本来就可见；控制台应用的控制台必须保持隐藏，不能全局置 false）。验证：`cargo test --lib revealshow`；真机点一次卡片菜单应弹出带选中文件的资源管理器窗口。
 - **dsh 端口必须跨启动稳定，否则客户端偏好全丢**：上游把若干 UI 偏好存在浏览器 localStorage（`dsh-client-store` 的 `persist`，无服务端副本）——会话头部"打开方式"选择（`dsh.open-in-app.choice`，VS Code / 文件资源管理器）、会话宽度 `dsh.conversation.contentWidth`、当前会话 `dsh.sessions.current`、轨迹时长 `dsh.trajectory.duration`；而 localStorage 按 **origin（含端口）** 隔离，早先每次 spawn 都 `free_port()` 随机取端口 = 每次全新源站 → 用户选的 VS Code 重启就变回文件资源管理器（0.5.14 修，实锤：WebView2 的 Local Storage leveldb 里同库并存 7 个 `http://127.0.0.1:<port>` 源站，每个各存各的）。对策 = port.rs 记忆端口：Ready 时把端口写进壳数据目录 `dsh-port.txt`，下次启动探活通过就复用（2s 重试预算；被占则换新端口并在 Ready 后改写记忆，一轮收敛；同一轮重试回避它防"在旧端口反复撞"）。
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 292 个，其中 1 条 ignored，含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 309 个，其中 4 条 ignored（补丁模块的 `apply_to_real_runtime` 开发辅助等），含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 

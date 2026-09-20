@@ -311,6 +311,28 @@ pub const OIA_CLIENT_FILE_SEGMENTS: &[&str] = &[
 pub const OIA_CLIENT_APPS_STORE_NEEDLE: &str =
     "\t\t\tapps = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(null);";
 
+// ── explorer 窗口可见性补丁（revealshow.rs；MARKER 与补丁内容是我方产物）──
+// 症状：文件卡片菜单「在文件资源管理器中显示」/「打开所在文件夹」点了没反应
+// （UI 回「已请求在文件管理器中显示」，桌面不弹窗口）。链路：客户端
+// POST /api/present.open?…&action=reveal → dsh-client-ui-deliverables host
+// handler → sessionController.openWorkspacePath → 本包 revealNativePath() →
+// run("explorer.exe", ["/select,", <file url>]) → runNativeCommand() 的
+// execFile(…, { encoding:"utf8", signal, windowsHide: true })。
+// 实测（本机 Win10 单变量对照）：windowsHide=true 时 Explorer 窗口确实建出来了、
+// 路径与选中文件都对，但 IsWindowVisible=false（HTTP 204 照常回，只表现为"没反应"）；
+// 置 false 或省略即可见。机制：libuv 的 windowsHide 在子进程 STARTUPINFO 上置
+// STARTF_USESHOWWINDOW + SW_HIDE，Explorer 文件夹窗口走 SW_SHOWDEFAULT 继承了
+// 隐藏态。同 runner 的 powershell.exe Invoke-Item（openNativePath）实测可见
+// （经 ShellExecute 交已运行的桌面 explorer），所以只豁免 explorer.exe——其余
+// 控制台应用的控制台窗口必须保持隐藏（壳硬性"不闪控制台"约定）。
+/// dsh-native-command 包内文件（基准同 OIA_CLIENT_FILE_SEGMENTS）。
+pub const NATIVE_COMMAND_FILE_SEGMENTS: &[&str] =
+    &["@deepseek-ai", "dsh-native-command", "lib", "index.js"];
+/// 隐藏针：runNativeCommand 的 execFile 选项行（上游出处 lib/types/runner.js
+/// 区域，2-Tab 缩进、补丁锚点、唯一出现——revealNativePath 的 explorer 调用
+/// 与 openNativePath 的 powershell 调用共用这一份选项）。
+pub const NATIVE_COMMAND_HIDE_NEEDLE: &str = "\t\twindowsHide: true";
+
 // ── 预设签名（presets.rs 只读探测；补丁器已于 rc.8 退役，MARKER 与补丁
 // 内容曾是我方产物，随补丁器一并删除）──────────────────────────────────
 /// minimal 预设目录的 **node_modules 相对路径**（基准 = dsh_node_modules_dir）。
@@ -501,3 +523,21 @@ pub const CREDENTIALS_LOCK_WAIT_SECS: u64 = 30;
 /// node_modules 下是插件树（深且无锁），整棵跳过。
 pub const LOCK_SCAN_MAX_DEPTH: usize = 3;
 pub const LOCK_SCAN_SKIP_DIRS: &[&str] = &["node_modules"];
+
+// ── 韧性栈（API 重试的静默失效哨兵；2026-09-17 源码核实）─────────────
+/// LLM 请求失败自动重试的启用点：dsh 默认插件清单（@deepseek-ai/dsh-base/
+/// cordis.patch.yml）里的 llm-retry 条目，指向 @deepseek-ai/dsh-llm-retry 插件
+/// （挂 agent 循环的 request-error 恢复扩展点；默认 normal 策略：最多 5 次、
+/// 指数退避 500ms→10s、10% 抖动、尊重服务端 Retry-After）。影响面：清单删行 =
+/// 启动全绿、重试静默消失（网络一抖任务就停，壳无从观测）——契约套件守门，
+/// 翻红先审上游是否换了启用机制，别只改 needle。定位边界：韧性机制的把关
+/// 主体是上游，本节只防"静默失效"这一种；服务端 WS 心跳、浏览器重连循环、
+/// 壳自己的看门狗均不设哨（失效要么响、要么壳已独立兜底、要么属上游核心
+/// 面坏了自然响），后续勿扩面。
+pub const LLM_RETRY_ROSTER_NEEDLE: &str = "- id: llm-retry";
+/// 可重试错误码名单（@deepseek-ai/dsh-llm/lib/types/retry-policy.js 的
+/// DEFAULT_RETRYABLE_CODES：TRANSPORT=传输中断、SERVER=5xx、RATE_LIMIT=限流、
+/// TIMEOUT=超时；EMPTY_RESPONSE 字面量在同包 lib/types/error.js）。影响面：
+/// 上游收窄名单（如移除 TRANSPORT）= 断网场景静默不再自愈；默认次数/退避
+/// 数值变化不算漂移，刻意不钉数值。契约套件逐码探测。
+pub const LLM_RETRYABLE_CODES: &[&str] = &["TRANSPORT", "SERVER", "RATE_LIMIT", "TIMEOUT", "EMPTY_RESPONSE"];

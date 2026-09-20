@@ -441,3 +441,11 @@ dsh 就绪行由 `dsh-web-app` 的 `announceReady()` 打印，它先 `loader.awa
 
 **漂移停手**：apps store 的 null 初值行形态变了（needle 缺失或多次出现）即停手，回退上游行为（按钮恢复晚出现）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_oiacache` 对已打补丁的树认 marker、对未打补丁的树逐字核对 needle（已改写的树 needle 必然失配，属预期形态）；上游若自己 persist 了 apps 列表即可删 oiacache.rs 与本探测。补丁后 bundle 内容哈希变化使 rev 自动失效，浏览器自动重新拉取，无缓存陈旧问题。
 
+## 22. 资源管理器「显示/打开所在文件夹」补丁（revealshow.rs）
+
+文件卡片菜单的「在文件资源管理器中显示」/「打开所在文件夹」点了没反应：UI 照常回「已请求在文件管理器中显示」，桌面不弹窗口。链路是客户端 `POST /api/present.open?…&action=reveal` → `dsh-client-ui-deliverables` host handler → `sessionController.openWorkspacePath` → `@deepseek-ai/dsh-native-command` 的 `revealNativePath()` → `run("explorer.exe", ["/select,", <file url>])` → `runNativeCommand()` 的 `execFile(…, { encoding:"utf8", signal, windowsHide: true })`。**实测根因**（Win10 19045 单变量对照）：`windowsHide: true` 时 Explorer 窗口确实建出来了、路径与选中文件都对，但 `IsWindowVisible = false`——窗口存在而不可见；HTTP 204 照常返回，故壳只看到"成功"。机制：libuv 的 `windowsHide=true` 在子进程 `STARTUPINFO` 上置 `STARTF_USESHOWWINDOW + SW_HIDE`，而 Explorer 的文件夹窗口走 `SW_SHOWDEFAULT`，继承了这份隐藏显示态。同 runner 的 `powershell.exe` `Invoke-Item`（openNativePath，即「用默认应用打开」）实测仍可见——它经 ShellExecute 交给已运行的桌面 explorer，故**只豁免 explorer.exe**；powershell/cmd 等控制台应用的控制台窗口必须保持隐藏（`Platform::configure_child_command` 的 `CREATE_NO_WINDOW` 约定，§10），不能全局关掉 `windowsHide`。
+
+**revealshow.rs 运行时补丁**（pickerpatch.rs/mcpgate.rs/oiacache.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_revealshow` 守门）：`windowsHide: true` → `windowsHide: !/explorer\.exe$/i.test(command)`（`command` 是同函数体首形参；`$` 锚 + 大小写不敏感 = 只豁免以 explorer.exe 结尾的命令）。调用点在 lib.rs 的 spawn_supervised 之前，失败只记 events.log。
+
+**漂移停手**：runner 的选项行形态变了（needle 缺失或多次出现）即停手，回退上游行为（reveal 静默不可见）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_revealshow` 对已打补丁的树认 marker、对未打补丁的树逐字核对 needle（已改写的树 needle 必然失配，属预期形态）；上游若自己不再对 explorer.exe 设 `windowsHide`（或改成 `showWindow` 之类），即可删 revealshow.rs 与本探测。
+

@@ -1021,6 +1021,21 @@ fn probe_oiacache(rt: &Path, c: &mut Checker) {
     );
 }
 
+/// revealshow.rs 的 explorer 窗口可见性补丁签名（needle 逐字核对；上游改版即红）
+fn probe_revealshow(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    let file = upstream::join_segments(&nm, upstream::NATIVE_COMMAND_FILE_SEGMENTS);
+    let text = fs::read_to_string(&file).unwrap_or_default();
+    let patched = text.contains("dshdesktop-revealshow:");
+    let pristine_ok = text.matches(upstream::NATIVE_COMMAND_HIDE_NEEDLE).count() == 1;
+    c.check(
+        "dsh-native-command runner 的 windowsHide 选项行仍在（补丁锚点）",
+        !text.is_empty() && (patched || pristine_ok),
+        format!("path={}", file.display()),
+        "native-command runner 形态变了：改 upstream::NATIVE_COMMAND_HIDE_NEEDLE 与 revealshow.rs 的 HIDE_FROM/HIDE_TO；若上游自己不再对 explorer.exe 设 windowsHide，删除 revealshow.rs 与本探测",
+    );
+}
+
 /// 远程"项目"标签依赖的上游事实（project.rs/project.html；上游改版即红）
 fn probe_project(rt: &Path, dsh_home: &Path, c: &mut Checker) {
     let nm = upstream::dsh_node_modules_dir(rt);
@@ -1162,6 +1177,45 @@ fn probe_015_faces(rt: &Path, c: &mut Checker) {
     );
 }
 
+/// 韧性栈（API 重试）：插件默认启用 + 可重试错误码名单的静默失效哨兵。
+/// 服务端 WS 心跳/浏览器重连不守——失效要么响、要么壳 notify 看门狗独立兜底。
+fn probe_resilience(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    let read = |segments: &[&str]| {
+        fs::read_to_string(upstream::join_segments(&nm, segments)).unwrap_or_default()
+    };
+    let roster = read(&["@deepseek-ai", "dsh-base", "cordis.patch.yml"]);
+    c.check(
+        "llm-retry 在 dsh 默认插件清单（重试静默失效哨兵）",
+        roster.contains(upstream::LLM_RETRY_ROSTER_NEEDLE),
+        format!("roster_len={}", roster.len()),
+        "上游换了重试的启用机制：确认新版仍默认启用重试再改 upstream::LLM_RETRY_ROSTER_NEEDLE",
+    );
+    let plugin = upstream::join_segments(&nm, &["@deepseek-ai", "dsh-llm-retry", "lib", "index.js"]);
+    c.check(
+        "dsh 依赖树仍含 llm-retry 插件包",
+        plugin.is_file(),
+        format!("hit={}", plugin.display()),
+        "插件改名/搬家：改本探针路径",
+    );
+    let policy = read(&["@deepseek-ai", "dsh-llm", "lib", "types", "retry-policy.js"]);
+    let error = read(&["@deepseek-ai", "dsh-llm", "lib", "types", "error.js"]);
+    let missing: Vec<&str> = upstream::LLM_RETRYABLE_CODES
+        .iter()
+        .copied()
+        .filter(|code| {
+            let quoted = format!("'{code}'");
+            if *code == "EMPTY_RESPONSE" { !error.contains(&quoted) } else { !policy.contains(&quoted) }
+        })
+        .collect();
+    c.check(
+        "可重试错误码名单完整（TRANSPORT/SERVER/RATE_LIMIT/TIMEOUT/EMPTY_RESPONSE）",
+        missing.is_empty(),
+        format!("missing={missing:?}"),
+        "名单收窄（如移除 TRANSPORT）= 断网静默不自愈：评估是否改发版说明口径，再改 upstream::LLM_RETRYABLE_CODES",
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn upstream_contract() {
     let Some(rt) = runtime_dir() else {
@@ -1175,11 +1229,13 @@ async fn upstream_contract() {
     probe_pickerpatch(&rt, &mut c);
     probe_mcpgate(&rt, &mut c);
     probe_oiacache(&rt, &mut c);
+    probe_revealshow(&rt, &mut c);
     probe_presets(&rt, &mut c);
     probe_locks(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);
     probe_preseed_plugin_needles(&rt, &mut c);
     probe_015_faces(&rt, &mut c);
+    probe_resilience(&rt, &mut c);
     match spawn_dsh(&rt).await {
         Ok(dsh) => {
             probe_http(&dsh, &mut c).await;

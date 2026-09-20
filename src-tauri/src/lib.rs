@@ -26,6 +26,7 @@ pub mod presets;
 pub mod process;
 pub mod progress;
 pub mod remote;
+pub mod revealshow;
 pub mod runtime;
 pub mod settings;
 pub mod skills;
@@ -513,6 +514,17 @@ pub fn run() {
                 append_debug_line(
                     &debug_log,
                     &format!("oiacache: persist apps -> {oiacache_outcome:?}"),
+                );
+            }
+            // explorer 窗口可见性补丁：dsh-native-command 用 windowsHide=true 跑
+            // explorer.exe，「在文件资源管理器中显示」的窗口建出来即被隐藏
+            // （IsWindowVisible=false，见 revealshow.rs 头注）。签名门控、失败只记
+            // events.log；必须在 spawn_supervised 之前。
+            let revealshow_outcome = revealshow::patch_explorer_window(&paths);
+            if revealshow_outcome != revealshow::RevealShowOutcome::AlreadyPatched {
+                append_debug_line(
+                    &debug_log,
+                    &format!("revealshow: visible explorer window -> {revealshow_outcome:?}"),
                 );
             }
             // 预安装插件播种（/init 命令等）：随包插件首启种入 profile 并经官方
