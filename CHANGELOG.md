@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.17] - 2026-09-20
+
+### Fixed
+
+- **文件卡片菜单「在文件资源管理器中显示」/「打开所在文件夹」点了没反应**（用户反馈）。根因在上游不在壳：`dsh-native-command` 的 `runNativeCommand()` 对**所有**原生命令一律 `execFile(…, { encoding:"utf8", signal, windowsHide: true })`，而 libuv 的 `windowsHide: true` 在子进程 STARTUPINFO 上置 `STARTF_USESHOWWINDOW + SW_HIDE`；Explorer 的文件夹窗口走 `SW_SHOWDEFAULT`，把这份隐藏显示态继承了下来——窗口确实建出来了、父目录与选中文件都对（实测 `IsWindowVisible=false`），但桌面上看不见。因为 `POST /api/present.open?…&action=reveal` 照常回 204，前端走到 `revealed` 相位、卡片显示「已请求在文件管理器中显示」，症状就表现为"点了没反应"。实锤旁证：反馈机器的桌面上已积了 4 个不可见的资源管理器窗口，路径与选中项都正确（点击从头到尾都执行到了 OS 层，只有"可见"这一步丢了）。上游未修——npm 上最新的 `0.1.6-alpha.2` 里那一行仍是 `windowsHide: true`，跟版解决不了。修复：新增 `revealshow.rs` 启动期原地补丁（与 pickerpatch/mcpgate/oiacache 同款签名门控 + marker 幂等 + tmp+rename 原子写 + 漂移停手）：`windowsHide: !/explorer\.exe$/i.test(command)`——**只豁免 explorer.exe**。范围实测很窄：同 runner 的 `powershell.exe` `Invoke-Item`（「用默认应用打开」/open-in-app 的文件资源管理器入口）经 ShellExecute 交已运行的桌面 explorer，即使 windowsHide=true 也可见；而 powershell/cmd 等控制台应用的控制台必须保持隐藏（壳硬性"不闪控制台"约定），所以不能全局置 false。豁免的安全性另经 PE 头核实：`explorer.exe` Subsystem=**GUI(2)**（永不创建控制台），powershell/taskkill 为 CONSOLE(3) 继续压着。回归：`revealshow` 单元测试 6 条 + 契约套件 `probe_revealshow`（marker 在即通过、否则钉上游原文 needle）；端到端实测把**真实 Rust 补丁改写出的模块**直接 import 后调 `runNativeCommand("explorer.exe", ["/select,", <file url>])`：未打补丁的副本 `IsWindowVisible=False`，打过的 `True` 且选中正确文件
+
+### Added
+
+- **契约套件新增韧性哨兵三探针**（只防"静默失效"这一种，不扩面）。事实基线：dsh 默认启用 LLM 请求重试（`dsh-base` 的 cordis.patch.yml 里 `llm-retry` 行指向 `dsh-llm-retry` 插件，默认 5 次指数退避、尊重 Retry-After），可重试错误码为 TRANSPORT/SERVER/RATE_LIMIT/TIMEOUT/EMPTY_RESPONSE。上游若删掉启用行或收窄名单（例如去掉 TRANSPORT），启动照旧全绿、契约套件也全绿，但断网场景静默不再自愈，壳无从观测——现由 `probe_resilience` 逐项守门。边界写进 upstream.rs 段注：服务端 WS 心跳、浏览器重连循环、壳自己的看门狗均不设哨（失效要么响、要么壳已独立兜底）；默认次数/退避数值刻意不钉
+
 ## [0.5.16] - 2026-09-16
 
 ### Changed
