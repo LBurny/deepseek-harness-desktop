@@ -1,0 +1,13 @@
+# __PLUGIN_PACKAGE__ 的 bundle patch：把本插件的行插进 profile 根组。
+#
+# 声明 dsh.bundle 之后，`dsh plugin add` 会把这个包并进 profile 的
+# dsh.profile.bundles 层列表，`dsh plugin remove` 时由上游 reconcile 自动摘掉
+# ——所以永远不要手写 profile 的 package.json / cordis.patch.yml。
+#
+# 行 id 是别的层按 id 覆盖你这行的把手，取个不会被官方行撞上的名字；
+# 行 name 必须是包名（或 包名/子路径），不是模块导出的 name。
+- insert:
+    - id: __ROW_ID__
+      name: __PLUGIN_PACKAGE__
+      # config: {}      # 模块导出 Config schema 时在这里传值；整值替换，不深合并
+      # disabled: true  # 行级启停

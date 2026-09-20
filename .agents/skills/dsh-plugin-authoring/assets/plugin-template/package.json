@@ -1,0 +1,20 @@
+{
+  "name": "__PLUGIN_PACKAGE__",
+  "version": "0.1.0",
+  "private": true,
+  "description": "__COMMAND_DESCRIPTION__",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js"
+  },
+  "files": ["index.js", "cordis.patch.yml"],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-llm": "*"
+  }
+}
