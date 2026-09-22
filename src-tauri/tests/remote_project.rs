@@ -340,6 +340,112 @@ fn composer_stats_row_anchors() {
     );
 }
 
+/// 会话头部挤压修复的规则锚定（0.5.18 修）：上游头部行里 `headerUtilities`/
+/// `headerCorner` 都是 flex:none、`crumbs` 是 min-width:0，且头部没有任何窄屏适配——
+/// 390px 实测标题被挤到 **0 宽**（会话名完全不可见），叠上"模式"（68px）与
+/// "N 个后台任务"（101px）药丸后 `headerActions` 内容撑破自身盒子、与右侧固定件
+/// **重叠 9px**。本测试钉住四件事：三条"下限 + 可收缩 + 省略号"规则都在断点内、
+/// 下限随视口退让（min(px, vw)）、模式药丸必须走 `> * >` 限定（同槽位"计划"药丸
+/// 与后台任务菜单行也用同名 `_label`，泛指会误伤）、所有 `_headerActions` 选择器
+/// 必须带 `header[class*="_header"]` 前缀（裸匹配会命中侧栏的 bhn1Oq_headerActions）。
+#[test]
+fn session_header_squeeze_rules() {
+    let css = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("remote")
+            .join("mobile.css"),
+    )
+    .unwrap();
+    let media = css.find("@media (max-width: 700px)").unwrap();
+    let scope = "header[class*=\"_header\"]";
+
+    // 头部行各段的本地名都落在选择器里（与 upstream::SESSION_HEADER_ROW_NEEDLES 对齐）
+    for needle in [
+        "titleCluster",
+        "crumbs",
+        "headerActions",
+        "headerUtilities",
+        "headerCorner",
+    ] {
+        let sel = format!("{scope} [class*=\"_{needle}\"]");
+        assert!(
+            css.contains(&sel),
+            "mobile.css 缺选择器 {sel}（头部挤压修复的锚点漂移了）"
+        );
+    }
+
+    // 三条下限 + 省略号声明（含 vw 退让）
+    for (sel, decls) in [
+        (
+            format!("{scope} [class*=\"_crumbs\"]"),
+            vec!["flex: 1 1 auto", "min-width: min(76px, 20vw)"],
+        ),
+        (
+            format!("{scope} [class*=\"_headerActions\"] > * > [class*=\"_label\"]"),
+            vec![
+                "display: inline-block",
+                "min-width: min(56px, 14vw)",
+                "text-overflow: ellipsis",
+                "overflow: hidden",
+            ],
+        ),
+        (
+            format!("{scope} [class*=\"_headerActions\"] [class*=\"_count\"]"),
+            vec!["text-overflow: ellipsis"],
+        ),
+        (
+            format!("{scope} [class*=\"_headerActions\"] [class*=\"_trigger\"]"),
+            vec!["max-width: 100%"],
+        ),
+    ] {
+        let pos = css
+            .find(&sel)
+            .unwrap_or_else(|| panic!("mobile.css 缺选择器 {sel}（头部又会挤成 0 宽/重叠）"));
+        let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+        for decl in decls {
+            assert!(css[pos..end].contains(decl), "{sel} 规则块缺 {decl}");
+        }
+        assert!(pos > media, "{sel} 规则须落在 700px 断点内");
+    }
+
+    // 撞名护栏只针对**选择器**：先把注释剥掉（段注里正当地引用了裸写法做反例）
+    let mut code = String::new();
+    let mut rest = css.as_str();
+    while let Some(begin) = rest.find("/*") {
+        code.push_str(&rest[..begin]);
+        match rest[begin..].find("*/") {
+            Some(end) => rest = &rest[begin + end + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    code.push_str(rest);
+
+    // 模式药丸只能走 > * > 限定：后台任务/计划药丸弹出菜单的行也用 _label 装命令文本
+    //（QsffPG_label 靠 flex:1 + min-width:0 截断），泛指会把菜单行一起改掉
+    assert!(
+        !code.contains("[class*=\"_headerActions\"] [class*=\"_label\"]"),
+        "mobile.css 出现泛指 _headerActions 内所有 _label 的规则——会连后台任务菜单行一起改"
+    );
+
+    // 撞名护栏：_headerActions 只能带 header[class*="_header"] 前缀（侧栏包
+    // bhn1Oq_headerActions 是 div、不在 <header> 内，裸匹配会误伤侧栏）
+    let needle = "[class*=\"_headerActions\"]";
+    let prefix = format!("{scope} ");
+    let mut from = 0;
+    while let Some(i) = code[from..].find(needle).map(|i| from + i) {
+        let start = i.saturating_sub(prefix.len());
+        assert!(
+            code[start..i].ends_with(&prefix),
+            "mobile.css 的 _headerActions 选择器缺 {scope} 前缀（裸匹配会误伤侧栏 bhn1Oq_headerActions）"
+        );
+        from = i + 1;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn project_endpoints_end_to_end() {
     let home = make_home();

@@ -858,6 +858,19 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
             "上游改了类名：mobile.css 底栏等距规则藏不住触发器 chevron（尾部多一枚箭头、视觉间距退回不等），改 upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE 与 mobile.css 的选择器",
         );
     }
+    // mobile.css 会话头部挤压修复的锚点：头部标题行的六个 CSS Modules 本地名
+    // 必须都在 dsh-client-ui-conversation 的 client.js 里（探针根收窄到该包目录——
+    // headerActions 与侧栏包 bhn1Oq_headerActions 撞名，全树探测会被撞名包顶绿）
+    let conversation = nm.join("@deepseek-ai").join("dsh-client-ui-conversation");
+    for needle in upstream::SESSION_HEADER_ROW_NEEDLES {
+        let hit = tree_find(&conversation, needle.as_bytes(), Some("client.js"), 4 << 20, 4);
+        c.check(
+            "会话头部仍含 titleRow/titleCluster/crumbs/headerActions/headerUtilities/headerCorner 之一（conversation 包内）",
+            hit.is_some(),
+            format!("needle={needle} hit={hit:?}"),
+            "上游改了头部结构名：mobile.css 头部规则整组静默失效、手机端退回原生挤压形态（390px 实测标题被挤到 0 宽、模式药丸与右侧按钮重叠 9px），改 upstream::SESSION_HEADER_ROW_NEEDLES 与 mobile.css 的选择器",
+        );
+    }
 }
 
 /// 预装 /init 插件的 UI 折叠锚点（preseed 插件靠 source.kind="plugin"+notice

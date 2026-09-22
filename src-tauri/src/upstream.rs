@@ -469,6 +469,50 @@ pub const MODEL_TRIGGER_ICON_NEEDLE: &str = "triggerIcon";
 /// 锚点（_row:has(> _tools)）本地名太泛无法做字节探针，靠跟版七步法回归。
 pub const COMPOSER_TRIGGER_CHEVRON_NEEDLE: &str = "chevron";
 
+// ── 会话头部标题行（mobile.css 的挤压修复锚点）───────────────────────
+/// 会话头部 `titleRow` 布局的 CSS Modules 本地名集合。实测落盘：
+/// @deepseek-ai/dsh-client-ui-conversation/lib/client.js 的 ConversationRoot——
+/// `titleRow`(行) > `titleCluster`(flex:1, gap10) > `crumbs`(标题面包屑, 溢出隐藏)
+/// + `headerActions`(flex:none, gap8)；行尾另有 `headerUtilities`(flex:none,
+/// margin-left 20) 与 `headerCorner`(flex:none, margin-left 8 / margin-right -16)。
+/// 影响面：mobile.css 的头部规则全靠这几个名字定位（标题保底、模式/后台任务
+/// 可收缩截断）；上游改名则整组静默失效、手机端退回原生挤压形态——390px 实测
+/// 原生形状是**标题被挤到 0 宽**（会话名完全不可见）且 `headerActions` 与
+/// `headerUtilities` **重叠 9px**（0.5.18 手机实拍反馈"挤在了一起"）。
+/// 注：`headerActions` 与侧栏包 bhn1Oq_headerActions 撞名（div，不在 <header> 内），
+/// 故 mobile.css 的选择器一律限定在 `header[class*="_header"]` 之下——裸匹配会误伤
+/// 侧栏。探针收窄到 conversation 包目录，避免撞名包替它变绿。
+pub const SESSION_HEADER_ROW_NEEDLES: &[&str] = &[
+    "titleRow",
+    "titleCluster",
+    "crumbs",
+    "headerActions",
+    "headerUtilities",
+    "headerCorner",
+];
+/// 会话头部"模式"药丸（当前预设名标签）的 CSS Modules 本地名。实测落盘：
+/// @deepseek-ai/dsh-client-ui-agent-preset/lib/client.js（槽位
+/// conversation.session.header.actions，order -10；JSX =
+/// span[label]{IconAgentPresetOutline16 + 预设名}，原生 max-width 180px）。
+/// 影响面：该药丸是 flex 容器、文案是其中的**匿名弹性项**——原生 text-overflow
+/// 对它不生效（超宽是硬裁不是省略号），mobile.css 改 display:inline-block 才让
+/// 省略号真正渲染并给它下限；上游改名则退回硬裁 + 无下限（标题又被挤没）。
+/// `label` 一词太泛、做不了有意义的字节探针（该包 class map 里还有别的 label），
+/// 靠跟版手机端七步法回归。
+pub const SESSION_HEADER_PRESET_LABEL_LOCAL_NAME: &str = "label";
+/// 会话头部"N 个后台任务"药丸的三个 CSS Modules 本地名（root 容器 / trigger 按钮 /
+/// count 计数文案段）。实测落盘：@deepseek-ai/dsh-client-ui-jobs/lib/client.js
+/// （槽位 conversation.session.header.actions，order 20；活跃态在 count 前多一枚
+/// triggerDot 圆点，弹出的菜单行另有 label/kind/status/duration 段）。
+/// **三个名字不独属该包**：同槽位的「计划」药丸（@deepseek-ai/dsh-client-ui-schedule，
+/// order 10，仅会话有 schedule 记录时渲染）用同一套名字——同款药丸同款问题，
+/// mobile.css 的规则一并覆盖是有意为之（见 mobile.css 段注）。
+/// 影响面：mobile.css 让 trigger 宽度跟住 root、count 补省略号——上游改名则计数
+/// 文案硬裁、药丸按自然宽（390px 实测 101px）继续挤标题。三个名字都是通用词，
+/// 无法做有意义的字节探针（同 COMPOSER_TRIGGER_CHEVRON_NEEDLE 的取舍），靠跟版
+/// 手机端回归。
+pub const SESSION_HEADER_JOBS_LOCAL_NAMES: &[&str] = &["root", "trigger", "count"];
+
 // ── 回合统计行（composer 下方 StatsPills；mobile.js/mobile.css 的搬移锚点）──
 /// composer 输入区下方回合统计行的稳定钩子属性（"N 轮 N 步" + token 用量两枚
 /// 药丸）。实测落盘：@deepseek-ai/dsh-client-ui-chat/lib/client.js 的 StatsPills

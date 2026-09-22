@@ -329,6 +329,97 @@
   }
 
   /*
+   * 会话头部标题行（titleRow）：标题被固定件挤到 0、固定件彼此重叠。
+   *
+   * 原生形状（dsh-client-ui-conversation 的 ConversationRoot）：
+   *   header(titleRow) ├ titleCluster(gap10) ├ crumbs(标题面包屑)  └ headerActions
+   *                   ├ headerUtilities(margin-left 20)  ← "打开方式" + 更多(已隐藏)
+   *                   └ headerCorner(margin-left 8 / margin-right -16) ← 右栏开关
+   * 三个固定件都是 flex:none、crumbs 是 min-width:0——390px 手机上实测
+   * （临时实例 + 真机宽度量取）：titleCluster 只剩 158px，塞进 headerActions
+   * 里的「模式」药丸（68px）后 crumbs 直接归零（**标题完全不可见**）；再叠上
+   * "N 个后台任务"药丸（101px）时 headerActions 内容 177px 撑破自身盒子，
+   * 与 headerUtilities **重叠 9px**（用户反馈"挤在了一起"的手机实拍）。
+   *
+   * 对策（只动弹性参数，不藏任何控件）：
+   * ① 标题、模式、后台任务三者都留"下限 + 可收缩 + 省略号"，谁都不被挤成 0，
+   *    宽裕时（≥600px）三件全是原生完整形态；
+   * ② 下限用 min(px, vw) 随视口退让，320px 老机型也不重叠（实测 320/360/375/390/
+   *    414/500/600/700/720 九档：行内间隙恒 12px、行溢出恒 0、头部高恒 76px）；
+   * ③ header 左右内边距 20/28 → 12/12（corner 的 margin-right -16 同步归零），
+   *    视觉上 corner 仍距屏缘 12px，等于白得 24px 给标题。
+   *
+   * 锚点全部**限定在 header 元素与 _headerActions 之下**——裸匹配 [class*="_headerActions"]
+   * 会命中侧栏的 bhn1Oq_headerActions（div，不在 <header> 内），是本轮实测踩到的撞名。
+   * 上游改本地名（wSkVaW_/SVAs4q_/QsffPG_ 前缀随构建而变，只按子串匹配）则规则
+   * 静默失效、退回原生挤压形态（标题消失+重叠），功能不损。
+   */
+  header[class*="_header"] {
+    padding: 10px 12px 0 12px;
+  }
+  header[class*="_header"] [class*="_headerUtilities"] {
+    margin-left: 12px;
+  }
+  header[class*="_header"] [class*="_headerCorner"] {
+    margin-left: 4px;
+    margin-right: 0;
+  }
+  header[class*="_header"] [class*="_titleCluster"] {
+    gap: 8px;
+  }
+  /* 标题：抢回剩余宽度，但保留一段可读的下限（下限以下省略号也没意义了） */
+  header[class*="_header"] [class*="_crumbs"] {
+    flex: 1 1 auto;
+    min-width: min(76px, 20vw);
+  }
+  /* 模式 + 后台任务：宽度不够时收缩截断，而不是把标题挤没、把彼此压重叠 */
+  header[class*="_header"] [class*="_headerActions"] {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  /*
+   * 槽位贡献外面包了一层 display:contents 的 div（上游 renderSlot 的包装），
+   * 它不生成盒子——min-width 必须落到真正的弹性项（药丸 span 与后台任务 root div）
+   * 上，写在包装层上是空操作（第一轮实测过）。
+   * 「模式」药丸的 _label 只认**包装层下的直接子代**：后台任务弹出菜单的行也用
+   * 一个 _label 装命令文本（QsffPG_label），泛指会连菜单行一起改掉（它靠 flex:1 +
+   * min-width:0 截断长命令），故用 > * > 限定到头部这枚药丸。
+   * 药丸是 flex 容器、文案是其中的**匿名弹性项**，容器的 text-overflow 对匿名项
+   * 不生效（原生 max-width:180px 也只是硬裁）——改 display:inline-block 把它变回
+   * 块容器，省略号才真正渲染；图标随之显式转回行内（原生 display:block 会另起
+   * 一行，药丸会变成两行高）。实测药丸高仍为 22px。
+   */
+  header[class*="_header"] [class*="_headerActions"] > * > [class*="_label"] {
+    display: inline-block;
+    min-width: min(56px, 14vw);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    vertical-align: middle;
+  }
+  header[class*="_header"] [class*="_headerActions"] > * > [class*="_label"] svg {
+    display: inline-block;
+    vertical-align: -3px;
+  }
+  /* 后台任务药丸（"N 个后台任务"，含活跃态的圆点）：触发器的宽度上限跟住 root，
+     计数补省略号——省下的正是"4 个后台任务 ⌄"到"4 个… ⌄"的那段。
+     注意这三个本地名（root/trigger/count）不独属后台任务包：同一槽位的「计划」
+     药丸（dsh-client-ui-schedule，order 10）用的是同一套名字——两者是同一设计语言
+     的同款药丸，规则一并覆盖正合意图（同样从"挤标题"变成"截断"），菜单行各段
+     名字不同（row/kind/label/status/duration 等）不受影响。 */
+  header[class*="_header"] [class*="_headerActions"] [class*="_root"] {
+    min-width: min(34px, 9vw);
+  }
+  header[class*="_header"] [class*="_headerActions"] [class*="_count"] {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  header[class*="_header"] [class*="_headerActions"] [class*="_trigger"] {
+    max-width: 100%;
+  }
+
+  /*
    * 信息标签页（mobile.js 注入）。标签类名克隆自原生标签，此处只补激活态
    * （对齐原生 _tabActive：主题主色 + 2px 下划线）；信息页打开时把原生激活
    * 标签视觉降级为未激活——React 状态不动，纯视觉转移。

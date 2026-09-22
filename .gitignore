@@ -26,3 +26,6 @@ docs/blog.zh-CN.md
 
 # 本机垃圾暂存区：清理时的落点（可删但先别删的东西），仅本地留存、永不入库
 .trash/
+
+# ZCode CLI 在本仓自动生成的忽略副本（内容与 .gitignore 重复，非构建物）
+.zcodeignore
