@@ -102,7 +102,7 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 
 ## 版本与发布
 
-- **版本号规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——`0.4.0 → … → 0.4.9 → 0.5.0`，不按 semver 语义跳版（0.x 阶段只数发版次数）。当前 0.5.17，下一版 0.5.18。
+- **版本号规则（固定）**：每发一版 patch +1，patch 到 9 归零、minor +1——`0.4.0 → … → 0.4.9 → 0.5.0`，不按 semver 语义跳版（0.x 阶段只数发版次数）。当前 0.5.18，下一版 0.5.19。
 - **发版**：`pnpm release` 一条命令跑完整链路（参数 -Version / -CommitMsg / -SkipAcceptance / -DryRun / -SelfTest；跑前工作区必须干净——本次改动先单独 commit，docs/release-notes/、CHANGELOG、三处版本文件、AGENTS.md 允许脏并会被收编；说明文件缺失会脚手架后退出，填完重跑）。机械步骤：bump 三处 → CHANGELOG 收编（补回空 Unreleased）→ 说明脚手架+格式 lint → 版本指针 → cargo test → build → acceptance 真机验收 → commit/tag/push → 镜像说明 → release-local 双仓上传 → 匿名 API 终验（读回线上正文须含说明文件首行原样）。**门禁缓存**：`%LOCALAPPDATA%\DSHDesktop\release-cache\v<ver>.json`（head 未变或 diff 只含白名单文件即秒级跳过）。
 - **双语说明（0.5.11 起）**：`docs/release-notes/` 每版两文件（`v<ver>.md` 英文正文传 -NotesPath，`v<ver>.zh.md` 中文）；正文首行 `English | [中文说明](<发布仓 blob 链接>#中文说明)`，中文不内联、点击跳发布仓（该目录随镜像进发布仓，**先推镜像再 PATCH** 外链才不 404）；只改正文用 `-NotesOnly`（不碰资产）。0.5.11 前只有一条 Full Changelog 链接，别再犯。
 - **弃用 CI 发布（0.4.9 起）**：私有仓 tag 触发跑满 30~70min（Actions 缓存按 ref 隔离），本地 3~5min。release.yml 降为 workflow_dispatch 备用；CI 只剩 build.yml（push main 触发，兼作 rt 运行时缓存预热）。

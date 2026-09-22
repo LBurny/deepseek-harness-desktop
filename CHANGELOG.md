@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.18] - 2026-09-22
+
+### Fixed
+
+- **手机端会话头部标题被挤到 0 宽、与右侧按钮挤在一起**（用户手机实拍反馈）。根因在上游布局不在壳：会话头部行 `titleRow`（`dsh-client-ui-conversation` 的 ConversationRoot）里 `headerUtilities`（"打开方式"所在组）与 `headerCorner`（右栏开关）都是 `flex:none` 不收缩，会话名面包屑 `crumbs` 又是 `min-width:0`，且头部**没有任何窄屏适配**（该包全文件仅一条 `@media/@container`，与头部无关）。390px 实测（临时实例 + Playwright 量 computed style）：标题被挤到 **0 宽**（会话名完全不可见，只剩浏览器标题栏里那份）；再叠上同槽位的"模式"药丸（68px）与"N 个后台任务"药丸（101px，会话有后台任务时渲染）后，`headerActions` 的内容 177px 撑破自身盒子、与 `headerUtilities` **重叠 9px**——即用户看到的"挤在了一起"。修复全在 `mobile.css` 的 ≤700px 段，只动弹性参数、不藏任何控件：① 标题/模式/后台任务三者各留 `min(px, vw)` 下限并允许收缩，谁都不被挤成 0（320px 老机型靠 vw 退让也不重叠）；② "模式"药丸从 flex 容器改 `inline-block`——它的文案是容器里的**匿名弹性项**，容器上的 `text-overflow` 对匿名项不生效（原生 `max-width:180px` 只是硬裁、出不来省略号），改成块容器后省略号才真正渲染，其图标随之显式转回行内（原生 `display:block` 会另起一行、把 22px 药丸变两行高）；③ "后台任务/计划"药丸（两包共用 `root`/`trigger`/`count` 三个本地名）计数补省略号、触发器宽度跟住 root，于是"4 个后台任务 ⌄"缩成"4… ⌄"；④ 头部左右内边距 20/28→12/12，corner 的 `margin-right:-16` 同步归零——视觉上右上开关仍距屏缘 12px，等于白得 24px 给标题。**九档实测**（320/360/375/390/414/500/600/700/720）：行内间隙恒 12px、行溢出恒 0、头部高恒 76px；≥600px 三件恢复原生完整形态，≥701px 整组规则不生效（桌面壳与宽屏远程逐字原生）。选择器一律限定在 `header[class*="_header"]` 之下——`_headerActions` 与侧栏包 `bhn1Oq_headerActions`（div，不在 `<header>` 内）撞名，裸匹配会误伤侧栏；槽位贡献外层是 `display:contents` 包装（不生成盒子），`min-width` 必须写到包装层下的直接子代上，且"模式"药丸只认 `> * >`（后台任务/计划药丸弹出菜单的行也用同名 `_label` 装命令文本，泛指会连菜单行的截断逻辑一起改）。回归：`tests/remote_project.rs::session_header_squeeze_rules`（三条下限与省略号声明在断点内 + 匿名弹性项那条 `> * >` 限定 + `_headerActions` 撞名前缀护栏；护栏先剥注释再扫，段注里正当引用的裸写法做反例不误伤）+ 契约套件 `probe_remote_needles` 新增六条定向探针（`upstream::SESSION_HEADER_ROW_NEEDLES`，探针根收窄到 conversation 包目录，防撞名包替它变绿）
+
 ## [0.5.17] - 2026-09-20
 
 ### Fixed
