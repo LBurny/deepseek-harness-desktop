@@ -747,6 +747,15 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
         format!("hit={hit:?}"),
         "主题键改名：改 upstream::KEY_UI_THEME（影响 theme.rs 跟随与首启播种）",
     );
+    // mobile.css 插件页头部适配的锚点：plugin-manager 页根的语义属性
+    // （实测落盘：dsh-client-ui-plugin-manager/lib/client.js，section[data-plugin-panel]）
+    let hit = tree_find(&nm, upstream::PLUGIN_PANEL_HOOK.as_bytes(), Some("client.js"), 4 << 20, 4);
+    c.check(
+        "插件管理页仍含 data-plugin-panel 语义钩子",
+        hit.is_some(),
+        format!("hit={hit:?}"),
+        "页面根属性改名：mobile.css 插件页头部窄屏适配静默失效，改 upstream::PLUGIN_PANEL_HOOK",
+    );
     // proxy.rs 的 HTML 注入改写前提：入口文档 viewport meta 仍是 Vite 模板原值
     // （实测落盘：dsh-web-frontend/dist/index.html）——变了则禁缩放改写静默失效，
     // iOS 聚焦输入框自动放大整页不复原（0.5.4 手机实拍实踩）

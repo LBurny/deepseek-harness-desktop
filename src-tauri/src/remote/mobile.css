@@ -329,6 +329,41 @@
   }
 
   /*
+   * dsh 插件管理页头部（0.2.0 自带插件页）：pageHead 是 space-between 单行
+   * flex（标题组 + 工具组），两侧都不收缩、页面全文件没有一条窄屏媒体查询
+   * （仅 prefers-reduced-motion）——390px 实测（0.5.22 手机截图）"添加插件"
+   * 主按钮被压到文字换行（"添加插 / 件"）、intro 描述折行后 info 图标孤零零
+   * 悬在第二行。只动弹性、不藏控件：
+   * ① 主按钮 nowrap + flex:none——文字永不换行，空间不足时让左侧组收缩；
+   * ② 工具组 flex:none 整体不被压缩；
+   * ③ 左侧标题组 min-width:0 允许收缩（宽屏原样）；
+   * ④ intro 改单行、文案段省略号截断——描述是装饰性文案（完整说明在 ⓘ 的
+   *    tooltip 里，可点），截断不损功能，info 图标随单行排布不再孤行。
+   * 锚 [data-plugin-panel]：上游 section 的语义属性（client.js 里逐字可寻，
+   * upstream::PLUGIN_PANEL_HOOK 契约守门），哈希无关、不与其它页面撞名；
+   * 头部行内再限定 header[class*="_pageHead"] 与 [class*="_toolbar"]/
+   * [class*="_addButton"] 本地名子串（同页 class map 唯一）。
+   */
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] > div:first-child {
+    min-width: 0;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_toolbar"] {
+    flex: none;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_addButton"] {
+    white-space: nowrap;
+    flex: none;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_pageIntro"] {
+    white-space: nowrap;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_pageIntro"] > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /*
    * 会话头部"更多操作"图标按钮（28px 圆角图标按钮）：手机端直接隐藏——它弹出的
    * 菜单只有"下载 session 日志"，手机上没人翻日志（要看也在 PC 端看），且它悬浮
    * 盖住旁边的"N 个后台任务运行中"文案（0.5.5 手机实拍）。

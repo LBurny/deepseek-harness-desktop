@@ -538,6 +538,88 @@ fn session_header_squeeze_rules() {
     }
 }
 
+#[test]
+fn plugin_panel_header_rules() {
+    let css = std::fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src")
+            .join("remote")
+            .join("mobile.css"),
+    )
+    .unwrap();
+    let media = css.find("@media (max-width: 700px)").unwrap();
+    // 头部适配的公共前缀：增强门 + 页面语义属性 + header 限定
+    let head = "html[data-dshmobile-enhanced] [data-plugin-panel] header[class*=\"_pageHead\"]";
+
+    // ① 页面根属性在场（与 upstream::PLUGIN_PANEL_HOOK 对齐，探针守门改名即红）
+    assert!(
+        css.contains("[data-plugin-panel]"),
+        "mobile.css 缺 [data-plugin-panel] 锚（插件页头部适配整体失锚）"
+    );
+
+    // ② 四条弹性/防换行规则 + intro 截断规则，全部落在 700px 断点内
+    for (sel, decls) in [
+        (format!("{head} > div:first-child"), vec!["min-width: 0"]),
+        (format!("{head} [class*=\"_toolbar\"]"), vec!["flex: none"]),
+        (
+            format!("{head} [class*=\"_addButton\"]"),
+            vec!["white-space: nowrap", "flex: none"],
+        ),
+        (format!("{head} [class*=\"_pageIntro\"]"), vec!["white-space: nowrap"]),
+        (
+            format!("{head} [class*=\"_pageIntro\"] > span"),
+            vec!["min-width: 0", "overflow: hidden", "text-overflow: ellipsis"],
+        ),
+    ] {
+        let pos = css
+            .find(&sel)
+            .unwrap_or_else(|| panic!("mobile.css 缺选择器 {sel}（插件页头部又会挤乱）"));
+        let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+        for decl in decls {
+            assert!(css[pos..end].contains(decl), "{sel} 规则块缺 {decl}");
+        }
+        assert!(pos > media, "{sel} 规则须落在 700px 断点内（桌面端不得生效）");
+    }
+
+    // ③ 撞名护栏：先剥注释（段注里正当地引用了裸写法做反例），再逐一要求
+    // [data-plugin-panel] 必须带增强门、_toolbar/_addButton/_pageIntro 必须带
+    // data-plugin-panel + _pageHead 限定——这些本地名不唯一，裸匹配会改到其它页面
+    let mut code = String::new();
+    let mut rest = css.as_str();
+    while let Some(begin) = rest.find("/*") {
+        code.push_str(&rest[..begin]);
+        match rest[begin..].find("*/") {
+            Some(end) => rest = &rest[begin + end + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    code.push_str(rest);
+
+    for needle in [
+        "[data-plugin-panel]",
+        "[class*=\"_toolbar\"]",
+        "[class*=\"_addButton\"]",
+        "[class*=\"_pageIntro\"]",
+    ] {
+        let required = match needle {
+            "[data-plugin-panel]" => "html[data-dshmobile-enhanced] ".to_string(),
+            _ => format!("{head} "),
+        };
+        let mut from = 0;
+        while let Some(i) = code[from..].find(needle).map(|i| from + i) {
+            let start = i.saturating_sub(required.len());
+            assert!(
+                code[start..i].ends_with(&required),
+                "mobile.css 的 {needle} 选择器缺限定前缀 {required}（裸匹配会误伤其它页面）"
+            );
+            from = i + 1;
+        }
+    }
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn project_endpoints_end_to_end() {
     let home = make_home();

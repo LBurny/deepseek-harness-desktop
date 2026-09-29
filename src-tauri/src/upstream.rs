@@ -560,6 +560,16 @@ pub const SESSION_HEADER_JOBS_LOCAL_NAMES: &[&str] = &["root", "trigger", "count
 /// 行回不来的同时信息页恒空；契约套件守门。
 pub const COMPOSER_STATS_ROW_HOOK: &str = "data-composer-stats";
 
+// ── dsh 插件管理页（0.2.0 自带；mobile.css 头部窄屏适配锚点）────────────
+/// 插件管理页根 section 的语义属性（`<section data-plugin-panel>`，实测落盘：
+/// @deepseek-ai/dsh-client-ui-plugin-manager/lib/client.js 逐字可寻）。该页面
+/// 全文件没有窄屏媒体查询（仅 prefers-reduced-motion）——390px 下 pageHead
+/// 的 space-between 单行把"添加插件"主按钮压到文字换行（"添加插/件"）、intro
+/// 描述折行后 info 图标孤行（0.5.22 手机截图实锤）。影响面：mobile.css 的
+/// 头部适配（按钮 nowrap、左侧组收缩、intro 单行省略）全锚这个属性——上游
+/// 改名则适配静默失效（按钮复原换行，功能不损）；契约套件 tree_find 守门。
+pub const PLUGIN_PANEL_HOOK: &str = "data-plugin-panel";
+
 // ── 预装 /init 插件的 UI 折叠锚点（resources/preseed-plugins/dsh-command-init）──
 /// 消息渲染的"用户气泡 vs 折叠上下文行"分支。实测落盘：
 /// @deepseek-ai/dsh-client-ui-chat/lib/client.js（0.1.2 起聊天渲染从
