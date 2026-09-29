@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.23] - 2026-09-29
+
 ### Fixed
 
 - **桌面端网页搜索结果等外链点了"没反应"**（0.5.22 用户反馈）。根因在壳不在 dsh：dsh 的 `openExternalLink`（消息流外链的统一出口；侧栏来源且右栏浏览器插件在场时改开内嵌浏览器页）终点是 `window.open(url, "_blank", "noopener,noreferrer")`，WebView2 对它发 `NewWindowRequested`，而壳主窗口 builder 只挂了 `on_download`/`initialization_script`，没有 new-window handler——wry 对无 handler 的兜底是 `args.SetHandled(true)`（wry 0.55.1 `webview2/mod.rs` else 分支），弹窗请求**静默吞掉**：浏览器不弹、壳内无窗、页面无报错。修复：主窗口 builder 补 `.on_new_window`——放行的 http/https 经既有 `update::open_url`（rundll32 FileProtocolHandler）交**系统浏览器**打开、WebView2 子窗一律 `NewWindowResponse::Deny`（壳内永不弹新窗）；scheme 门新函数 `update::external_open_allowed`（javascript:/data:/about:/file: 与自定义协议一律拒）+ 只记 host 落 events.log（URL 可能带 token，不落全文）。只挂主窗口（五个按需设置窗是本地页面无外链；远程手机端走真浏览器，window.open 本来可用，不经壳代理也能开新标签）。回归：`update.rs::external_open_only_allows_http_https`（unit；六种拒绝 scheme + 两种放行形态）
