@@ -1,27 +1,14 @@
-//! 插件管理：dsh plugin 官方入口的壳侧封装（npm/cordis 插件）。
+//! 插件操作执行层：dsh plugin 官方入口的壳侧封装（npm/cordis 插件）。
 //! 装/卸/更新走 `dsh plugin --profile web <pnpm args>`（对账逻辑归上游）；
-//! 清单读 profiles/web/package.json（dependencies + dsh.profile.bundles）。
 //! pnpm 由壳内置（pnpm.cjs/pnpm.cmd，node.exe 同目录），spawn 时 PATH 前置。
+//!
+//! 只服务 preseed.rs 的预安装播种（marker 语义见 preseed.rs 头注）。壳自己的
+//! 插件管理面板已随 0.5.21 移除——dsh 0.2.0 自带插件管理页（安装/配置/启停/
+//! 运行时卸载），面板与配套 Tauri 命令（list/search/install/uninstall/update/
+//! get_plugin_status）成为重复维护面，按"上游接管即退役"惯例删除。
 
-use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
-
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginRow {
-    pub name: String,
-    pub version: String,
-    pub is_bundle: bool,
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PluginStatus {
-    pub pnpm_ready: bool,
-    pub pnpm_version: Option<String>,
-    pub profile_ready: bool,
-}
 
 /// 插件命令的执行环境（node/dsh/pnpm 全部来自壳分发运行时）。
 pub struct PluginsHome {
@@ -56,68 +43,6 @@ impl PluginsHome {
             .join("bin")
             .join(crate::upstream::PNPM_JS_FILE)
     }
-}
-
-fn read_manifest(path: &Path) -> Result<Option<serde_json::Value>, String> {
-    if !path.is_file() {
-        return Ok(None);
-    }
-    let bytes = std::fs::read(path)
-        .map_err(|e| format!("读取 {} 失败：{e}", path.display()))?;
-    let bytes = bytes.strip_prefix(&[0xEF, 0xBB, 0xBF]).unwrap_or(&bytes); // BOM 容忍（同 mcp.rs）
-    serde_json::from_slice(bytes)
-        .map(Some)
-        .map_err(|e| format!("解析 {} 失败：{e}（可手工删除该文件让 dsh 重建）", path.display()))
-}
-
-pub fn list_plugins_impl(home: &PluginsHome) -> Result<Vec<PluginRow>, String> {
-    let Some(m) = read_manifest(&home.manifest_path())? else {
-        return Ok(vec![]);
-    };
-    let deps = m
-        .get(crate::upstream::MANIFEST_DEPENDENCIES_KEY)
-        .and_then(|v| v.as_object())
-        .cloned()
-        .unwrap_or_default();
-    let bundles: HashSet<String> = m
-        .pointer(crate::upstream::MANIFEST_BUNDLES_POINTER)
-        .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|v| v.as_str().map(String::from)).collect())
-        .unwrap_or_default();
-    let mut rows: Vec<PluginRow> = deps
-        .into_iter()
-        .map(|(name, v)| PluginRow {
-            version: v.as_str().unwrap_or("").to_string(),
-            is_bundle: bundles.contains(&name),
-            name,
-        })
-        .collect();
-    rows.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(rows)
-}
-
-pub fn get_plugin_status_impl(home: &PluginsHome) -> Result<PluginStatus, String> {
-    let pnpm_js = home.pnpm_js();
-    let pnpm_cmd = home.pnpm_dir.join(crate::upstream::PNPM_CMD_FILE);
-    let pnpm_ready = pnpm_js.is_file() && pnpm_cmd.is_file();
-    let pnpm_version = if pnpm_ready {
-        let mut cmd = tokio::process::Command::new(&home.node_exe);
-        cmd.arg(&pnpm_js).arg("--version");
-        crate::platform::current().configure_child_command(&mut cmd);
-        match tauri::async_runtime::block_on(cmd.output()) {
-            Ok(o) if o.status.success() => {
-                Some(String::from_utf8_lossy(&o.stdout).trim().to_string())
-            }
-            _ => None,
-        }
-    } else {
-        None
-    };
-    Ok(PluginStatus {
-        pnpm_ready,
-        pnpm_version,
-        profile_ready: home.manifest_path().is_file(),
-    })
 }
 
 #[derive(Clone, Debug, serde::Serialize)]
@@ -214,110 +139,6 @@ pub fn update_plugins_impl(home: &PluginsHome) -> Result<PluginOpResult, String>
     run_op_guarded(home, &["update"])
 }
 
-#[tauri::command]
-pub fn get_plugin_status(state: tauri::State<PluginsHome>) -> Result<PluginStatus, String> {
-    get_plugin_status_impl(state.inner())
-}
-
-#[tauri::command]
-pub fn list_plugins(state: tauri::State<PluginsHome>) -> Result<Vec<PluginRow>, String> {
-    list_plugins_impl(state.inner())
-}
-
-#[tauri::command]
-pub fn install_plugin(
-    state: tauri::State<PluginsHome>,
-    spec: String,
-) -> Result<PluginOpResult, String> {
-    install_plugin_impl(state.inner(), &spec)
-}
-
-#[tauri::command]
-pub fn uninstall_plugin(
-    state: tauri::State<PluginsHome>,
-    name: String,
-) -> Result<PluginOpResult, String> {
-    uninstall_plugin_impl(state.inner(), &name)
-}
-
-#[tauri::command]
-pub fn update_plugins(state: tauri::State<PluginsHome>) -> Result<PluginOpResult, String> {
-    update_plugins_impl(state.inner())
-}
-
-#[derive(Clone, Debug, serde::Serialize)]
-pub struct SearchResult {
-    pub name: String,
-    pub version: String,
-    pub description: String,
-    pub installed: bool,
-}
-
-fn parse_search_response(text: &str, installed: &HashSet<String>) -> Vec<SearchResult> {
-    let v: serde_json::Value = serde_json::from_str(text).unwrap_or(serde_json::Value::Null);
-    v.get("objects")
-        .and_then(|o| o.as_array())
-        .map(|objs| {
-            objs.iter()
-                .filter_map(|o| o.get("package"))
-                .filter_map(|p| {
-                    let name = p.get("name")?.as_str()?.to_string();
-                    Some(SearchResult {
-                        name: name.clone(),
-                        version: p
-                            .get("version")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        description: p
-                            .get("description")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("")
-                            .to_string(),
-                        installed: installed.contains(&name),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
-#[tauri::command]
-pub async fn search_plugins(
-    state: tauri::State<'_, PluginsHome>,
-    query: String,
-) -> Result<Vec<SearchResult>, String> {
-    let q = query.trim();
-    if q.is_empty() || q.chars().count() < 2 {
-        return Ok(vec![]);
-    }
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("DSHDesktop/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .map_err(|e| format!("HTTP 客户端初始化失败：{e}"))?;
-    let url = reqwest::Url::parse_with_params(
-        "https://registry.npmjs.org/-/v1/search",
-        &[("text", q), ("size", "20")],
-    )
-    .map_err(|e| format!("构造搜索 URL 失败：{e}"))?;
-    let resp = client
-        .get(url)
-        .send()
-        .await
-        .map_err(|e| format!("npm registry 搜索失败：{e}"))?;
-    if !resp.status().is_success() {
-        return Err(format!("npm registry 返回 {}", resp.status()));
-    }
-    let text = resp
-        .text()
-        .await
-        .map_err(|e| format!("读取响应失败：{e}"))?;
-    let installed: HashSet<String> = list_plugins_impl(state.inner())?
-        .into_iter()
-        .map(|r| r.name)
-        .collect();
-    Ok(parse_search_response(&text, &installed))
-}
 
 #[cfg(test)]
 mod tests {
@@ -342,68 +163,6 @@ mod tests {
             busy: Mutex::new(()),
         };
         (home, work)
-    }
-
-    #[test]
-    fn list_missing_manifest_is_empty() {
-        let (home, work) = test_home("list-empty");
-        assert!(list_plugins_impl(&home).unwrap().is_empty());
-        let _ = std::fs::remove_dir_all(&work);
-    }
-
-    #[test]
-    fn list_reads_deps_and_marks_bundles() {
-        let (home, work) = test_home("list-bundles");
-        std::fs::create_dir_all(home.profile_dir()).unwrap();
-        std::fs::write(
-            home.manifest_path(),
-            r#"{
-              "dependencies": { "@deepseek-ai/dsh-mcp-client": "^0.1.0", "plain-lib": "1.2.3" },
-              "dsh": { "profile": { "bundles": ["@deepseek-ai/dsh-mcp-client"] } }
-            }"#,
-        )
-        .unwrap();
-        let rows = list_plugins_impl(&home).unwrap();
-        assert_eq!(rows.len(), 2);
-        let mcp = rows.iter().find(|r| r.name == "@deepseek-ai/dsh-mcp-client").unwrap();
-        assert!(mcp.is_bundle);
-        assert_eq!(mcp.version, "^0.1.0");
-        assert!(!rows.iter().find(|r| r.name == "plain-lib").unwrap().is_bundle);
-        let _ = std::fs::remove_dir_all(&work);
-    }
-
-    #[test]
-    fn list_tolerates_bom_and_garbage_version() {
-        let (home, work) = test_home("list-bom");
-        let dir = home.profile_dir();
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut bytes = b"\xEF\xBB\xBF".to_vec();
-        bytes.extend_from_slice(br#"{"dependencies":{"a":{"x":1}}}"#);
-        std::fs::write(home.manifest_path(), bytes).unwrap();
-        let rows = list_plugins_impl(&home).unwrap();
-        assert_eq!(rows[0].version, "");
-        let _ = std::fs::remove_dir_all(&work);
-    }
-
-    #[test]
-    fn list_corrupt_manifest_errors() {
-        let (home, work) = test_home("list-corrupt");
-        std::fs::create_dir_all(home.profile_dir()).unwrap();
-        std::fs::write(home.manifest_path(), "not json").unwrap();
-        assert!(list_plugins_impl(&home).is_err());
-        let _ = std::fs::remove_dir_all(&work);
-    }
-
-    #[test]
-    fn status_detects_pnpm_and_profile() {
-        let (home, work) = test_home("status");
-        std::fs::create_dir_all(home.pnpm_dir.join("pnpm").join("bin")).unwrap();
-        std::fs::write(home.pnpm_dir.join("pnpm").join("bin").join("pnpm.cjs"), "console.log('9.15.0')").unwrap();
-        std::fs::write(home.pnpm_dir.join("pnpm.cmd"), "@echo off").unwrap();
-        let s = get_plugin_status_impl(&home).unwrap();
-        assert!(s.pnpm_ready && !s.profile_ready);
-        assert_eq!(s.pnpm_version.as_deref(), Some("9.15.0"));
-        let _ = std::fs::remove_dir_all(&work);
     }
 
     #[test]
@@ -436,22 +195,6 @@ mod tests {
     }
 
     #[test]
-    fn search_parses_registry_response_and_marks_installed() {
-        let json = r#"{"objects":[
-            {"package":{"name":"dsh-mcp-client","version":"1.0.0","description":"MCP for dsh"}},
-            {"package":{"name":"other","version":"2.0.0"}}
-        ],"total":2}"#;
-        let mut installed = HashSet::new();
-        installed.insert("other".to_string());
-        let r = parse_search_response(json, &installed);
-        assert_eq!(r.len(), 2);
-        assert_eq!(r[0].name, "dsh-mcp-client");
-        assert!(!r[0].installed && r[0].description == "MCP for dsh");
-        assert!(r[1].installed);
-        assert_eq!(r[1].description, "");
-    }
-
-    #[test]
     fn run_captures_child_output() {
         // “看下方输出”依赖捕获子进程 stdout/stderr；tokio spawn 默认继承
         // 父进程 stdio，不显式 pipe 则 output 恒为空。
@@ -473,31 +216,11 @@ mod tests {
     }
 
     #[test]
-    fn ipc_payloads_serialize_camel_case() {
-        // 前端（Plugins.svelte）按 camelCase 读键；snake_case 会让 exitCode 恒为
-        // undefined——成功被误判为失败、pnpm 状态恒显示"缺失"。
+    fn op_result_serializes_camel_case() {
+        // IPC 消费方按 camelCase 读键；snake_case 会让 exitCode 恒为 undefined
+        // ——成功被误判为失败（0.4.x 实踩过的同类问题）。
         let v = serde_json::to_value(PluginOpResult { exit_code: 0, output: "x".into() }).unwrap();
-        assert!(v.get("exitCode").is_some(), "前端读 exitCode，实际键：{v}");
-        let v = serde_json::to_value(PluginStatus {
-            pnpm_ready: true,
-            pnpm_version: Some("9.15.0".into()),
-            profile_ready: true,
-        })
-        .unwrap();
-        assert!(v.get("pnpmReady").is_some(), "前端读 pnpmReady，实际键：{v}");
-        assert!(v.get("pnpmVersion").is_some());
-        assert!(v.get("profileReady").is_some());
-        let v = serde_json::to_value(PluginRow {
-            name: "a".into(),
-            version: "1".into(),
-            is_bundle: true,
-        })
-        .unwrap();
-        assert!(v.get("isBundle").is_some(), "前端读 isBundle，实际键：{v}");
+        assert!(v.get("exitCode").is_some(), "IPC 读 exitCode，实际键：{v}");
     }
 
-    #[test]
-    fn search_parses_garbage_as_empty() {
-        assert!(parse_search_response("not json", &HashSet::new()).is_empty());
-    }
 }

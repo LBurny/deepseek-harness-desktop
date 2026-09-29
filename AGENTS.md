@@ -5,7 +5,7 @@
 ## 技术栈与形态
 
 - **Tauri 2 + Rust**（`src-tauri/`）：进程监督、运行时部署、托盘、通知、主题跟随、诊断命令
-- **Svelte 5 + TypeScript**（`src/`）：splash/diagnostics/plugins/skills/mcp/remote/settings 七个本地页面；主界面是导航到的远程 dsh Web UI（`http://127.0.0.1:<port>`）
+- **Svelte 5 + TypeScript**（`src/`）：splash/diagnostics/skills/mcp/remote/settings 六个本地页面；主界面是导航到的远程 dsh Web UI（`http://127.0.0.1:<port>`）。壳的插件管理面板已随 0.5.21 移除（dsh 0.2.0 自带插件管理页，重复维护面）
 - 安装包：NSIS（`pnpm tauri build`），单实例、托盘常驻、关窗默认隐藏到托盘（可在"其它设置"改为直接退出）
 
 ## 目录结构（逐模块细节见 docs/design.zh-CN.md）
@@ -47,14 +47,15 @@ src-tauri/src/
                     settings.yaml 是遗留导入通道，壳不再读写）；变化时
                     SWP_FRAMECHANGED 强制重绘
   progress.rs       首启进度模型（阶段权重/百分比/结构化负载）
-  tray.rs           托盘菜单 + 六个按需窗口（theme_bootstrap 防白底闪）+ diagnostics + commands
+  tray.rs           托盘菜单 + 五个按需窗口（theme_bootstrap 防白底闪）+ diagnostics + commands
   zoom.rs           UI 缩放：hook_js 注入快捷键（只注入 main）、步进读设置、ui-zoom.txt 持久化
   settings.rs       壳设置 settings.json（校验；落盘失败显式报错不静默吞）
   skills.rs         skills/ ↔ skills-disabled/ 移动即开关；三源导入+ZIP 导入（防穿越+条目上限）
   mcp.rs            cordis.patch.yml 的 dsh-mcp-client 条目读写（Value 级保留、tmp+rename 原子写）；
                     兼做设置存储通用条目读写（0.2.0 起 theme/i18n/welcome 复用）
-  plugins.rs        装/卸/更新走官方 dsh plugin 子命令（壳不自己写 profile）；pnpm 壳内置
-                    （pnpm.cmd 包装）；IPC 全 serde camelCase；串行锁；stdout/stderr 显式 pipe
+  plugins.rs        插件操作执行层，只服务 preseed 播种：装/卸走官方 dsh plugin 子命令
+                    （壳不自己写 profile）；pnpm 壳内置（pnpm.cmd 包装）；串行锁；
+                    stdout/stderr 显式 pipe。壳的插件面板+Tauri 命令已随 0.5.21 移除
   preseed.rs        预安装插件播种（bundle 形态、marker 语义同 skills；dev 下静默无操作）
   picker.rs         目录选择器钉 browse：启动幂等写 cordis.patch.yml 官方 overlay
   pickerpatch.rs    browse 选择器运行时补丁（签名门控+marker 幂等原地改写；客户端签名漂移

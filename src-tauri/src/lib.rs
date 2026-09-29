@@ -144,12 +144,6 @@ pub fn run() {
             mcp::delete_mcp_server,
             mcp::list_mcp_import_sources,
             mcp::import_mcp_servers,
-            plugins::get_plugin_status,
-            plugins::list_plugins,
-            plugins::search_plugins,
-            plugins::install_plugin,
-            plugins::uninstall_plugin,
-            plugins::update_plugins,
             remote::start_remote,
             remote::stop_remote,
             remote::get_remote_status,
@@ -432,12 +426,6 @@ pub fn run() {
                 }
             };
             let deployed = deployed.load(Ordering::SeqCst);
-            // 插件管理：node/dsh/pnpm 全部来自壳分发运行时（与 DshProcess 同源路径）
-            handle.manage(plugins::PluginsHome::new(
-                paths.node_exe.clone(),
-                paths.dsh_bin.clone(),
-                paths.home.clone(),
-            ));
 
             // 本地页面的主题/语言快照：先落库再启动关注循环（循环首轮即广播解析值）。
             // 主题/语言读 profile patch 条目（upstream.rs 设置存储段注）；首启主题

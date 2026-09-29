@@ -161,28 +161,8 @@ const en: Record<string, string> = {
   '该来源没有可导入的 MCP server。': 'No MCP servers available in this source.',
 
   // 插件管理
-  '插件管理': 'Plugins',
-  '重启 dsh': 'Restart dsh',
-  '更新全部': 'Update all',
-  'pnpm 就绪': 'pnpm ready ({version})',
-  'pnpm 缺失': 'Bundled pnpm missing — reinstall DSHDesktop or run fetch-runtime.ps1',
-  '插件安全提示': 'Plugins are third-party code; installing runs them on this machine. Only install trusted packages.',
-  '搜索 npm 包…': 'Search npm packages…',
-  '搜索中…': 'Searching…',
   '安装': 'Install',
-  '已安装': 'Installed',
-  '卸载': 'Uninstall',
-  '卸载确认': 'Uninstall {name}?',
-  '插件': 'Plugin',
-  '依赖': 'Dependency',
-  '尚无插件，搜索并安装一个。': 'No plugins yet — search and install one.',
-  '操作输出': 'Operation output',
   '成功': 'ok',
-  '失败，退出码 {code}': ' failed (exit code {code})',
-  '看下方输出': 'see output below',
-  '退出码': 'exit code',
-  '完成，重启 dsh 后生效': '{label} done — restart dsh to activate',
-
   // 启动画面
   '首次启动需要部署运行时，可能要花几分钟，请耐心等待': 'First launch deploys the runtime; this may take a few minutes.',
   '正在准备运行时…': 'Preparing runtime…',

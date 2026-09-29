@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Removed
+
+- **壳的插件管理面板整体退役**（用户裁定：dsh 0.2.0 自带插件管理页——安装/配置/启停/运行时卸载/官方源镜像自定义源俱全，壳面板成为重复维护面）。一并移除：托盘"插件管理"项与按需窗口（六个按需窗口减为五个）、`Plugins.svelte` 页面与 `#/plugins` 路由、6 个 Tauri 命令（`get_plugin_status`/`list_plugins`/`search_plugins`/`install_plugin`/`uninstall_plugin`/`update_plugins`，build.rs/capabilities/lib.rs 三处同步）、19 条插件页专属 i18n 文案；只读查询面（`list_plugins_impl`/`get_plugin_status_impl`/npm registry 搜索）随之删除，净减约 800 行。**保留**：`plugins.rs` 的操作执行层（`run_plugin_op` + 装/卸/更新 impl，preseed 播种的唯一依赖，marker"用户已删不复活"语义经 dsh 自己的插件页卸载照常生效）。回归：`tests/plugins_integration.rs`（impl 级，原样保留）、三处命令同步锚定测试自动跟随、camelCase IPC 锚定测试收窄到 `PluginOpResult`
 ## [0.5.20] - 2026-09-29
 
 ### Fixed

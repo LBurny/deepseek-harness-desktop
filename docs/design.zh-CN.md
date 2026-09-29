@@ -184,14 +184,13 @@ dsh WS /api/events.host ─▶ WsSource(host) ─▶ handle_host_frame ─▶ Se
 - `#/diagnostics` **Diagnostics.svelte**：诊断面板（状态/端口/PID/版本、诊断日志——回填 `%LOCALAPPDATA%\DSHDesktop\events.log` 尾部 500 行，壳侧诊断与 dsh 进程输出同流、跨会话持久（文件 1MB 自截断）+ `dsh-log` 事件实时流（含通知/声音/试听行）、重启按钮、开机自启开关）。
 - `#/settings` **Settings.svelte**：其它设置（开机自启、关窗行为单选、四类通知提醒——任务确认/选项选择/任务完成/回答完成，各带启用勾选 + 仅后台时/总是时机下拉，提示音选择与试听独立成行、四类全关才禁用、缩放步进 1%–25%、放大/缩小快捷键录制器）。保存时前端先校验（至少一个修饰键、in/out 不冲突），再 `invoke('set_shell_settings', { next })` 由 Rust 端复验并落盘。
 - `#/skills` **Skills.svelte**：技能管理。数据源是**壳注入给 dsh 的 DSH_HOME**（`<runtime_base>/dsh-home`，不是 `~/.dsh`）：`skills/` 为启用、旁路 `skills-disabled/` 为停用（dsh 的技能发现只认根目录直属条目、无原生禁用概念；移出根目录即停用，watcher 观察到变化后热刷新 catalog，无需重启）。导入从三个外部 agent 的用户级源复制目录：Codex `~/.codex/skills`、Claude Code `~/.claude/skills`、OpenCode `~/.config/opencode/skills`；同名冲突逐个选覆盖/跳过（覆盖会同时清掉禁用目录里的旧副本）。**独立 dsh 的默认目录 `~/.dsh/skills` 不作为导入源**——壳就是 dsh，启动时自动扫描它并补入新技能（`skills::seed_from_default_dsh_home`；`.skills-seeded` marker 记录已见名字，壳里删掉的不会复活）。删除只删 home 内副本，不动源目录。还可本地导入 ZIP 压缩包（`inspect_zip_skills`/`import_zip_skills`）：自动识别两种布局——包根直接含 SKILL.md（名字取 frontmatter name，缺失回退 zip 文件名）或顶层若干技能文件夹各含 SKILL.md；解包剥掉顶层前缀，条目路径经 enclosed_name 过滤防 zip-slip，另有 1 万条目/256MB 上限防 zip 炸弹；冲突语义与目录导入一致（跳过/覆盖，覆盖清两侧）。Rust 侧 `skills.rs` 的 frontmatter 解析只取单行键，行上操作均以目录名为准。
-- `#/plugins` **Plugins.svelte**：插件管理（npm/cordis 插件的图形化装/卸/更新，详见 §18）。
 - `#/mcp` **Mcp.svelte**：MCP server 管理（列表/启停/删除/新增/编辑 + 导入）。dsh 没有独立的 mcp.json——MCP server 是 Cordis 插件补丁，壳读写 `<dsh-home>/profiles/web/cordis.patch.yml` 中 `name == '@deepseek-ai/dsh-mcp-client'` 的 insert 条目（只动这些条目，其余 Value 级保留；tmp+rename 原子写；读前剥 BOM）。dsh 的 HMR（`watchUserPatches` + chokidar）监听该文件，改后自动 disconnect+reconnect，**无需重启**。启停 = entry 上加/去 `disabled: true`（cordis-plugin-loader 原生语义，disabled 的 entry 不起 fiber）。编辑以旧 config 为底、只覆盖表单字段，`toolCallTimeoutMs`/`reconnect.*` 等高级键保留；transport 只有 `stdio`（command/args/env/cwd）与 `streamable-http`（url/headers）两种，sse 不支持。启动时种子同步 `~/.dsh` 两层 patch 里的 MCP 条目（`mcp::seed_from_default_dsh_home`，`.mcp-seeded` marker 防复活；源里 disabled 的不同步也不记 marker，日后在 ~/.dsh 启用时仍能进来）。手动导入三源：Claude Code `~/.claude.json` 的 `mcpServers`（stdio/http 映射，sse 标记"不支持"跳过）、Codex `~/.codex/config.toml` 的 `[mcp_servers.*]`（`enabled=false` 不列出）、OpenCode `~/.config/opencode/opencode.json` 的 `mcp` 段（local/remote 映射）；冲突逐个覆盖/跳过。patch 文件解析失败（如含无法处理的语法）时页面降级为只读并提示手工编辑。
 - `#/remote` **Remote.svelte**：远程访问。状态取 `get_remote_status` 快照并订阅 `remote-status` 事件；Up 态显示二维码（`get_remote_qr` 返回 SVG）与完整链接，链接变化（隧道重连换域名）自动重取二维码；开关按钮按当前 phase 调 `start_remote` / `stop_remote`。
 
 窗口行为：
 
 - 主窗口 `main`：**关窗行为可配置**（settings.json 的 `close_behavior`）：默认 `background` = 隐藏到托盘（`CloseRequested` 时 `prevent_close` + `hide`），`quit` = 走托盘"退出"同一流程直接退出程序；托盘"打开主界面"、**左键单击托盘图标**（`on_tray_icon_event` 的 Left/Up；`show_menu_on_left_click(false)`，菜单改走右键）或二次启动（单实例插件）时 `show` + `unminimize` + `set_focus`——窗口只是隐藏未销毁，位置保持隐藏前状态。
-- 诊断窗口 `diagnostics`、设置窗口 `settings`、技能窗口 `skills`、插件窗口 `plugins`、MCP 窗口 `mcp`、远程访问窗口 `remote`：托盘菜单按需创建，**关窗 = 销毁**，下次再建。**创建即按壳当前解析主题铺底（tray.rs `theme_bootstrap`）**：`background_color` 给 WebView2 预绘制底色（深 `#0f1115`/浅 `#f5f6f8`，与 app.css 两主题的 `--bg` 一致），`initialization_script` 在首个绘制帧前写死 `data-theme` 与 `color-scheme`——否则 `visible(false)` + `on_page_load` 才显示也救不了"系统浅色 + dsh 深色"组合：app.css 首帧按系统色兜底（`@media prefers-color-scheme: light` 的浅色变量分支），页面 JS 置 `data-theme` 之前整页白几秒（插件管理页实踩）。主窗口不挂这个初始化脚本（它是远程 dsh UI，主题归 dsh 自己管）。
+- 诊断窗口 `diagnostics`、设置窗口 `settings`、技能窗口 `skills`、MCP 窗口 `mcp`、远程访问窗口 `remote`：托盘菜单按需创建，**关窗 = 销毁**，下次再建。**创建即按壳当前解析主题铺底（tray.rs `theme_bootstrap`）**：`background_color` 给 WebView2 预绘制底色（深 `#0f1115`/浅 `#f5f6f8`，与 app.css 两主题的 `--bg` 一致），`initialization_script` 在首个绘制帧前写死 `data-theme` 与 `color-scheme`——否则 `visible(false)` + `on_page_load` 才显示也救不了"系统浅色 + dsh 深色"组合：app.css 首帧按系统色兜底（`@media prefers-color-scheme: light` 的浅色变量分支），页面 JS 置 `data-theme` 之前整页白几秒（插件管理页实踩）。主窗口不挂这个初始化脚本（它是远程 dsh UI，主题归 dsh 自己管）。
 - 托盘"退出"：先 `stop()` 远程访问（杀 cloudflared 进程树 + 关停鉴权代理，链接即刻失效），再 `stop()` dsh，等 1.5s 让监督循环杀完进程树，最后 `exit(0)`。
 - 导航到远程 URL 后窗口标题被 dsh 的 `document.title` 覆盖——**外部脚本不要按标题找窗口**（按 PID + 类名，见 `scripts/shot-window.ps1`）。
 - **首次启动居中**：主窗口（setup 里 builder `.center()`，tauri.conf `windows` 已空）与托盘按需创建的五个窗口都以屏幕居中为默认位置；window-state 插件的 restore 在 window_created 时排队、早于首个可见帧执行，有记忆几何时覆盖居中默认值——首次启动居中、之后按上次位置，居中默认不会闪一帧再跳变（verify-no-size-flash.ps1 探针断言首个可见帧即记忆几何）。
@@ -393,24 +392,18 @@ scripts/fetch-runtime.ps1
 - 4 个命令（check_update/download_update/install_update/open_update_page）走既有 ACL 三处同步（build.rs/capabilities/default.json；dsh-remote 不开）；未引入 opener 插件——`open_update_page` 用 rundll32 `FileProtocolHandler`（GUI 子系统不闪控制台），`install_update` 校验路径以 `_x64-setup.exe` 结尾后 spawn，随后走 `quit_app` 让本进程先行退出（安装器是本进程子进程，旧版钩子的 `taskkill /T` 会连它一起杀；本进程先死，钩子杀树即成空操作），用户在向导里完成覆盖安装
 - 启动时检查（开关开启时）在 setup 末尾 spawn：有新版弹 toast 指向其它设置页，失败只记 events.log
 - 单元测试只覆盖纯函数（版本解析/比较、资产选择、响应反序列化容错）；真实网络链路不进自动化，手动验收：其它设置 → 手动更新 → 进度条 → 立即安装
-## 18. 插件管理（plugins.rs）
+## 18. 插件操作执行层（plugins.rs；面板已退役）
 
-dsh 的"插件"= 声明了 `dsh.bundle` 的 npm 包（cordis bundle，装进 profile 后作为层加载，UI 插件出现在 `/plugins/<id>/client.js`）。装/卸/更新**全部走 dsh 官方 `plugin` 子命令**（`node bin.js plugin --profile web <pnpm args>`）：profile 首次使用时由上游初始化，`pnpm add/remove/update` 在 `<dsh-home>/profiles/web/` 里跑完，上游按**安装态**对账 `dsh.profile.bundles` 层列表（解析到声明 `dsh.bundle` 的包就入层栈，被移除或新版丢声明的就踢出）。壳**不自己写 bundles**——对账逻辑归上游，跟版只动 upstream.rs 常量 + 契约测试。
+dsh 的"插件"= 声明了 `dsh.bundle` 的 npm 包（cordis bundle，装进 profile 后作为层加载）。**壳的插件管理面板（Plugins.svelte + 6 个 Tauri 命令）已随 0.5.21 移除**——dsh 0.2.0 自带插件管理页（安装/配置/启停/运行时卸载，支持官方源/镜像/自定义源），壳面板成为重复维护面，按"上游接管即退役"惯例删除（三处命令同步、capabilities、托盘项、按需窗口、前端页面、i18n 串一并清理；用户装插件走 dsh 自己的插件页）。
 
-**pnpm 壳内置**（`dsh plugin` 内部是 `spawnSync("pnpm", ...)`，Windows 上带 `shell: true` 走 cmd.exe 解析）：fetch-runtime.ps1 从 npm registry 下载 pnpm tarball，整包保留为 `<runtime>/pnpm/`（`bin/pnpm.cjs` → `./pnpm.mjs` → `../dist/pnpm.mjs`，dist 是 14MB standalone 全量 bundle，**不能摊平**），同时生成 `pnpm.cmd` 包装（调同目录 node.exe 跑 `pnpm\bin\pnpm.cjs`）——Windows 按 PATHEXT 只认 .exe/.cmd/.bat，没有 .cmd 包装 dsh 解析不到 pnpm。壳侧 spawn 时把 runtime 目录**前置到 PATH**（`.env("PATH", ...)` 全量保留原 PATH），dsh 内部即可解析到内置 pnpm，不污染用户环境。⚠️ 开发机测试时别用 Git Bash 手工验证 spawnSync 解析——msys 会把 `H:\...` 路径改写成 `H;C:\...` 伪失败；集成测试（cargo test，原生进程环境）是权威验证。
+plugins.rs 保留的只剩 **preseed 播种的执行层**（`preseed.rs` 用它跑官方子命令，marker 语义见 preseed）：
 
-**命令与数据流**（6 个，PluginsHome 状态托管 node_exe/dsh_bin/home/pnpm_dir，与 DshProcess 同源路径）：
+- `run_plugin_op`：`node bin.js plugin --profile web <args>`，DSH_HOME 注入、PATH 前置（dsh 内部 `spawnSync("pnpm")` 才能解析到壳内置 pnpm）、无 shell（参数直接走 argv，杜绝注入）、`configure_child_command`（CREATE_NO_WINDOW 防闪控制台）、spawn 后 `register_child` 挂全局 Job Object（壳被杀连带回收，防孤儿）；**stdout/stderr 必须显式 pipe**——tokio 的 spawn 默认继承父进程 stdio，`wait_with_output` 只读管道句柄，不接管道则 output 恒为空；输出合并截断 200KB。`validate_spec` 拦截空/超长/`-` 开头（防参数注入）。`busy` Mutex 串行锁防并发写 profile。
+- `install_plugin_impl` / `uninstall_plugin_impl` / `update_plugins_impl`：`add/remove/update` 动词封装（0.2.0 起 dsh 在 add 前自行跑 `pnpm view` 元数据探测、对 pnpm 参数逐个加引号，旧动词仍兼容——`tests/plugins_integration.rs` 的断言按引号剥离匹配）。
 
-- `get_plugin_status`：pnpm 就绪态（`pnpm.cmd` + `pnpm\bin\pnpm.cjs` 都存在）+ `node pnpm.cjs --version` 实测版本 + profile 是否已初始化（`profiles/web/package.json` 存在）
-- `list_plugins`：读清单 `dependencies`（版本）与 `dsh.profile.bundles`（标"插件"徽章，其余标"依赖"）；文件缺失 → 空列表；BOM 容忍；解析失败显式报错
-- `search_plugins(q)`：npm registry search API（`registry.npmjs.org/-/v1/search`，reqwest 带 UA；外网走系统代理——与回环的 no_proxy 相反，同 update.rs 约定）；结果与已装列表交叉标"已安装"；查询 <2 字符直接返回空
-- `install_plugin(spec)` / `uninstall_plugin(name)` / `update_plugins()`：`run_plugin_op` 统一执行——`node bin.js plugin --profile web <args>`，DSH_HOME 注入、PATH 前置、无 shell（参数直接走 argv，杜绝注入）、`configure_child_command`（CREATE_NO_WINDOW 防闪控制台）、spawn 后 `register_child` 挂全局 Job Object（壳被杀连带回收，防孤儿）；**stdout/stderr 必须显式 pipe**——tokio 的 spawn 默认继承父进程 stdio，`wait_with_output` 只读管道句柄，不接管道则 output 恒为空（前端"看下方输出"永远没内容，0.2.0 实踩）；输出 stdout+stderr 合并截断 200KB 返回。`validate_spec` 拦截空/超长/`-` 开头（防参数注入）。`busy` Mutex 串行锁：同一时刻只允许一个操作（try_lock 失败报"进行中"），防并发写 profile。
+**pnpm 壳内置**（`dsh plugin` 内部是 `spawnSync("pnpm", ...)`，Windows 上带 `shell: true` 走 cmd.exe 解析）：fetch-runtime.ps1 从 npm registry 下载 pnpm tarball，整包保留为 `<runtime>/pnpm/`（`bin/pnpm.cjs` → `./pnpm.mjs` → `../dist/pnpm.mjs`，dist 是 standalone 全量 bundle，**不能摊平**），同时生成 `pnpm.cmd` 包装（调同目录 node.exe 跑 `pnpmin\pnpm.cjs`）——Windows 按 PATHEXT 只认 .exe/.cmd/.bat，没有 .cmd 包装 dsh 解析不到 pnpm。⚠️ 开发机测试时别用 Git Bash 手工验证 spawnSync 解析——msys 会把 `H:\...` 路径改写成 `H;C:\...` 伪失败；集成测试（cargo test，原生进程环境）是权威验证。
 
-**IPC 契约**：本模块返回前端的结构体（`PluginOpResult`/`PluginStatus`/`PluginRow`）一律 `#[serde(rename_all = "camelCase")]`——前端按 camelCase 读键，漏了 rename 时多词字段（`exit_code`/`pnpm_ready`/`is_bundle`）在前端恒为 `undefined`：`exitCode === 0` 永不成立 → 成功被误报"失败"、pnpm 状态恒显示"缺失"、bundle 徽章恒显示"依赖"（0.2.0 全中）。`ipc_payloads_serialize_camel_case` 锚定测试守门。
-
-**生效方式**：装/卸/更新**没有 MCP 那种 HMR**——新层经 profile manifest 在 web 启动时加载，完成后面板提示"重启 dsh 后生效"，内置"重启 dsh"按钮复用 `restart_dsh` 命令（装多个插件只需最后重启一次）。运行中安装不冲突（Node 模块文件句柄带共享删除标志，pnpm 增删无碍）；若 pnpm 报错引导先重启再重试。
-
-**已知取舍**：registry 搜索请求本身不进自动化测试（同 update.rs 策略，只测解析）；集成测试（`tests/plugins_integration.rs`，无运行时自动 skip）用真实 dsh bin.js + 假 pnpm.cmd 断言 profile 初始化、参数透传、cwd=profile 目录、退出码透传、PATH 注入生效；真实安装链路手动验收（托盘 → 插件管理 → 搜索 → 安装）。契约测试 `probe_plugins_cli` 探测 bin.js 的 `command("plugin")` 与 `requiredOption("--profile <name>")`——上游改版即红。
+**生效方式**：装/卸没有 HMR——新层经 profile manifest 在 web 启动时加载（preseed 播种发生在每次 dsh 启动前，天然生效；用户经 dsh 自己的插件页卸载 /init 后，marker 判定"用户已删"不复活）。契约测试 `probe_plugins_cli` 探测 bin.js 的 `command("plugin")` 与 `requiredOption("--profile <name>")`——上游改版即红。
 
 ## 19. 目录选择器钉 browse（picker.rs）
 
