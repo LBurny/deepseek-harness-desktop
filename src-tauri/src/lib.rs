@@ -212,6 +212,11 @@ pub fn run() {
             // 几何/标题与原 conf 一致；visible(false)+center() 语义不变，window-state
             // 的 restore 仍在创建事件排队、早于首个可见帧（托盘按需窗口同款模式）。
             let download_log = platform.runtime_base_dir().join("events.log");
+            // window.open/带 target=_blank 的锚点外链交系统浏览器：wry 对新窗口请求
+            // 无 handler 默认 SetHandled(true) 吞掉——dsh 网页搜索结果链接、消息里
+            // markdown 外链点了"没反应"的根因。放行 http/https 经 open_url 打开，
+            // WebView2 子窗一律 Deny（壳内永不弹新窗）；scheme 门在 update.rs。
+            let extlink_log = download_log.clone();
             WebviewWindowBuilder::new(&handle, "main", WebviewUrl::App("index.html".into()))
                 .title("DSHDesktop")
                 .inner_size(1100.0, 780.0)
@@ -223,6 +228,21 @@ pub fn run() {
                 // pagebridge.rs 头注
                 .initialization_script(pagebridge::INIT_SCRIPT)
                 .on_download(download::handler(download_log))
+                .on_new_window(move |url, _| {
+                    if update::external_open_allowed(&url) {
+                        let host = url.host_str().unwrap_or("?").to_owned();
+                        match update::open_url(url.as_str()) {
+                            Ok(()) => append_debug_line(
+                                &extlink_log,
+                                &format!("[extlink] 系统浏览器打开 {host}"),
+                            ),
+                            Err(e) => {
+                                append_debug_line(&extlink_log, &format!("[extlink] 打开失败: {e}"))
+                            }
+                        }
+                    }
+                    tauri::webview::NewWindowResponse::Deny
+                })
                 .build()?;
             tray::setup_tray(&handle)?;
             handle.manage(diagnostics::BootstrapInfo::default());

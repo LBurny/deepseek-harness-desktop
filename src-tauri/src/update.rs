@@ -13,7 +13,7 @@
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Url};
 
 const RELEASES_LATEST_API: &str =
     "https://api.github.com/repos/LBurny/deepseek-harness-desktop-releases/releases/latest";
@@ -308,6 +308,14 @@ pub(crate) fn open_url(url: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// 主窗口新窗口请求（dsh UI 的 window.open/_blank 锚点，如网页搜索结果链接、
+/// markdown 外链）是否允许打开。只放行 http/https——javascript:/data:/about:/
+/// file: 等一律拒绝；放行路径也经 NewWindowResponse::Deny 关停 WebView 子窗，
+/// 由系统浏览器接管（壳内不弹新窗，见 lib.rs 的 on_new_window 接线）。
+pub(crate) fn external_open_allowed(url: &Url) -> bool {
+    matches!(url.scheme(), "http" | "https")
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn open_url(url: &str) -> Result<(), String> {
     std::process::Command::new("open")
@@ -366,6 +374,29 @@ pub async fn check_on_launch(app: AppHandle, log: PathBuf) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_open_only_allows_http_https() {
+        let ok = ["https://example.com/paper",
+            "http://example.com/",
+            "https://example.com/a?access_token=SECRET#frag"];
+        for u in ok {
+            let url = Url::parse(u).unwrap();
+            assert!(external_open_allowed(&url), "应放行 {u}");
+        }
+        let bad = [
+            "javascript:alert(1)",
+            "data:text/html,<script>x</script>",
+            "file:///C:/Windows/win.ini",
+            "about:blank",
+            "ftp://example.com/f",
+            "dshdesktop://open",
+        ];
+        for u in bad {
+            let url = Url::parse(u).unwrap();
+            assert!(!external_open_allowed(&url), "应拒绝 {u}");
+        }
+    }
 
     #[test]
     fn parse_version_accepts_common_shapes() {
