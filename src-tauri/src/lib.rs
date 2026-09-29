@@ -500,6 +500,24 @@ pub fn run() {
                     &format!("oiacache: persist apps -> {oiacache_outcome:?}"),
                 );
             }
+            // pnpm store 迁移自愈：profile 的 node_modules 链接在创建时的 store，
+            // 用户全局 storeDir 变更后内置 pnpm 解析到新 store，任何装/卸/更新都被
+            // ERR_PNPM_UNEXPECTED_STORE 拒绝（0.5.21 用户实锤：store 迁 F: 后 dsh
+            // 插件页装包全挂）。自愈 = rename 备用 → 内置 pnpm install 按清单重链 →
+            // 成功删备份 / 失败回滚 rename。任何结果只落 events.log 不阻断启动；
+            // 必须在 preseed 之前（新插件的 add 同样会被旧 store 拒）。
+            let plugins_home = plugins::PluginsHome::new(
+                paths.node_exe.clone(),
+                paths.dsh_bin.clone(),
+                paths.home.clone(),
+            );
+            let store_heal = plugins::heal_profile_store(&plugins_home);
+            if !matches!(
+                store_heal,
+                plugins::StoreHealOutcome::Matched | plugins::StoreHealOutcome::NoProfile
+            ) {
+                append_debug_line(&debug_log, &format!("pnpm store heal: {store_heal:?}"));
+            }
             // 预安装插件播种（/init 命令等）：随包插件首启种入 profile 并经官方
             // `dsh plugin add` 挂层；用户在插件面板删除后不复活（preseed.rs 头注）。
             // 必须在 spawn_supervised 之前，dsh 首次启动即挂载；失败只记 events.log。
@@ -510,12 +528,7 @@ pub fn run() {
                 .ok()
                 .map(|d| runtime::strip_verbatim(&d).join("preseed-plugins"));
             if let Some(src) = preseed_src {
-                let seed_home = plugins::PluginsHome::new(
-                    paths.node_exe.clone(),
-                    paths.dsh_bin.clone(),
-                    paths.home.clone(),
-                );
-                match preseed::seed_preinstalled_plugins(&seed_home, &src) {
+                match preseed::seed_preinstalled_plugins(&plugins_home, &src) {
                     Ok(report) if !report.is_quiet() => append_debug_line(
                         &debug_log,
                         &format!("preseed: plugins -> {report:?}"),

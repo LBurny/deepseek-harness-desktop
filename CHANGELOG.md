@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **dsh 插件页安装/更新插件报 `ERR_PNPM_UNEXPECTED_STORE`，重启无效**（0.5.21 用户装 dshmarket 实锤）。根因：profile 的 node_modules 链接在**创建时**的 pnpm store（`node_modules/.modules.yaml` 记录 storeDir），而内置 pnpm 每次按**用户全局配置**解析 store——用户把全局 store 迁盘（本机 9/21 迁 F:）或 pnpm 改默认路径后两者漂移，对旧链 node_modules 的一切写操作被 pnpm 拒绝，且没有任何壳侧出口。修复：`plugins.rs::heal_profile_store` 每次 spawn 前自愈——`.modules.yaml` 的 storeDir 与 `pnpm store path` 实测不一致时，rename node_modules 备用 → 内置 `pnpm install` 按清单+lockfile 从新 store 重链（缺的包走网络）→ 成功删备份；install 失败/5 分钟超时回滚 rename（node_modules 原样保留，dsh 照常可跑，不劣化现状）。结果只落 events.log。回归：`tests/plugins_integration.rs::store_migration_heal_flows`（一致=Matched 不动作 / 迁移=Healed 且重链记录新 storeDir / install 失败=RolledBack 且迁移前 node_modules 原样还原 / 无 node_modules=NoProfile；假 pnpm.cjs 升级为参数感知——`store path` 回放 store.txt、`install` 合成 node_modules 并如实记录 storeDir）
+- **手机远程隔一阵就"断一下"**（events.log 实锤：`/plugins/events` SSE 每 88~97s 被掐一次、一周 278 条 "stream canceled by remote"）。根因：Cloudflare 边缘对静默长连接有约 100s 空闲斩杀窗口，quick tunnel 两端的 TCP 静默即被回收——SSE 与 WS remote.mux（手机端主数据通道）同窗口受害。对策为**静默触发式保活**（只在通道静默满 30s 发一帧，活跃时零开销零行为变化）：①WS 桥接下行循环加 `select!` 保活臂，静默 30s 向浏览器发空 Ping——浏览器协议层自动回 Pong，反向帧顺带把隧道上行方向也焐热；②SSE 响应（`text/event-stream`，按主类型匹配、容忍 charset 参数与大小写）包一层 `sse_keepalive_stream`，上游静默 30s 注入 `: keepalive\n\n` 注释帧（SSE 规范内合法，EventSource 客户端不可见）。实现：`Keepalive` 配置结构（ws_idle_ping/sse_idle_heartbeat 默认各 30s）经 `spawn_proxy_with_keepalive` 注入（旧 `spawn_proxy` 签名不变、委托 Default，测试可改小）；forward()/forward_streaming() 公共尾提取 `passthrough_response`（gzip/改写分支照旧提前返回，控制流不变）。回归：`tests/remote_proxy.rs` 新增四条——`ws_bridge_pings_client_when_dsh_silent`（静默期 Ping 如期到达、无杂帧）/`ws_bridge_no_ping_while_dsh_active`（活跃期零 Ping）/`sse_response_gets_heartbeat_when_upstream_silent`（心跳注入且数据帧原样先行、流保持开放）/`non_sse_response_gets_no_heartbeat`（非 SSE 响应体逐字节不变）；假 dsh mux_socket 改为容忍控制帧（浏览器的自动 Pong 会流向上游——真 dsh 本就容忍，notify/mux.rs 的壳侧客户端一直向它发 Ping）
+- **隧道监督连续 5 次失败即永久放弃，必须手动重开远程**。旧模型 spawn 连挂 5 次（指数退避 500ms→30s 封顶，全程约两分钟）即置 Failed 终态躺平——cloudflared 冷装慢或网络抖动稍长就再无自愈机会。改为**降级模型**：5 次快速退避后 Failed 状态照常对用户可见，但监督循环转入 5 分钟一次的无限慢速重试（`RetryPolicy::slow_retry`），任一次成功即经既有 `failures = 0` 复位回正常监督；停止语义不变（慢速等待同样即时响应 stop）。实现：`RetryPolicy` 配置结构（max_failures/initial_backoff/max_backoff/up_timeout/slow_retry，默认 5/500ms/30s/60s/300s）经 `spawn_supervised_with_policy`/`adopt_with_policy` 注入（旧签名不变、委托 Default）。回归：`tests/remote_tunnel.rs` 新增 `supervision_degrades_to_slow_retry_instead_of_giving_up`（Failed 如期出现、慢速重试仍持续 spawn、慢速等待中 stop 立即生效）与 `supervision_recovers_from_slow_retry_on_up`（Failed→Up 后不再回 Failed）；新 fixture `fake-cloudflared-die.cjs`/`fake-cloudflared-flaky.cjs`（marker 文件驱动死亡延迟/失败次数/尝试计数）
+
+### Changed
+
+- **内嵌 cloudflared 2026.8.2 → 2026.9.3**（fetch-runtime.ps1 钉版默认值跟随；二进制按官方 release 页 checksums 校验 SHA256）。部署语义不变：`session.rs::ensure_tunnel_copy` 按"缺失或尺寸不符才刷新"更新常驻副本——新二进制在下次隧道冷启动生效，在跑隧道不受惊扰
 ## [0.5.21] - 2026-09-29
 
 ### Removed

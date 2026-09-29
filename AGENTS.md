@@ -55,7 +55,8 @@ src-tauri/src/
                     兼做设置存储通用条目读写（0.2.0 起 theme/i18n/welcome 复用）
   plugins.rs        插件操作执行层，只服务 preseed 播种：装/卸走官方 dsh plugin 子命令
                     （壳不自己写 profile）；pnpm 壳内置（pnpm.cmd 包装）；串行锁；
-                    stdout/stderr 显式 pipe。壳的插件面板+Tauri 命令已随 0.5.21 移除
+                    stdout/stderr 显式 pipe；**spawn 前 pnpm store 迁移自愈**
+                    （heal_profile_store，见坑区）。壳的插件面板+Tauri 命令已随 0.5.21 移除
   preseed.rs        预安装插件播种（bundle 形态、marker 语义同 skills；dev 下静默无操作）
   picker.rs         目录选择器钉 browse：启动幂等写 cordis.patch.yml 官方 overlay
   pickerpatch.rs    browse 选择器运行时补丁（签名门控+marker 幂等原地改写；客户端签名漂移
@@ -74,9 +75,12 @@ src-tauri/src/
                     轮换 token）；session.rs=remote-session.json（含 token，绝不落 events.log）；
                     proxy.rs=token 门岗反向代理（401 重放整读体 64MiB 上限、流式上传旁路、
                     门岗 cookie 30 天长效、HTML 注入 mobile/splash、≥4KB 文本资产缓冲 gzip
-                    ——dsh 不压缩任何响应）；project.rs=手机端"项目"标签只读路由（前缀禁锢）；
+                    ——dsh 不压缩任何响应；WS 静默 30s 代理自发 Ping + SSE 静默注入
+                    `: keepalive` 注释，静默触发式，对策 Cloudflare ~100s 空闲斩杀）；
+                    project.rs=手机端"项目"标签只读路由（前缀禁锢）；
                     tunnel.rs=cloudflared quick tunnel 监督（persistent 常驻**刻意不挂
-                    Job Object**，死了不连带回收；adopt() 收养跨重启隧道）
+                    Job Object**，死了不连带回收；adopt() 收养跨重启隧道；5 次快速失败
+                    降级 5min 慢速无限重试不终态放弃，Up 即复位）
 src/                七个本地 Svelte 页面 + App.svelte(hash 路由) + i18n.ts
 src-tauri/windows/  nsis-hooks.nsh 安装/卸载钩子（杀树/等锁/清扫，细节见坑区）
 scripts/            follow-upstream.ps1(一键跟版) fetch-runtime.ps1(抓运行时) prune-runtime
@@ -148,6 +152,7 @@ settings.yaml 被上游废除为一次性遗留导入通道，壳写它会每次
 - **reqwest 在系统代理下会劫持 127.0.0.1**：凡访问回环必须 `.no_proxy()`，否则被代理接管表现为假 502/挂起。
 - **手机端 UI 检查七步法（临时实例 + MCP 浏览器）**：mobile.css/js 只由代理注入，直连页面≠手机所见；真走代理要从托盘读链接（用户用机期间别动 CUA）。日常验证=临时裸 dsh 实例（**副本运行时**+临时 DSH_HOME+stdout 抓 token，别原地跑防自更新动钉版树）→ 播种工作区（拷本机 `storages/workspace.json`，别手搓 schema）→ MCP 浏览器 390px → 静态服务跨源 fetch 注入改后的 css/js → `browser_evaluate` 量 computed style/祖先链，断点行为 resize 扫 500/700/720，收尾按端口杀进程删临时 home。输入框是 **contenteditable 不是 textarea**；无 API key 可真跑一轮（匿名通道）拿真数据。
 - **0.1.2 token/cookie 时序四坑**：①"端口通了"≠能登录（就绪行晚于绑定，wait_token 门控）；②换端口 cookie 全失效——代理 401 清缓存重换重放一次；③WS upgrade 是独立桥接路径，cookie 注入最易漏；④**token 按进程轮换，spawn 前必须清缓存**。假 dsh（tests/support）全仿真。
+- **Cloudflare 对静默长连接有约 100s 空闲斩杀窗口（0.5.22 修）**：events.log 实测 dsh 的 `/plugins/events`（SSE 无心跳）每 88~97s 被边缘掐断一次（一周 278 次 `stream canceled by remote`），主数据通道 remote.mux WS 同窗口——手机放着不动两分钟就"断一下"。对策在代理层、**静默触发式**（通道活跃时一个保活帧都不发）：WS 桥接 dsh→浏览器静默 30s 代理自发 Ping（浏览器协议层自动回 Pong，隧道双向有字节流）；任意 `text/event-stream` 响应上游静默 30s 注入 `: keepalive\n\n` 注释行（SSE 规范内注释，EventSource 忽略，dsh 零改动）。保活间隔经 `Keepalive`/`spawn_proxy_with_keepalive` 注入（生产 30s，测试短间隔）；排障看 events.log 是否再现 `stream canceled`。
 - **dsh-auth cookie 按进程累积 → 431（0.5.11）**：每进程新名 cookie（30 天）不分端口，WebView2 罐子只进不出；攒 ~66 个 + 插件组合 URL 超 Node 16KB 头上限 → 431 → "Failed to load plugins"，重启不消。对策：Ready 导航前 `prune_stale_dsh_cookies`（只删 dsh-auth-*，async 任务里跑）。排障：debug-cdp marker → CDP :9222 看 Network.loadingFailed；cookie 加密绑 WebView2 应用（拷给 Edge 解不开=假阴性）；dsh 静态资产确实无门，别往"cookie 校验"查。
 - **主窗口观测桥三件套（0.5.11）**：pagebridge 错误捕获（document-start、绕 CSP、限流/截断/脱敏）→ events.log；#root 心跳 90s 封顶 → Ready 导航 30s 无心跳自愈一次（清 cookie+带 token 重导航，one-shot）；debug-cdp 开关。页面桥命令从远程源调用只写日志，再放行新命令先过安全审查再改锚定测试。
 - **dsh 就绪行会被 MCP 插件加载阻塞**：dsh-mcp-client apply() 无条件 await connection.ready，`npx 裸名/@latest` 每次启动联网解析、上游发版后首次冷装 >2-3min。壳对策：wait_token 见 npm `will be installed` 切长预算、splash 换文案、Ready 落耗时分解。MCP 装什么是用户自由，壳只做"不杀错、可感知、可诊断"。
@@ -168,6 +173,8 @@ settings.yaml 被上游废除为一次性遗留导入通道，壳写它会每次
 - **手机端会话头部标题被挤没、与右侧按钮重叠（0.5.18 修）**：上游头部行 `titleRow` 里 `headerUtilities`/`headerCorner` 都是 `flex:none`、`crumbs`（会话名面包屑）是 `min-width:0`，且头部无任何窄屏适配——390px 实测（临时实例 + Playwright）标题被挤到 **0 宽**（会话名完全不可见），叠加"模式"药丸（68px）与"N 个后台任务"药丸（101px）后 `headerActions` 内容 177px 撑破自身盒子、与右侧固定件**重叠 9px**。对策都在 `mobile.css` 的 ≤700px 段（只动弹性参数、不藏控件）：三者各留 `min(px, vw)` 下限并允许收缩；"模式"药丸改 `inline-block`（文案是**匿名弹性项**，容器上的 text-overflow 对它无效——原生超宽是硬裁而非省略号），其图标随之转回行内（原生 `display:block` 会另起一行）；"后台任务"计数补省略号、触发器宽度跟住 root；头部内边距 20/28→12/12。320/360/375/390/414/500/600/700/720 九档实测行内间隙恒 12px、行溢出 0、头部高 76px，≥600px 三件恢复原生完整形态。**选择器必须限定在 `header[class*="_header"]` 之下**——`[class*="_headerActions"]` 裸匹配会命中侧栏的 `bhn1Oq_headerActions`（div，不在 `<header>` 内）；槽位贡献外层是 `display:contents` 包装，`min-width` 得写到包装层下的直接子代上（写在包装层是空操作）。
 - **dsh 端口必须跨启动稳定，否则客户端偏好全丢**：上游把若干 UI 偏好存在浏览器 localStorage（`dsh-client-store` 的 `persist`，无服务端副本）——会话头部"打开方式"选择（`dsh.open-in-app.choice`，VS Code / 文件资源管理器）、会话宽度 `dsh.conversation.contentWidth`、当前会话 `dsh.sessions.current`、轨迹时长 `dsh.trajectory.duration`；而 localStorage 按 **origin（含端口）** 隔离，早先每次 spawn 都 `free_port()` 随机取端口 = 每次全新源站 → 用户选的 VS Code 重启就变回文件资源管理器（0.5.14 修，实锤：WebView2 的 Local Storage leveldb 里同库并存 7 个 `http://127.0.0.1:<port>` 源站，每个各存各的）。对策 = port.rs 记忆端口：Ready 时把端口写进壳数据目录 `dsh-port.txt`，下次启动探活通过就复用（2s 重试预算；被占则换新端口并在 Ready 后改写记忆，一轮收敛；同一轮重试回避它防"在旧端口反复撞"）。
 - **pnpm store 在 `F:\Code\pnpm-store`（2026-09-21 从 `H:\.pnpm-store` 迁出）**：配置在 user 级 `%LOCALAPPDATA%\pnpm\config\config.yaml` 的 `storeDir`，`pnpm store path` 应回 `F:\Code\pnpm-store\v11`，项目 `node_modules/.modules.yaml` 的 `storeDir` 也应一致。三条连带坑：①**跨盘 = copy 模式**——项目盘与 store 不同盘时 pnpm 无法硬链接，安装会打印 "Packages are copied from the content-addressable store to the virtual store"，H: 上的项目（含本仓）`node_modules` 是真实副本，装得更慢更占空间；想要硬链接收益就得让 store 与项目同盘。②**重装时会删残 node_modules**——pnpm 判定需要重装（storeDir / lockfile 变了等）时先删 `node_modules/.pnpm`、再删顶层 symlink，此时链接已断、它删不动 → `ERR_PNPM_PACKAGE_MANAGER_REMOVE_MODULES_DIR … 拒绝访问 (os error 5)` 退出，留下只剩几个断链 symlink 的 node_modules（两次把 `pnpm release` 挡在执行之前）。修法：MSYS `rm -rf node_modules/*`（走 lstat，能删断链）后 `pnpm install --frozen-lockfile`。③**别用 robocopy 搬 store**——robocopy 不认硬链接，把共享块实体化成独立副本（实测源库 7GB 唯一数据 → 目标 70GB / 几十万文件 / 8.8MB·s⁻¹）。
+
+- **pnpm store 迁移会永久卡死插件安装（0.5.22 修）**：profile 的 `node_modules` 链接在**创建时**的 store（`node_modules/.modules.yaml` 记录 storeDir），而内置 pnpm 每次运行按**用户全局配置**解析 store——两者一经漂移（用户迁 store 盘、pnpm 升级改默认路径），对旧链 node_modules 的任何 install/update 都被 `ERR_PNPM_UNEXPECTED_STORE` 拒绝，dsh 自带插件页装包全挂且重启无效（0.5.21 实锤：9/21 store 迁 F: 后 9/4 建的 profile 首装即报错）。自愈 = `plugins.rs::heal_profile_store` 每次 spawn 前跑：读 `.modules.yaml` 的 storeDir vs `pnpm store path` 实测值，不一致则 rename node_modules 备用 → 内置 `pnpm install`（按清单+lockfile 从新 store 重链，缺的包走网络下载）→ 成功删备份；install 失败/超时（5 分钟预算）回滚 rename，node_modules 原样保留（dsh 照常可跑，只是装包维持报错，现状不劣化）。任何结果只落 events.log（`pnpm store heal: ...`）。**别读 `profiles/web/cordis.yml` 找设置**——见上面设置存储条；此自愈与 locks.rs 同属"环境自愈"面，上游若哪天自己处理 store 迁移则按惯例退役。
 - **`src-tauri/target` 会无上限长大**（2026-09-21 实测 182GB / 34 万文件，已清）：可删 `debug/` 全部 + release 下 `deps`/`build`/`incremental`/`.fingerprint`/`_up_`/陈旧 `*.lib`/`*.rlib` + 打包 staging（`runtime`/`resources`/`sounds`/`icons`/`nsis`/`preseed-plugins`，都是 bundler 从 `src-tauri/` 拷出来的副本）；**必须保留 `target/release/bundle/nsis/`**——那是历版安装包原件档案库（远端缺资产时靠它回填；核对规则见 CHANGELOG 记录），且发布门禁缓存要求最新一版的 exe 在场。**跑 `pnpm tauri build` 前先把最新一版的 exe 备份出仓**——打包会就地覆盖同名 exe，而本地重编件与发布原件并**不是同一字节**（2026-09-21 实测 0.5.17：重建 66,308,227B / `210ba7d2…` vs 线上 66,307,686B / `ee8725…`，PE 时间戳相同但压缩载荷整体不同，NSIS 打包不可字节复现），覆盖后原件档案即丢失、随件的 `.sha256` 也跟着失真。核对线上真值用 `api.github.com/.../releases/latest` 的资产 `digest` 字段（比读 sidecar 可靠）。删后下次 `cargo test` / `pnpm tauri build` 全量重编一次（2026-09-21 实测 debug 档 2m12s，release 档更久）。清 staging 时注意里面文件可能带只读属性、并可能混进过 `windows-x64-fresh` 这类多余副本：MSYS `rm` 会 Permission denied，改 PowerShell（先清 ReadOnly 再 `Remove-Item -Recurse -Force`）。**清理落点统一是仓根 `.trash/`**（2026-09-21 起）：可删但先别删的一律移进去，别直接删——它被 `.gitignore` 挡住（`git status` 看不见、`git add -A` 不收，`release.ps1` 的工作区干净判定与镜像/CI 都不受影响），内容清单与清空命令见 `.trash/README.md`。
 
 ## 测试基线
