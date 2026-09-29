@@ -881,6 +881,39 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
             "上游改了头部结构名：mobile.css 头部规则整组静默失效、手机端退回原生挤压形态（390px 实测标题被挤到 0 宽、模式药丸与右侧按钮重叠 9px），改 upstream::SESSION_HEADER_ROW_NEEDLES 与 mobile.css 的选择器",
         );
     }
+    // mobile.css 子智能体药丸修复曾依赖 CatalogDropdown 的 aria-haspopup=tree
+    // 语义锚（0.5.18~0.5.22），0.5.23 改滑动条机制后壳不再消费该锚、探针退役。
+    // 下面的 .count 死引用哨兵与壳是否消费无关：它盯上游那个已知缺陷的修复，
+    // 自定位（在 subagent 包内 tree_find `module_css_default.count`，不引常量）。
+    let subagent = nm.join("@deepseek-ai").join("dsh-client-ui-subagent");
+    // 上游 .count 死引用哨兵（0.2.0 已知缺陷）：渲染引用 module_css_default.count
+    // 但 SubagentHeaderLineage 的 key 表没有 "count" 键——计数 label 因此是无类名
+    // 裸 span（0.5.22 实拍的逐字竖排六行即此）。0.5.23 起壳的滑动条方案不再
+    // 消费任何子智能体药丸锚（药丸天然宽度交还上游、溢出由条收纳），本哨兵
+    // 纯粹盯上游缺陷本身：上游补上该键或改了渲染引用，转红只需更新 upstream.rs
+    // 段注（死引用描述过期）并把本哨兵退役，mobile.css 无需任何改动。
+    if let Some(path) = tree_find(&subagent, "module_css_default.count".as_bytes(), Some("client.js"), 4 << 20, 4) {
+        let text = fs::read_to_string(&path).unwrap_or_default();
+        let map_start = text.find("SubagentHeaderLineage_module_css_default = {");
+        let map_end = map_start.and_then(|i| text[i..].find("};").map(|e| i + e));
+        let map_has_count = map_start
+            .zip(map_end)
+            .map(|(s, e)| text[s..e].contains("\"count\""))
+            .unwrap_or(true); // 找不到 key 表=结构大改，按未修处理让哨兵保持绿
+        c.check(
+            "子智能体计数 label 仍是无类名裸 span（.count 死引用未修）",
+            !map_has_count,
+            format!("map 内出现 \"count\" 键？{map_has_count}（path={path:?}）"),
+            "上游补上了 .count 类：计数 label 恢复类名（0.5.22 竖排症状的上游根因消除）。壳的滑动条方案不受影响、mobile.css 无需改动——更新 upstream.rs 段注（死引用描述已过期）并把本哨兵退役",
+        );
+    } else {
+        c.check(
+            "子智能体药丸渲染仍引用 .count（死引用哨兵的定位前提）",
+            false,
+            "subagent 包 client.js 找不到 module_css_default.count",
+            "上游改了渲染（不再引用 .count）：死引用前提消失。壳的滑动条方案不消费该锚、mobile.css 无需改动——查包内新事实、更新 upstream.rs 段注并把本哨兵退役",
+        );
+    }
 }
 
 /// 预装 /init 插件的 UI 折叠锚点（preseed 插件靠 source.kind="plugin"+notice

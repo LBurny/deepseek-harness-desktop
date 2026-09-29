@@ -432,14 +432,21 @@ fn context_meter_relocation_rules() {
     );
 }
 
-/// 会话头部挤压修复的规则锚定（0.5.18 修）：上游头部行里 `headerUtilities`/
-/// `headerCorner` 都是 flex:none、`crumbs` 是 min-width:0，且头部没有任何窄屏适配——
-/// 390px 实测标题被挤到 **0 宽**（会话名完全不可见），叠上"模式"（68px）与
-/// "N 个后台任务"（101px）药丸后 `headerActions` 内容撑破自身盒子、与右侧固定件
-/// **重叠 9px**。本测试钉住四件事：三条"下限 + 可收缩 + 省略号"规则都在断点内、
-/// 下限随视口退让（min(px, vw)）、模式药丸必须走 `> * >` 限定（同槽位"计划"药丸
-/// 与后台任务菜单行也用同名 `_label`，泛指会误伤）、所有 `_headerActions` 选择器
-/// 必须带 `header[class*="_header"]` 前缀（裸匹配会命中侧栏的 bhn1Oq_headerActions）。
+/// 会话头部挤压修复的规则锚定（0.5.18 首修、0.5.23 改形：标题钉住 + 药丸横向
+/// 滑动条）。上游头部行里 `headerUtilities`/`headerCorner` 都是 flex:none、
+/// `crumbs` 是 min-width:0、上游对头部药丸没有横排窄屏适配；0.2.0 药丸增至四枚
+/// 后任务运行场景又坏（0.5.22 手机实拍：子智能体计数是无类名裸 span，被压缩时
+/// CJK 逐字断行竖排、头部 76→160px、后台任务药丸被顶出屏外）。
+/// 0.5.23 用户裁定用通用机制替代 0.5.18 的逐药丸调下限：`headerActions` 容器
+/// overflow-x:auto 收纳溢出，槽位直接子代（穿透 display:contents 包装，结构锚
+/// `> * > *`）flex:none 保持天然宽度——压缩消失则竖排/折行/重叠在机制上不可能
+/// 发生，上游未来新增药丸自动进条、壳零适配；标题 crumbs 保持弹性 + 下限
+/// min(76px,20vw) 钉在条外。
+/// 本测试钉四组：① 滑动条机制（容器五条声明 + 滚动条双隐藏 + 子代 flex:none）；
+/// ② 头部各段弹性参数（padding / utilities / corner / titleCluster / crumbs）；
+/// ③ 0.5.18 的「模式」label 三连规则与 tree 语义锚、300px tier 均不得复活
+/// （label 规则会重新打穿上游 @container 隐藏）；④ 所有 _headerActions 选择器
+/// 带 header 前缀（裸匹配会命中侧栏 bhn1Oq_headerActions）。
 #[test]
 fn session_header_squeeze_rules() {
     let css = std::fs::read_to_string(
@@ -452,56 +459,77 @@ fn session_header_squeeze_rules() {
     let media = css.find("@media (max-width: 700px)").unwrap();
     let scope = "header[class*=\"_header\"]";
 
-    // 头部行各段的本地名都落在选择器里（与 upstream::SESSION_HEADER_ROW_NEEDLES 对齐）
-    for needle in [
-        "titleCluster",
-        "crumbs",
-        "headerActions",
-        "headerUtilities",
-        "headerCorner",
+    // 取选择器规则块（选择器文本 → 首个 `}` 之间），并断言落在 700px 断点内
+    let block = |sel: &str| -> String {
+        let pos = css
+            .find(sel)
+            .unwrap_or_else(|| panic!("mobile.css 缺选择器 {sel}（头部挤压修复锚点漂移）"));
+        assert!(pos > media, "{sel} 规则须落在 700px 断点内");
+        let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+        css[pos..end].to_string()
+    };
+
+    // ① 药丸滑动条机制（核心）：容器横向滚动收纳溢出——压缩消失则竖排/折行/
+    //    重叠在机制上不可能发生
+    let actions = format!("{scope} [class*=\"_headerActions\"]");
+    let b = block(&actions);
+    for decl in [
+        "overflow-x: auto",
+        "scrollbar-width: none",
+        "overscroll-behavior: contain",
+        "flex: 0 1 auto",
+        "min-width: 0",
     ] {
-        let sel = format!("{scope} [class*=\"_{needle}\"]");
         assert!(
-            css.contains(&sel),
-            "mobile.css 缺选择器 {sel}（头部挤压修复的锚点漂移了）"
+            b.contains(decl),
+            "{actions} 规则块缺 {decl}（药丸滑动条机制不成立）"
         );
     }
+    // 滚动条双隐藏：手机本是 overlay 零占位，桌面远程 Chromium 经典滚动条会把
+    // 头部撑高 3px，一并消掉
+    let bar = format!("{actions}::-webkit-scrollbar");
+    assert!(
+        block(&bar).contains("display: none"),
+        "{bar} 规则块缺 display: none（桌面远程头部会被滚动条撑高）"
+    );
+    // 槽位直接子代（穿透 display:contents 包装）保持天然宽度、不参与压缩
+    let item = format!("{actions} > * > *");
+    assert!(
+        block(&item).contains("flex: none"),
+        "{item} 规则块缺 flex: none（药丸仍会被压缩）"
+    );
 
-    // 三条下限 + 省略号声明（含 vw 退让）
+    // ② 头部各段弹性参数（标题钉住）：标题 crumbs 保持弹性 + 下限钉在条外，
+    //    固定件收缩到贴边
     for (sel, decls) in [
+        (
+            scope.to_string(),
+            vec!["padding: 10px 12px 0 12px"],
+        ),
+        (
+            format!("{scope} [class*=\"_headerUtilities\"]"),
+            vec!["margin-left: 12px"],
+        ),
+        (
+            format!("{scope} [class*=\"_headerCorner\"]"),
+            vec!["margin-left: 4px", "margin-right: 0"],
+        ),
+        (
+            format!("{scope} [class*=\"_titleCluster\"]"),
+            vec!["gap: 8px"],
+        ),
         (
             format!("{scope} [class*=\"_crumbs\"]"),
             vec!["flex: 1 1 auto", "min-width: min(76px, 20vw)"],
         ),
-        (
-            format!("{scope} [class*=\"_headerActions\"] > * > [class*=\"_label\"]"),
-            vec![
-                "display: inline-block",
-                "min-width: min(56px, 14vw)",
-                "text-overflow: ellipsis",
-                "overflow: hidden",
-            ],
-        ),
-        (
-            format!("{scope} [class*=\"_headerActions\"] [class*=\"_count\"]"),
-            vec!["text-overflow: ellipsis"],
-        ),
-        (
-            format!("{scope} [class*=\"_headerActions\"] [class*=\"_trigger\"]"),
-            vec!["max-width: 100%"],
-        ),
     ] {
-        let pos = css
-            .find(&sel)
-            .unwrap_or_else(|| panic!("mobile.css 缺选择器 {sel}（头部又会挤成 0 宽/重叠）"));
-        let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+        let b = block(&sel);
         for decl in decls {
-            assert!(css[pos..end].contains(decl), "{sel} 规则块缺 {decl}");
+            assert!(b.contains(decl), "{sel} 规则块缺 {decl}");
         }
-        assert!(pos > media, "{sel} 规则须落在 700px 断点内");
     }
 
-    // 撞名护栏只针对**选择器**：先把注释剥掉（段注里正当地引用了裸写法做反例）
+    // ③ 剥注释后的护栏（段注里正当地引用裸写法做反例）
     let mut code = String::new();
     let mut rest = css.as_str();
     while let Some(begin) = rest.find("/*") {
@@ -516,14 +544,24 @@ fn session_header_squeeze_rules() {
     }
     code.push_str(rest);
 
-    // 模式药丸只能走 > * > 限定：后台任务/计划药丸弹出菜单的行也用 _label 装命令文本
-    //（QsffPG_label 靠 flex:1 + min-width:0 截断），泛指会把菜单行一起改掉
+    // 0.5.18 的「模式」label 三连规则不得复活：特异性更高会重新打穿上游
+    // @container 窄屏隐藏（0.2.0 实锤，0.5.23 废弃该组）
     assert!(
-        !code.contains("[class*=\"_headerActions\"] [class*=\"_label\"]"),
-        "mobile.css 出现泛指 _headerActions 内所有 _label 的规则——会连后台任务菜单行一起改"
+        !code.contains("[class*=\"_headerActions\"] > * > [class*=\"_label\"]"),
+        "mobile.css 又复活了「模式」label 的 inline-block/下限规则——会重新打穿上游 @container 隐藏，0.5.23 已整体废弃该组"
+    );
+    // tree 语义锚退役：滑动条机制不再依赖 aria-haspopup=tree 定位子智能体药丸
+    assert!(
+        !code.contains(":has(> button[aria-haspopup=\"tree\"])"),
+        "mobile.css 又出现 tree 语义锚——滑动条机制不需要 :has(> button[aria-haspopup=tree])，子智能体专用规则应已退役"
+    );
+    // 300px 容器 tier 已删：滑动条收纳溢出，无需再分档
+    assert!(
+        !code.contains("(width<=300px)"),
+        "mobile.css 又出现 300px 容器 tier——滑动条机制下无需 300px 分档"
     );
 
-    // 撞名护栏：_headerActions 只能带 header[class*="_header"] 前缀（侧栏包
+    // ④ 撞名护栏：_headerActions 只能带 header[class*="_header"] 前缀（侧栏包
     // bhn1Oq_headerActions 是 div、不在 <header> 内，裸匹配会误伤侧栏）
     let needle = "[class*=\"_headerActions\"]";
     let prefix = format!("{scope} ");
