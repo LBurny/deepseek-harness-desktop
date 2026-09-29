@@ -340,6 +340,98 @@ fn composer_stats_row_anchors() {
     );
 }
 
+/// 上下文用量圆环（ContextMeter）的搬移锚定（0.2.0 上游在 composer dock 新增）：
+/// 手机端它单独挂在输入框下方突兀，与统计行同款处理——克隆进信息页、原节点在窄
+/// 断点隐藏。本测试钉四件事：① 隐藏规则用「槽位锚的兄弟 + :has(> dialog 按钮)」
+/// 且落在 700px 断点内；② mobile.js 用槽位锚找药丸并克隆进 data-dshmobile-context；
+/// ③ 克隆件锚在统计行克隆件**之前**落位；④ 护栏：隐藏规则不得裸用
+/// button[aria-haspopup="dialog"]（会误伤 StatsPills 的 TimePill/UsagePill，它们
+/// 同属性），mobile.js 也不得全局裸查该按钮。
+#[test]
+fn context_meter_relocation_rules() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("src").join("remote");
+    let js = std::fs::read_to_string(dir.join("mobile.js")).unwrap();
+    let css = std::fs::read_to_string(dir.join("mobile.css")).unwrap();
+    let media = css.find("@media (max-width: 700px)").unwrap();
+    let slot_attr = "data-slot=\"conversation.composer.dock\"";
+    let slot_sel = format!("[{slot_attr}]");
+    let dialog_btn = "button[aria-haspopup=\"dialog\"]";
+
+    // ① mobile.css：增强生效时隐藏原药丸（槽位锚兄弟 + :has），断点内
+    let hide = format!("html[data-dshmobile-enhanced] {slot_sel} ~ span:has(> {dialog_btn})");
+    let pos = css
+        .find(&hide)
+        .unwrap_or_else(|| panic!("mobile.css 缺隐藏规则 {hide}（圆环药丸留在输入区下方）"));
+    let end = css[pos..].find('}').map(|i| pos + i).unwrap();
+    assert!(css[pos..end].contains("display: none"), "{hide} 规则块缺 display: none");
+    assert!(pos > media, "{hide} 规则须落在 700px 断点内");
+
+    // ② 克隆件排版规则：横向一行、在断点内
+    let layout = "[data-dshmobile-info-body] [data-dshmobile-context]";
+    let lpos = css
+        .find(layout)
+        .unwrap_or_else(|| panic!("mobile.css 缺克隆件排版规则 {layout}"));
+    let lend = css[lpos..].find('}').map(|i| lpos + i).unwrap();
+    for decl in ["display: flex", "align-items: center", "gap: 8px", "margin-bottom: 12px"] {
+        assert!(css[lpos..lend].contains(decl), "{layout} 规则块缺 {decl}");
+    }
+    assert!(lpos > media, "{layout} 规则须落在 700px 断点内");
+
+    // ② mobile.js：用槽位锚找药丸（限定槽位锚的直接兄弟），克隆进 data-dshmobile-context
+    assert!(js.contains("findContextMeter"), "mobile.js 缺 findContextMeter");
+    assert!(
+        js.contains(&format!("querySelector('{slot_sel}')")),
+        "mobile.js 的 findContextMeter 须用 {slot_sel} 定位槽位锚"
+    );
+    assert!(
+        js.contains("data-dshmobile-context"),
+        "mobile.js 缺圆环克隆容器 data-dshmobile-context"
+    );
+
+    // ③ 克隆件锚在统计行克隆件之前（概览读数在明细前）
+    assert!(
+        js.contains("insertBefore(clone, body.querySelector('[data-dshmobile-stats]')"),
+        "mobile.js 的圆环克隆件须 insertBefore 统计行克隆件（排在明细之前）"
+    );
+    assert!(
+        js.contains("clone.setAttribute('data-dshmobile-stats', '')")
+            && js.contains("body.appendChild(clone)"),
+        "mobile.js 的统计行克隆件须 appendChild（落在圆环克隆件之后）"
+    );
+
+    // ④ 护栏只针对**选择器**：先把注释剥掉（段注里正当地引用了裸写法做反例）
+    let mut code = String::new();
+    let mut rest = css.as_str();
+    while let Some(begin) = rest.find("/*") {
+        code.push_str(&rest[..begin]);
+        match rest[begin..].find("*/") {
+            Some(e) => rest = &rest[begin + e + 2..],
+            None => {
+                rest = "";
+                break;
+            }
+        }
+    }
+    code.push_str(rest);
+
+    // 隐藏规则不得裸用 dialog 按钮选择器：每个出现处都必须带槽位锚兄弟限定
+    // （前缀以 " ~ span:has(> " 收尾，闭合括号不在检查窗口内）
+    let guard = format!("{slot_sel} ~ span:has(> ");
+    let mut from = 0;
+    while let Some(i) = code[from..].find(dialog_btn).map(|i| from + i) {
+        assert!(
+            code[..i].ends_with(&guard),
+            "mobile.css 的 {dialog_btn} 选择器缺槽位锚兄弟限定——会误伤 StatsPills 的 TimePill/UsagePill"
+        );
+        from = i + 1;
+    }
+    // mobile.js 同样不得全局裸查 dialog 按钮
+    assert!(
+        !js.contains(&format!("chatRoot.querySelector('{dialog_btn}')")),
+        "mobile.js 出现全局裸查 {dialog_btn}——会命中统计行的 TimePill/UsagePill"
+    );
+}
+
 /// 会话头部挤压修复的规则锚定（0.5.18 修）：上游头部行里 `headerUtilities`/
 /// `headerCorner` 都是 flex:none、`crumbs` 是 min-width:0，且头部没有任何窄屏适配——
 /// 390px 实测标题被挤到 **0 宽**（会话名完全不可见），叠上"模式"（68px）与

@@ -85,6 +85,27 @@ my-plugin/
 
 要配置就用 `config:`，要一行多模块就引用子路径（`name: dsh-hello-plugin/startup`）。行级启停键是 `disabled: true`；`config` 是**整值替换不是深合并**，覆盖别人的行时要把需要的键重述全。
 
+### 3.1 可选：插件在管理页的名字与描述（双语）
+
+插件管理页/内置插件列表里官方插件都有标题和描述，来源是包内 `locale/` 目录（0.2.0 实测，如 `@deepseek-ai/dsh-experimental-auto-review/locale/`）：宿主 `readPluginMeta` 读 `locale/en.json` 同目录下**所有** `.json`（文件名 = 语言 id），取 `meta.title` / `meta.description` 组成语言映射下发，客户端按当前界面语言实时选取（切换即跟随）。没有 locale 目录时只剩包名。三件事缺一不可：
+
+```jsonc
+// package.json 的 exports 必须暴露 locale 与 package.json，
+// 否则宿主按 ESM 解析失败、meta 整体 undefined（0.1.3 前的 /init 即此因）：
+"exports": {
+  ".": "./index.js",
+  "./locale/*.json": "./locale/*.json",
+  "./package.json": "./package.json"
+}
+```
+
+```json
+// locale/zh.json —— locale/en.json 同构（英文文案）；目录里只放语言 json
+{ "meta": { "title": "初始化命令", "description": "一句话描述，管理页卡片正文。" } }
+```
+
+`package.json` 的 `description` 字段只是 en 的回退（且要求 `./package.json` 可解析）；正式文案以 locale 文件为准。活样板：`dsh-command-init` v0.1.3 起。
+
 ## 4. 写插件模块（index.js）
 
 Cordis 的插件契约就三个导出，`/init` 是这个形态的活样板（`src-tauri/resources/preseed-plugins/dsh-command-init/index.js`）：
@@ -242,6 +263,7 @@ handler 不返回结果"这类会让整棵树加载失败的低级错误。前�
 ## 9. 交付前自检
 
 - [ ] 三件套齐全，`package.json` 有 `dsh.bundle.patch` 且 patch 文件存在（树内播种有锚定测试盯着这条）
+- [ ] （可选）要在插件管理页显示双语标题/描述：`locale/{zh,en}.json` 带 `meta.title`/`meta.description`，且 `package.json` exports 暴露 `./locale/*.json` 与 `./package.json`（§3.1）
 - [ ] patch 行的 `name` 与实际包名一致，行 `id` 不与官方行冲突；树内播种时目录名 = 包名
 - [ ] 命令名没被占（§5 那条 grep），`inject` 列的服务名在运行时里真实存在
 - [ ] `plugin-selftest.mjs` 通过（§7 第一级）

@@ -1176,6 +1176,68 @@ fn probe_015_faces(rt: &Path, c: &mut Checker) {
     );
 }
 
+/// 0.2.0 设置存储迁移（profile patch 条目；壳 theme/i18n/welcome 的读写依据）
+fn probe_settings_store(rt: &Path, c: &mut Checker) {
+    let nm = upstream::dsh_node_modules_dir(rt);
+    let read = |segments: &[&str]| {
+        fs::read_to_string(upstream::join_segments(&nm, segments)).unwrap_or_default()
+    };
+    // 1) 遗留导入机制仍在：settings.yaml 每次启动被改名 .imported 并导入 profile
+    //    条目——壳因此不得再写 settings.yaml（0.5.19 实锤：播种→导入→覆盖用户
+    //    现选主题）。上游若改导入语义（如不再导入/换文件名），壳的迁移假设要重审。
+    let settings = read(&["@deepseek-ai", "dsh-settings", "lib", "index.js"]);
+    c.check(
+        "dsh-settings 仍带 settings.yaml 遗留导入（importLegacyDocument → .imported）",
+        settings.contains("importLegacyDocument") && settings.contains(".imported"),
+        format!("len={}", settings.len()),
+        "导入语义变了：复核壳是否需要恢复/调整 settings.yaml 通道与 .imported 认知",
+    );
+    // 2) ui-theme 缺省 preference=system（壳"缺条目→跟随系统"与首启播种退役的依据）
+    let theme = read(&["@deepseek-ai", "dsh-client-ui-theme", "lib", "index.js"]);
+    c.check(
+        "ui-theme preference 缺省 = system，合法值 light/dark/system",
+        theme.contains(r#"DEFAULT_PREFERENCE = "system""#)
+            && ["light", "dark", "system"].iter().all(|v| theme.contains(&format!("\"{v}\""))),
+        format!("len={}", theme.len()),
+        "缺省/合法值变了：theme.rs 的 resolve 兜底语义要跟着改",
+    );
+    // 3) locale 命名空间（条目 id 契约；preference 缺省=跟随浏览器，无 schema 默认值）
+    let locale = read(&["@deepseek-ai", "dsh-client-locale", "lib", "index.js"]);
+    c.check(
+        "locale 设置命名空间仍是 locale（条目 id）",
+        locale.contains(r#"LOCALE_SETTINGS_NAMESPACE = "locale""#),
+        format!("len={}", locale.len()),
+        "命名空间变了：改 upstream::KEY_LOCALE（影响 theme.rs resolve_locale）",
+    );
+    // 4) shipped 组合声明 ui-theme/locale 条目（profile patch 里条目 id 的出处）
+    let patch = read(&["@deepseek-ai", "dsh-web-app", "cordis.patch.yml"]);
+    c.check(
+        "shipped patch 声明 ui-theme/locale 条目（id + 插件包名）",
+        ["ui-theme", "locale"].iter().all(|id| {
+            patch.contains(&format!("- id: {id}"))
+                && patch.contains(if *id == "ui-theme" {
+                    upstream::SETTINGS_THEME_PKG
+                } else {
+                    upstream::SETTINGS_LOCALE_PKG
+                })
+        }),
+        format!("len={}", patch.len()),
+        "条目 id/包名变了：改 upstream::KEY_UI_THEME/KEY_LOCALE/SETTINGS_*_PKG（影响 theme.rs 与播种）",
+    );
+    // 5) ui-settings-general 包存在（welcome ack 条目可解析；0.2.0 起接收
+    //    ui-onboarding 遗留导入）
+    let general = upstream::join_segments(
+        &nm,
+        &["@deepseek-ai", "dsh-client-ui-settings-general"],
+    );
+    c.check(
+        "ui-settings-general 包存在（welcome ack 条目落点）",
+        general.is_dir(),
+        general.display(),
+        "包没了：welcome ack 播种与 LEGACY 映射要重审，改 upstream::SETTINGS_GENERAL_PKG",
+    );
+}
+
 /// 韧性栈（API 重试）：插件默认启用 + 可重试错误码名单的静默失效哨兵。
 /// 服务端 WS 心跳/浏览器重连不守——失效要么响、要么壳 notify 看门狗独立兜底。
 fn probe_resilience(rt: &Path, c: &mut Checker) {
@@ -1230,6 +1292,7 @@ async fn upstream_contract() {
     probe_oiacache(&rt, &mut c);
     probe_presets(&rt, &mut c);
     probe_locks(&rt, &mut c);
+    probe_settings_store(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);
     probe_preseed_plugin_needles(&rt, &mut c);
     probe_015_faces(&rt, &mut c);

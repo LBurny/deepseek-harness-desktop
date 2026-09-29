@@ -1,12 +1,13 @@
-//! 内测声明豁免播种：dsh 的 welcome notice（"内测声明"对话框）在 settings.yaml
-//! 的 welcomeNoticeVersion（设置命名空间见 upstream::WELCOME_NOTICE_NAMESPACE，
-//! 0.2.0 起是 ui-settings-general，旧装机残留的 ui-onboarding 段无害）≠ 当前
-//! 文案版本时，每次启动都弹窗。壳面向最终用户——启动时从运行时 client.js 提取
-//! 当前文案版本，预写进 settings.yaml（Value 级改写，其余键不动），桌面用户
-//! 永不见该对话框；上游 bump 文案版本时提取自动跟随、仍豁免。needle 由契约
-//! 测试守门（tests/upstream_contract.rs），提取/写盘失败只记 events.log 不阻断启动。
+//! 内测声明豁免播种：dsh 的 welcome notice（"内测声明"对话框）在
+//! ui-settings-general 条目的 welcomeNoticeVersion（设置命名空间见
+//! upstream::WELCOME_NOTICE_NAMESPACE；0.2.0 起设置存 profile patch 条目，
+//! 旧平面 settings.yaml 是一次性遗留导入通道）≠ 当前文案版本时，每次启动都
+//! 弹窗。壳面向最终用户——启动时从运行时 client.js 提取当前文案版本，经
+//! mcp::upsert_settings_entry 预写进 profile patch（Value 级 merge，其余条目
+//! 与键不动），桌面用户永不见该对话框；上游 bump 文案版本时提取自动跟随、
+//! 仍豁免。needle 由契约测试守门（tests/upstream_contract.rs），提取/写盘
+//! 失败只记 events.log 不阻断启动。
 
-use serde_yaml::{Mapping, Value};
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -55,47 +56,27 @@ fn extract_notice_version(dsh_bin: &Path) -> Result<String, String> {
     Ok(value)
 }
 
-/// 播种/更新 settings.yaml 的 welcomeNoticeVersion（命名空间随
-/// upstream::WELCOME_NOTICE_NAMESPACE）。文件缺失则新建（仅含该节）；
-/// 损坏（YAML 解析失败/根不是 map）则不动盘报错。
+/// 播种/更新 ui-settings-general 条目的 welcomeNoticeVersion（profile patch，
+/// 经 mcp::upsert_settings_entry Value 级 merge）。patch 损坏时显式报错不动盘。
 pub fn seed_welcome_notice(home: &Path, dsh_bin: &Path) -> Result<WelcomeOutcome, String> {
     let version = extract_notice_version(dsh_bin)?;
-    let path = home.join(crate::upstream::SETTINGS_FILE);
-    let mut root: Mapping = match fs::read_to_string(&path) {
-        // yaml-rust/serde_yaml 不接受 UTF-8 BOM（主题轮询同款坑），容忍剥掉
-        Ok(text) => match serde_yaml::from_str::<Value>(text.strip_prefix('\u{FEFF}').unwrap_or(&text)) {
-            Ok(Value::Mapping(m)) => m,
-            Ok(_) => return Err("settings.yaml 根不是 map，跳过播种".into()),
-            Err(e) => return Err(format!("settings.yaml 解析失败，跳过播种: {e}")),
-        },
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Mapping::new(),
-        Err(e) => return Err(format!("settings.yaml 读取失败: {e}")),
-    };
-
-    let ns = Value::String(crate::upstream::WELCOME_NOTICE_NAMESPACE.into());
-    let field = Value::String(crate::upstream::WELCOME_NOTICE_ACK_FIELD.into());
-    let mut section = root
-        .get(&ns)
-        .map(|v| match v {
-            Value::Mapping(m) => m.clone(),
-            // 畸形节 dsh 侧按空节解码（decodeWelcomeSection），直接替换
-            _ => Mapping::new(),
-        })
-        .unwrap_or_default();
-
-    if section.get(&field).and_then(Value::as_str) == Some(version.as_str()) {
+    let stored = crate::mcp::settings_entry_str(
+        home,
+        crate::upstream::WELCOME_NOTICE_NAMESPACE,
+        crate::upstream::WELCOME_NOTICE_ACK_FIELD,
+    );
+    if stored.as_deref() == Some(version.as_str()) {
         return Ok(WelcomeOutcome::AlreadySeeded);
     }
-
-    section.insert(field, Value::String(version));
-    root.insert(ns, Value::Mapping(section));
-
-    let text = serde_yaml::to_string(&Value::Mapping(root)).map_err(|e| e.to_string())?;
-    fs::create_dir_all(home).map_err(|e| e.to_string())?;
-    // tmp+rename 原子写：dsh-settings-file 可能正读着（外部编辑热发布）
-    let tmp = path.with_extension("yaml.dshdesktop-tmp");
-    fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, &path).map_err(|e| e.to_string())?;
+    crate::mcp::upsert_settings_entry(
+        home,
+        crate::upstream::WELCOME_NOTICE_NAMESPACE,
+        crate::upstream::SETTINGS_GENERAL_PKG,
+        &[(
+            crate::upstream::WELCOME_NOTICE_ACK_FIELD,
+            serde_yaml::Value::String(version),
+        )],
+    )?;
     Ok(WelcomeOutcome::Seeded)
 }
 
@@ -133,32 +114,38 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         let first = seed_welcome_notice(home.path(), &bin).unwrap();
         assert!(matches!(first, WelcomeOutcome::Seeded));
-        let text = fs::read_to_string(home.path().join("settings.yaml")).unwrap();
-        assert!(
-            text.contains(&format!("{}:", crate::upstream::WELCOME_NOTICE_NAMESPACE)),
-            "实际文件：{text}"
-        );
+        // 播种落点：profiles/web/cordis.patch.yml 的 ui-settings-general 条目
+        let patch = home
+            .path()
+            .join("profiles")
+            .join("web")
+            .join("cordis.patch.yml");
+        let text = fs::read_to_string(&patch).unwrap();
+        assert!(text.contains("id: ui-settings-general"), "实际文件：{text}");
         assert!(text.contains("welcomeNoticeVersion: 2099-01-02.3"), "实际文件：{text}");
+        assert!(text.contains("dsh-client-ui-settings-general"), "实际文件：{text}");
         let second = seed_welcome_notice(home.path(), &bin).unwrap();
         assert!(matches!(second, WelcomeOutcome::AlreadySeeded));
     }
 
     #[test]
-    fn preserves_other_sections_and_upgrades_old_version() {
+    fn preserves_other_entries_and_upgrades_old_version() {
         let (_d, bin) = fixture_runtime();
         let home = tempfile::tempdir().unwrap();
+        // 既有 patch：mcp 的 insert-op 行 + ui-theme 条目（带 fontSize 键） +
+        // 旧版本的 ui-settings-general 条目——播种只动 welcomeNoticeVersion
+        let dir = home.path().join("profiles").join("web");
+        fs::create_dir_all(&dir).unwrap();
         fs::write(
-            home.path().join("settings.yaml"),
-            format!(
-                "ui-theme:\n  preference: dark\n{}:\n  welcomeNoticeVersion: 2000-01-01.1\n",
-                crate::upstream::WELCOME_NOTICE_NAMESPACE
-            ),
+            dir.join("cordis.patch.yml"),
+            "- insert:\n    - id: mcp-client\n      name: '@deepseek-ai/dsh-mcp-client'\n- id: ui-theme\n  name: '@deepseek-ai/dsh-client-ui-theme'\n  config:\n    preference: dark\n    fontSize: 15\n- id: ui-settings-general\n  name: '@deepseek-ai/dsh-client-ui-settings-general'\n  config:\n    welcomeNoticeVersion: 2000-01-01.1\n",
         )
         .unwrap();
         let outcome = seed_welcome_notice(home.path(), &bin).unwrap();
         assert!(matches!(outcome, WelcomeOutcome::Seeded));
-        let text = fs::read_to_string(home.path().join("settings.yaml")).unwrap();
-        assert!(text.contains("preference: dark"), "实际文件：{text}");
+        let text = fs::read_to_string(dir.join("cordis.patch.yml")).unwrap();
+        assert!(text.contains("preference: dark"), "mcp/ui-theme 条目不得被动：{text}");
+        assert!(text.contains("fontSize: 15"), "条目内其它键不得被清：{text}");
         assert!(text.contains("welcomeNoticeVersion: 2099-01-02.3"), "实际文件：{text}");
     }
 
@@ -166,20 +153,22 @@ mod tests {
     fn tolerates_bom_and_skips_corrupt_file() {
         let (_d, bin) = fixture_runtime();
         let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join("profiles").join("web");
+        fs::create_dir_all(&dir).unwrap();
         // BOM：剥掉后正常播种
         fs::write(
-            home.path().join("settings.yaml"),
-            "\u{FEFF}ui-theme:\n  preference: light\n",
+            dir.join("cordis.patch.yml"),
+            "\u{FEFF}- id: ui-theme\n  name: x\n  config:\n    preference: light\n",
         )
         .unwrap();
         seed_welcome_notice(home.path(), &bin).unwrap();
-        let text = fs::read_to_string(home.path().join("settings.yaml")).unwrap();
+        let text = fs::read_to_string(dir.join("cordis.patch.yml")).unwrap();
         assert!(text.contains("preference: light"), "实际文件：{text}");
         // 损坏文件：不动盘、显式报错
-        fs::write(home.path().join("settings.yaml"), ":\n  - [unclosed").unwrap();
+        fs::write(dir.join("cordis.patch.yml"), ":\n  - [unclosed").unwrap();
         assert!(seed_welcome_notice(home.path(), &bin).is_err());
         assert_eq!(
-            fs::read_to_string(home.path().join("settings.yaml")).unwrap(),
+            fs::read_to_string(dir.join("cordis.patch.yml")).unwrap(),
             ":\n  - [unclosed"
         );
     }

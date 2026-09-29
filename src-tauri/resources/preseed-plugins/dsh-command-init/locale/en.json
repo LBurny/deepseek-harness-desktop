@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Init Command",
+    "description": "Create or update this workspace's AGENTS.md instruction file; the prompt is injected as a collapsed context row."
+  }
+}

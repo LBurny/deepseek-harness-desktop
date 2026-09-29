@@ -57,6 +57,26 @@
       return null
     }
 
+    // 上下文用量圆环 = composer dock 里的 ContextMeter 药丸（0.2.0 上游新增）：
+    // 与统计行是**两条独立数据链**（一个是 StatsPills、一个是 context pressure）。
+    // DOM 形状：dock 的直接子代 = 槽位锚 [data-slot="conversation.composer.dock"]
+    // （display:contents，内含统计行 div[data-composer-stats]）+ 兄弟
+    // span.JObwrW_root（药丸根，内含 button[aria-haspopup="dialog"] 与圆环 svg）。
+    // 必须**先定位槽位锚再找它的兄弟**：裸选 button[aria-haspopup="dialog"] 会命中
+    // 统计行里的 TimePill/UsagePill（它们也是带 dialog 弹层的药丸），甚至别的包的
+    // 弹层按钮。药丸**仅在 context pressure 数据存在时渲染**（上游缺失时整条返回
+    // null），故查不到是正常态、返回 null 交给调用方。限定在槽位锚的直接子代之间
+    // 遍历（不做全局查询）。
+    const findContextMeter = (chatRoot) => {
+      const slot = chatRoot.querySelector('[data-slot="conversation.composer.dock"]')
+      if (!slot || !slot.parentElement) return null
+      for (const child of slot.parentElement.children) {
+        if (child === slot) continue
+        if (child.querySelector('button[aria-haspopup="dialog"]')) return child
+      }
+      return null
+    }
+
     // 关闭全部增强面板（信息/项目互斥，且都让位给原生标签）
     const closePanels = (tablist, chatRoot) => {
       chatRoot.removeAttribute(OPEN_ATTR)
@@ -124,6 +144,29 @@
       panel.appendChild(card)
       chatRoot.appendChild(panel)
 
+      // 上下文用量圆环（0.2.0 上游新增）克隆进信息页，排在统计行**之前**
+      // （概览读数在上、明细在下）。与统计行同款：只克隆不搬家、无事件——
+      // 面板里的副本点不开上游的用量明细弹层（dialog 依赖 React 自己的事件与
+      // portal，克隆件带不过来），这是已知取舍：读数本身可读即可。
+      // 药丸不渲染时移除克隆件，**不设独立空态**（空态文案仍归统计行那条逻辑）。
+      const syncContext = () => {
+        const meter = findContextMeter(chatRoot)
+        let clone = body.querySelector('[data-dshmobile-context]')
+        if (!meter) {
+          if (clone) clone.remove()
+          return
+        }
+        if (!clone) {
+          clone = document.createElement('div')
+          clone.setAttribute('data-dshmobile-context', '')
+          // 锚在统计行克隆件之前落位；统计行尚未克隆时先占 body 首位，
+          // 之后统计行的 appendChild 自然排在它下面
+          body.insertBefore(clone, body.querySelector('[data-dshmobile-stats]') || body.firstChild)
+        }
+        if (clone.className !== meter.className) clone.className = meter.className
+        if (clone.innerHTML !== meter.innerHTML) clone.innerHTML = meter.innerHTML
+      }
+
       const syncStats = () => {
         const stats = findStatsRoot(chatRoot)
         let clone = body.querySelector('[data-dshmobile-stats]')
@@ -135,16 +178,21 @@
             empty.textContent = L.empty()
             body.appendChild(empty)
           }
+          syncContext()
           return
         }
         if (!clone) {
-          body.innerHTML = ''
+          // 空态文案让位给统计行克隆件（不再整块 innerHTML 清空，否则会把
+          // 已落位的圆环克隆件一并抹掉、顺序也乱）
+          const empty = body.querySelector('[data-dshmobile-empty]')
+          if (empty) empty.remove()
           clone = document.createElement('div')
           clone.setAttribute('data-dshmobile-stats', '')
           body.appendChild(clone)
         }
         if (clone.className !== stats.className) clone.className = stats.className
         if (clone.innerHTML !== stats.innerHTML) clone.innerHTML = stats.innerHTML
+        syncContext()
       }
 
       btn.addEventListener('click', () => {

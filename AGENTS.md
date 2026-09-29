@@ -43,13 +43,16 @@ src-tauri/src/
                     重连现换；Ping/Pong 看门狗防半开；approval/提问只弹通知**严禁回包
                     $events/result**）；sink 在 lib.rs 按 notify 四类规则门控；
                     toast.rs=WinRT 直连（点击走协议激活）
-  theme.rs          标题栏主题跟随 settings.yaml；变化时 SWP_FRAMECHANGED 强制重绘
+  theme.rs          标题栏主题跟随 profile patch 的 ui-theme 条目（0.2.0 起
+                    settings.yaml 是遗留导入通道，壳不再读写）；变化时
+                    SWP_FRAMECHANGED 强制重绘
   progress.rs       首启进度模型（阶段权重/百分比/结构化负载）
   tray.rs           托盘菜单 + 六个按需窗口（theme_bootstrap 防白底闪）+ diagnostics + commands
   zoom.rs           UI 缩放：hook_js 注入快捷键（只注入 main）、步进读设置、ui-zoom.txt 持久化
   settings.rs       壳设置 settings.json（校验；落盘失败显式报错不静默吞）
   skills.rs         skills/ ↔ skills-disabled/ 移动即开关；三源导入+ZIP 导入（防穿越+条目上限）
-  mcp.rs            cordis.patch.yml 的 dsh-mcp-client 条目读写（Value 级保留、tmp+rename 原子写）
+  mcp.rs            cordis.patch.yml 的 dsh-mcp-client 条目读写（Value 级保留、tmp+rename 原子写）；
+                    兼做设置存储通用条目读写（0.2.0 起 theme/i18n/welcome 复用）
   plugins.rs        装/卸/更新走官方 dsh plugin 子命令（壳不自己写 profile）；pnpm 壳内置
                     （pnpm.cmd 包装）；IPC 全 serde camelCase；串行锁；stdout/stderr 显式 pipe
   preseed.rs        预安装插件播种（bundle 形态、marker 语义同 skills；dev 下静默无操作）
@@ -115,7 +118,11 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 ## 关键约定与坑（细节与踩坑史见 docs/design.zh-CN.md 与 CHANGELOG.md）
 
 - **set_autostart 先查再关**：auto-launch 0.5 的 disable() 对不存在的 Run 值直接 RegDeleteValueW → "os error 2"，从未开过自启动的用户每次保存设置都弹——先 is_enabled() 比目标态（commands.rs 锚定测试）。
-- **dsh 事实基线（upstream.rs 为单一来源）**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只绑 127.0.0.1 且 spawn 必带 `--no-open`。BrowserAuth 无关闭开关：launch token 走 stdout 就绪行（**就绪行晚于 HTTP 绑定**，必须持续 pump），`/?token=` 303 换 `dsh-auth-<hash>` cookie（HttpOnly/Strict，**绑 authority，换端口即失效**）；静态资产无门、`/api/*` 与 WS 在门内。事件走单 WS `/api/remote.mux`（帧形收 upstream.rs），完成判定看 follow 流 `turn/end`（reason.kind=="completed"），子代理看 `api-session/added` 的 origin；**严禁回包 `$events/result`**。预设独立成包；主题键 `$DSH_HOME/settings.yaml` 的 `ui-theme.preference`；npm 依赖浮动区间，靠契约套件守门。
+- **dsh 事实基线（upstream.rs 为单一来源）**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只绑 127.0.0.1 且 spawn 必带 `--no-open`。BrowserAuth 无关闭开关：launch token 走 stdout 就绪行（**就绪行晚于 HTTP 绑定**，必须持续 pump），`/?token=` 303 换 `dsh-auth-<hash>` cookie（HttpOnly/Strict，**绑 authority，换端口即失效**）；静态资产无门、`/api/*` 与 WS 在门内。事件走单 WS `/api/remote.mux`（帧形收 upstream.rs），完成判定看 follow 流 `turn/end`（reason.kind=="completed"），子代理看 `api-session/added` 的 origin；**严禁回包 `$events/result`**。预设独立成包；主题/语言键在 profile patch 的 `ui-theme`/`locale` 条目 config.preference（0.2.0 起
+settings.yaml 被上游废除为一次性遗留导入通道，壳写它会每次启动触发导入、把旧值
+灌回覆盖用户现选——0.5.19"深色模式启动后 UI 未跟着变深色"根因；壳偏好读写统一走
+`profiles/web/cordis.patch.yml` 顶层直排条目，**别读 cordis.yml**——它每次启动被重写为
+空序列，启动后的合成内容是 Loader write-back 瞬态产物）；npm 依赖浮动区间，靠契约套件守门。
 - **0.1.5 四条新事实**：①会话格式 V3——**升级后的会话不可降级读取（用户数据单向）**，发版说明必须明示、验收必须覆盖"保留 DSH_HOME 升级首启"；②流式上传路由 `POST /api/session/uploadFileBinary`——壳代理必须开流式旁路（见下）；③面板槽位重排：keyed `main`+`rightbar`+`sidebar.panellist`，原 Detail 面板移除；④minimal 预设只剩持久 shell。另：出站遵循 HTTP(S)_PROXY/ALL_PROXY/NO_PROXY（回环豁免）、子进程 windowsHide、免鉴权 `/open-in-app/*` 路由族。
 - **流式上传必须旁路**：proxy 的 forward() 为 401 重放会整读请求体（64MiB 上限），命中 `is_streaming_body_route` 即转逐块直通（上传前强制换 cookie、不做 401 重放），换不到 cookie 时 401 原样透传不误报 502。回归 `upload_route_streams_without_buffering`——hyper 对 wrap_stream 体不主动 flush，测试客户端必须裸 TCP 手写 chunked。
 - **跟版脚本文档锚点是计数断言式**（upstream.rs=1 / design=3 / README×2=1）：改 upstream.rs/design 不得引入钉版全串以外的版本字面量，历史对照写成不带 `-rc` 的形态；计数不符整步报错。

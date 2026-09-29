@@ -313,6 +313,22 @@
   }
 
   /*
+   * 上下文用量圆环药丸（ContextMeter，0.2.0 上游在 composer dock 新增）：手机端
+   * 它单独挂在输入框下方同样突兀，与统计行同款处理——mobile.js 克隆进信息页、
+   * 原节点在增强生效的窄断点内隐藏。
+   * 锚点 = 槽位锚 [data-slot="conversation.composer.dock"] 的**兄弟** span 且其
+   * 直接子代是 button[aria-haspopup="dialog"]：药丸根本地名（JObwrW_root 之类的
+   * 哈希前缀随版本变）与 aria 文案（"上下文已用 N%"/"N% of context used"）都不能
+   * 钉；而裸写 button[aria-haspopup="dialog"] 会误伤统计行里的 TimePill/UsagePill
+   * （同属性、也开 dialog），故必须限定为槽位锚的直接兄弟。药丸**仅在 context
+   * pressure 数据存在时渲染**，规则缺席无害（不渲染就无节点可藏）。
+   * 选择器特异性 (0,3,1) 高于上游 (0,1,0)，与注入顺序无关。
+   */
+  html[data-dshmobile-enhanced] [data-slot="conversation.composer.dock"] ~ span:has(> button[aria-haspopup="dialog"]) {
+    display: none;
+  }
+
+  /*
    * 会话头部"更多操作"图标按钮（28px 圆角图标按钮）：手机端直接隐藏——它弹出的
    * 菜单只有"下载 session 日志"，手机上没人翻日志（要看也在 PC 端看），且它悬浮
    * 盖住旁边的"N 个后台任务运行中"文案（0.5.5 手机实拍）。
@@ -487,6 +503,22 @@
      否则计数与速率文本会粘在一起 */
   [data-dshmobile-info-body] [data-dshmobile-stats] > [class*="_sep"] {
     display: none;
+  }
+  /* 圆环克隆件（mobile.js 排在统计行上方）：横向一行——圆环 svg + 百分比读数，
+     字号/色值与统计行克隆件对齐。圆环 svg 原生 14px，无需额外规则。 */
+  [data-dshmobile-info-body] [data-dshmobile-context] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 0;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    max-width: none;
+    width: auto;
+    font-size: 13px;
+    color: var(--dsw-alias-label-primary);
   }
   [data-dshmobile-empty] {
     margin: 0;

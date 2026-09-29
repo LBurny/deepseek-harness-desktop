@@ -439,11 +439,9 @@ pub fn run() {
                 paths.home.clone(),
             ));
 
-                        // 首启播种主题：settings.yaml 不存在时按系统深浅色预写 ui-theme.preference，
-            // 否则 dsh 缺省渲染浅色而壳标题栏跟随系统（深色时不一致）。
-            // 必须在 spawn_supervised 之前，dsh 首次启动即读到。
-            theme::seed_theme_preference(&paths.home, platform.system_dark_mode());
-            // 本地页面的主题/语言快照：先落库再启动关注循环（循环首轮即广播解析值）
+            // 本地页面的主题/语言快照：先落库再启动关注循环（循环首轮即广播解析值）。
+            // 主题/语言读 profile patch 条目（upstream.rs 设置存储段注）；首启主题
+            // 播种已退役——0.2.0 起 dsh 缺省 preference=system，与壳缺省一致。
             handle.manage(theme::ShellUiState::new(platform.as_ref(), &paths.home));
             theme::spawn_theme_follower(&handle, platform.clone(), paths.home.clone());
             let emit_handle = handle.clone();

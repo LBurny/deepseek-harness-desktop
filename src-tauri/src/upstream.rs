@@ -185,21 +185,42 @@ pub const EVENT_SETTINGS_UPDATED: &str = "settings/document-updated";
 /// 记录上游词表增量，勿据此加通知（目标暂停不是用户回合完成）。
 pub const EVENT_GOAL_ACTIVATION_CHANGED: &str = "goal/activation-changed";
 
-// ── 设置文件（theme.rs 跟随 + 首启播种）──────────────────
-pub const SETTINGS_FILE: &str = "settings.yaml";
+// ── 设置存储（0.2.0 迁移：profile patch 条目；theme.rs/i18n.rs/welcome.rs）──
+// **0.2.0 起平面 settings.yaml 被废除**：dsh-settings 的 SettingsForms 在每次
+// 启动把 `<dsh-home>/settings.yaml` 改名为 `settings.yaml.imported` 并把各
+// section 导入 profile 同名条目（importLegacyDocument；ui-onboarding→
+// ui-settings-general 走 LEGACY_SECTION_ENTRIES 映射，ui-theme/locale 原名
+// 直通）——settings.yaml 从"活配置"变成一次性导入通道。壳 0.5.19 及以前每次
+// 启动重建它（welcome/主题播种），导致每次启动触发一次导入、把旧值灌回
+// profile 覆盖用户现选（0.5.19 用户实锤"深色模式启动后 UI 未跟着变深色"，
+// 重启服务反而正常——服务重启不触发壳播种）。0.5.20 起壳**不再写
+// settings.yaml**，偏好一律读写 profile patch（MCP_PATCH_SEGMENTS 同一文件，
+// dsh config-editor 的 documentPath，写入即热重载；条目 = 顶层直排行
+// `- id` + `name` + `config`，与 MCP 的 insert-op 行同文件共存）；首启主题
+// 播种退役——dsh-client-ui-theme 的 DEFAULT_PREFERENCE 0.2.0 起为 "system"，
+// 与壳缺省解析一致。**不要读 profiles/web/cordis.yml**：它每次启动被重写为
+// 空序列 `[]`，启动后那份合成内容是 Loader tree write-back 的瞬态产物。
+/// 条目内偏好字段名（ui-theme/locale 条目的 config.preference）。
 pub const KEY_UI_THEME: &str = "ui-theme";
 pub const KEY_LOCALE: &str = "locale";
 pub const KEY_PREFERENCE: &str = "preference";
+/// ui-theme 条目解析到的插件包（契约探针 + 播种行 name 用）。
+pub const SETTINGS_THEME_PKG: &str = "@deepseek-ai/dsh-client-ui-theme";
+/// locale 条目解析到的插件包。preference 可缺省（= 跟随浏览器/系统语言）。
+pub const SETTINGS_LOCALE_PKG: &str = "@deepseek-ai/dsh-client-locale";
+/// ui-settings-general 条目解析到的插件包（welcome.rs 播种 ack 用）。
+pub const SETTINGS_GENERAL_PKG: &str = "@deepseek-ai/dsh-client-ui-settings-general";
 
 // ── 内测声明（welcome.rs 首启豁免播种）────────────────────
 /// dsh-client-ui-settings-models 的 welcome notice（"内测声明"对话框）：设置
 /// 命名空间的 welcomeNoticeVersion ≠ 当前文案版本时每次启动弹窗
 ///（dsh-client-ui-settings-models/lib/client.js 的 WelcomeNoticeStore）。
-/// 壳面向最终用户，启动时把运行时里提取的文案版本预写进 settings.yaml。
+/// 壳面向最终用户，启动时把运行时里提取的文案版本经
+/// mcp::upsert_settings_entry 预写进 profile patch 的同名条目。
 /// 影响：welcome.rs。
 /// **0.2.0 改名**：命名空间从 ui-onboarding 迁到 ui-settings-general（上游常量
-/// WELCOME_NOTICE_SETTINGS_NAMESPACE；0.2.0 首个 rc 实测），字段名不变——旧
-/// 装机 settings.yaml 里的 ui-onboarding 段成为无害残留，壳不清理。
+/// WELCOME_NOTICE_SETTINGS_NAMESPACE = 条目 id；0.2.0 首个 rc 实测），字段名
+/// 不变——旧装机 settings.yaml 里的 ui-onboarding 段由 dsh 导入映射消化，壳不清理。
 pub const WELCOME_NOTICE_NAMESPACE: &str = "ui-settings-general";
 pub const WELCOME_NOTICE_ACK_FIELD: &str = "welcomeNoticeVersion";
 /// 文案版本提取 needle（client.js 未压缩，形如 `WELCOME_NOTICE_VERSION = "2026-08-13.1"`）。

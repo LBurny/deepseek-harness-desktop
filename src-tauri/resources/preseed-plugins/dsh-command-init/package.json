@@ -1,12 +1,14 @@
 {
   "name": "dsh-command-init",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "description": "Human-facing /init command: submit the AGENTS.md workspace-instruction authoring prompt as a collapsed context injection",
   "type": "module",
   "main": "index.js",
   "exports": {
-    ".": "./index.js"
+    ".": "./index.js",
+    "./locale/*.json": "./locale/*.json",
+    "./package.json": "./package.json"
   },
   "dsh": {
     "bundle": {

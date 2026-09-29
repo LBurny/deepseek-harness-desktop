@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **深色模式启动后 UI（标题栏与内容）不跟随，重启服务才恢复**（0.5.19 用户反馈）。根因是壳侧没跟上 dsh 0.2.0 的设置存储迁移：上游把平面 `$DSH_HOME/settings.yaml` 废除为**一次性遗留导入通道**（`dsh-settings` 的 `importLegacyDocument` 每次启动见它就改名 `.imported` 并把各 section 导入 profile 同名条目），而壳 0.5.19 仍在每次启动重建该文件（welcome 播种 + 主题播种）——于是每次应用启动都触发一次导入，把文件里的旧 `ui-theme` 值灌回 profile、覆盖用户在应用里现选的主题；「重启服务」不触发壳播种所以反而正常。修复：①壳偏好读取改走 profile patch（`profiles/web/cordis.patch.yml` 顶层直排条目 `ui-theme`/`locale` 的 `config.preference`，dsh config-editor 的 documentPath、写入即热重载；`theme.rs`/`i18n.rs` 全部换源）；②壳**不再写 settings.yaml**（welcome 播种改经 `mcp::upsert_settings_entry` Value 级合并进 `ui-settings-general` 条目，主题播种整体退役——0.2.0 起 dsh-client-ui-theme 缺省 preference=system，与壳缺省解析一致，"深标题栏+浅内容"的首启不一致根因消失）；③契约套件新增 `probe_settings_store` 五断言（导入机制在/缺省 system/locale 命名空间/shipped 条目声明/ui-settings-general 包存在），堵住"契约套件全绿但 settings.yaml 已消失"的探针盲区。回归：`theme.rs`/`welcome.rs` 单测全部改钉 profile patch 形态（条目读取/Value 级合并保留 insert-op 行与同条目其它键/损坏不动盘/BOM 容忍）
+- **手机端上下文用量圆环单独挂在输入框下方很突兀**（用户反馈；0.2.0 新增的 ContextMeter）。与回合统计行同款处理：mobile.js 经稳定锚点（`[data-slot="conversation.composer.dock"]` 的兄弟 span 内含 `button[aria-haspopup="dialog"]`；不钉 JObwrW 哈希、不裸选 dialog 按钮——StatsPills 的 Time/Usage 药丸同属性会误伤）克隆进顶部「信息」页统计行上方，原节点 ≤700px 隐藏；药丸仅在有 context pressure 数据时渲染，克隆件随之增删（MutationObserver 复用）。已知取舍：innerHTML 克隆不带事件，信息页圆环不可点开明细。回归：`tests/remote_project.rs::context_meter_relocation_rules`（隐藏规则断点/锚点限定/克隆件先于统计行/裸 dialog 选择器护栏）
+
+### Added
+
+- **内置 /init 插件补双语说明**（用户反馈：插件管理页里唯一没有描述的插件）。0.2.0 的插件元信息来自包内 `locale/*.json`（`meta.title`/`meta.description`，宿主 readPluginMeta 组语言映射、客户端按界面语言实时选取）；`dsh-command-init` 此前无 locale 目录且 exports 未暴露，meta 整体 undefined。现补 `locale/{zh,en}.json` + exports 暴露 `./locale/*.json` 与 `./package.json`（v0.1.3），中文界面显示「初始化命令：创建或更新当前工作区的 AGENTS.md 指令文件…」、英文界面显示对应英文；已装用户经 preseed 文件同步自动获得，无需重装。插件作者技能文档同步新增 §3.1（locale 元信息机制与 exports 要求）
 ## [0.5.19] - 2026-09-29
 
 ### Changed
