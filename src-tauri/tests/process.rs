@@ -342,13 +342,13 @@ async fn ready_implies_token_captured_and_logs_redacted() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
-async fn spawn_heals_stale_dsh_lock_files() {
-    // 每次 spawn 前必须清掉 DSH_HOME 里的陈旧锁（持有者已退出的 *.lock）并落日志。
-    // 缺这一步，dsh 会在 boot 阶段等这把锁超时（凭证写入预算 30s）、插件树加载失败、
-    // 进程退出，而壳只看到"就绪行没出现"，重试多少次都一样——用户视角是"应用坏了"
-    // （机器 B 实踩：.credentials.yaml.lock 被硬杀残留）。
-    // 活持有者的保留分支在 locks.rs 单元测试里用真平台钉（此处 TestPlatform 的
-    // process_alive 是桩，恒 false，无法表达"活着"）。
+async fn spawn_leaves_stale_dsh_lock_files_to_upstream() {
+    // 0.2.0 起壳不再自愈陈旧锁（locks.rs 已退役）：dsh-atomic-write 自带孤儿
+    // 接管——contender 对持有者 PID 探活 ESRCH 即移除锁并重试，0.5.13 时代
+    // "硬杀一次可能永久起不来"（死锁卡 boot 超时）由上游根治。本测试钉两条：
+    // ① 死锁在场 dsh 照常 Ready（boot 不被锁挡住）；② 壳侧 spawn 路径不碰
+    // .lock 文件（自愈没有借尸还魂——真要恢复壳侧清理，改这里之前先读
+    // upstream.rs 的锁墓碑段注与 probe_locks 哨兵）。
     let work = tempfile::tempdir().unwrap();
     let paths = fixture_paths(work.path());
     std::fs::create_dir_all(&paths.home).unwrap();
@@ -362,12 +362,20 @@ async fn spawn_heals_stale_dsh_lock_files() {
     let proc = DshProcess::spawn_supervised(Arc::new(TestPlatform), paths, token_tx, emit);
     wait_for_state(&proc, |s| matches!(s, DshState::Ready { .. }), Duration::from_secs(30));
 
-    assert!(!stale.exists(), "死 pid 的陈旧锁必须在 spawn 前被清掉");
+    assert!(stale.exists(), "壳侧不再清理锁文件（上游接管），陈旧锁应保持原样");
     assert!(unrelated.exists(), "非 .lock 文件不能被碰");
-    wait_event(
-        &events,
-        |e| matches!(e, ProcessEvent::Log(l) if l.contains("[locks] 清理陈旧锁")),
-        Duration::from_secs(5),
+    let logs: Vec<String> = events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter_map(|e| match e {
+            ProcessEvent::Log(l) => Some(l.clone()),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !logs.iter().any(|l| l.contains("[locks]")),
+        "spawn 路径不得再出现锁自愈日志，实际：{logs:?}"
     );
     proc.stop().await;
     wait_for_state(&proc, |s| matches!(s, DshState::Stopped), Duration::from_secs(15));

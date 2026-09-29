@@ -647,7 +647,8 @@ async fn probe_ws(dsh: &Dsh, c: &mut Checker) {
 }
 
 fn probe_presets(rt: &Path, c: &mut Checker) {
-    // 0.1.2 起预设独立成包：node_modules/@deepseek-ai/dsh-agent-presets/presets/minimal
+    // 0.1.2 起预设独立成包；0.2.0 起该包消失、预设改为 dsh-web-app/presets/
+    // 下的 cordis patch 文件（upstream::PRESET_DIR_SEGMENTS 已跟随）
     let dir = upstream::join_segments(
         &upstream::dsh_node_modules_dir(rt),
         upstream::PRESET_DIR_SEGMENTS,
@@ -656,10 +657,10 @@ fn probe_presets(rt: &Path, c: &mut Checker) {
     // rc.8 起上游 minimal 预设自带 win32 门控（bash/pwsh 分行按 process.platform
     // 互斥禁用），我方补丁器已退役——此处断言 UpstreamHandled 作回归哨兵
     c.check(
-        "minimal 预设签名 = UpstreamHandled（rc.8 起上游自修 win32；0.1.2 起独立成包）",
+        "minimal 预设签名 = UpstreamHandled（rc.8 起上游自修 win32；0.2.0 起预设并入 dsh-web-app 补丁形态）",
         matches!(state, SignatureState::UpstreamHandled),
         format!("实际 {state:?}"),
-        "NeedsPatch=上游回退了 win32 修复→从 git 历史恢复 presets 补丁器并重评；Missing=预设目录变了→改 PRESET_DIR_SEGMENTS",
+        "NeedsPatch=上游回退了 win32 修复→从 git 历史恢复 presets 补丁器并重评；Missing=预设落点变了→改 PRESET_DIR_SEGMENTS",
     );
 }
 
@@ -699,9 +700,11 @@ fn probe_mcp(rt: &Path, dsh_home: &Path, c: &mut Checker) {
 }
 
 fn probe_locks(rt: &Path, c: &mut Checker) {
-    // locks.rs 陈旧锁自愈的前提：上游的写锁仍是 `<file>.lock` 兄弟文件、`wx`
-    // 独占创建、内容为 pid，且**没有**孤儿恢复（竞争方永不删别人的锁）。
-    // 上游一旦自己做陈旧锁回收，自愈就该撤掉——那时这条探针翻红提醒。
+    // 0.2.0 起上游自带孤儿锁接管（contender 对持有者 PID 探活 ESRCH 即移除并
+    // 重试，takeOverExitedLock + claim 文件防竞态），壳侧 locks.rs 已按预案
+    // 退役——本探针转为哨兵：锁形状与接管机制两者都在才绿；上游若回退到
+    // "orphan recovery is an operator action" 语义，壳须从 git 历史恢复 locks.rs
+    //（硬杀后的死锁会重新变成"应用再也起不来"）。
     let src = fs::read_to_string(upstream::join_segments(
         &upstream::dsh_node_modules_dir(rt),
         &["@deepseek-ai", "dsh-atomic-write", "lib", "index.js"],
@@ -714,16 +717,14 @@ fn probe_locks(rt: &Path, c: &mut Checker) {
         "dsh-atomic-write 锁形状（wx 建 .lock 兄弟 + 内容 pid）",
         lock_shape,
         format!("found_bytes={}", src.len()),
-        "锁的命名/创建方式/内容变了：改 upstream::LOCK_FILE_SUFFIX 与 locks.rs 的 pid 解析（自愈会失配）",
+        "锁的命名/创建方式/内容变了：接管语义可能随之失效——人工核对后改本探针",
     );
-    // 上游注释那句话自己折了行（orphan recovery is an operator + action 分两行），
-    // 所以取同段里不跨行的前半句当 needle。
-    let operator_action = src.contains("never removes an existing lock");
+    let takeover = src.contains("function holderExited") && src.contains("function takeOverExitedLock");
     c.check(
-        "上游仍不自愈孤儿锁（contender never removes an existing lock）",
-        operator_action,
-        format!("has_orphan_note={operator_action}"),
-        "上游加了陈旧锁自动回收：撤掉 locks.rs::heal_stale_locks 与其锚定测试（壳不再需要替它兜底）",
+        "上游孤儿锁接管机制仍在（holderExited + takeOverExitedLock）",
+        takeover,
+        format!("has_takeover={takeover}"),
+        "上游撤了孤儿恢复（回到 operator-action 语义）：硬杀后的死锁会永久卡启动——从 git 历史恢复 locks.rs::heal_stale_locks 与本探针旧形态",
     );
 }
 
@@ -1034,21 +1035,6 @@ fn probe_oiacache(rt: &Path, c: &mut Checker) {
     );
 }
 
-/// revealshow.rs 的 explorer 窗口可见性补丁签名（needle 逐字核对；上游改版即红）
-fn probe_revealshow(rt: &Path, c: &mut Checker) {
-    let nm = upstream::dsh_node_modules_dir(rt);
-    let file = upstream::join_segments(&nm, upstream::NATIVE_COMMAND_FILE_SEGMENTS);
-    let text = fs::read_to_string(&file).unwrap_or_default();
-    let patched = text.contains("dshdesktop-revealshow:");
-    let pristine_ok = text.matches(upstream::NATIVE_COMMAND_HIDE_NEEDLE).count() == 1;
-    c.check(
-        "dsh-native-command runner 的 windowsHide 选项行仍在（补丁锚点）",
-        !text.is_empty() && (patched || pristine_ok),
-        format!("path={}", file.display()),
-        "native-command runner 形态变了：改 upstream::NATIVE_COMMAND_HIDE_NEEDLE 与 revealshow.rs 的 HIDE_FROM/HIDE_TO；若上游自己不再对 explorer.exe 设 windowsHide，删除 revealshow.rs 与本探测",
-    );
-}
-
 /// 远程"项目"标签依赖的上游事实（project.rs/project.html；上游改版即红）
 fn probe_project(rt: &Path, dsh_home: &Path, c: &mut Checker) {
     let nm = upstream::dsh_node_modules_dir(rt);
@@ -1159,7 +1145,7 @@ fn probe_015_faces(rt: &Path, c: &mut Checker) {
         upstream::SESSION_FORMAT_VERSION_EXPECTED
     );
     c.check(
-        "会话格式版本仍是 V3",
+        "会话格式版本仍是 V4",
         session.contains(&want),
         format!("want={want:?}"),
         "会话格式又升版了：升级路径验收（acceptance）与发版说明的'不可降级读取'口径要跟着改，改 upstream::SESSION_FORMAT_VERSION_EXPECTED",
@@ -1174,13 +1160,13 @@ fn probe_015_faces(rt: &Path, c: &mut Checker) {
         "命令注册面又变了（0.1.2 的 input.images → 0.1.5 的 input.attachments）：复核 resources/preseed-plugins/dsh-command-init，改 upstream::COMMANDS_ATTACHMENT_FLAG",
     );
 
-    // 6) minimal 预设的工具面（0.1.5 起只剩持久 shell，文件编辑工具已移除）
+    // 6) minimal 预设的工具面（0.1.5 起只剩持久 shell，文件编辑工具已移除；
+    // 0.2.0 起载体 = dsh-web-app/presets/minimal.patch.yml）
     let preset = read(&[
         "@deepseek-ai",
-        "dsh-agent-presets",
+        "dsh-web-app",
         "presets",
-        "minimal",
-        "agent.cordis.yml",
+        "minimal.patch.yml",
     ]);
     c.check(
         "minimal 预设已不含文件编辑工具（0.1.5 单工具语义）",
@@ -1242,7 +1228,6 @@ async fn upstream_contract() {
     probe_pickerpatch(&rt, &mut c);
     probe_mcpgate(&rt, &mut c);
     probe_oiacache(&rt, &mut c);
-    probe_revealshow(&rt, &mut c);
     probe_presets(&rt, &mut c);
     probe_locks(&rt, &mut c);
     probe_remote_needles(&rt, &mut c);

@@ -56,9 +56,17 @@ fn install_forwards_args_with_profile_cwd_and_inits_profile() {
     let res = install_plugin_impl(&home, "some-pkg").unwrap();
     assert_eq!(res.exit_code, 0, "输出：{}", res.output);
     let log = std::fs::read_to_string(home.pnpm_dir.join("pnpm.log")).unwrap();
+    // 0.2.0 起 dsh 在 add 前先跑一次 npm 元数据探测（pnpm view <pkg> …），且对
+    // pnpm 的每个参数都加引号——断言不钉探测步、引号剥离后匹配，两次调用都须
+    // 落在 profile 目录。
+    let plain = log.replace('"', "");
     let lines: Vec<&str> = log.lines().collect();
     assert_eq!(lines[0], home.profile_dir().display().to_string(), "cwd 应为 profile 目录");
-    assert_eq!(lines[1], "add some-pkg", "参数应原样透传");
+    assert!(plain.contains("add some-pkg"), "add 参数应原样透传，日志：{log}");
+    assert!(plain.lines().all(|l| l == "add some-pkg"
+        || l.starts_with("view some-pkg")
+        || l.contains("profiles")
+        || l.starts_with("install some-pkg")), "意外的 pnpm 调用：{plain}");
     assert!(home.manifest_path().is_file(), "dsh 应初始化 profile 清单");
     let _ = std::fs::remove_dir_all(&work);
 }
@@ -73,8 +81,9 @@ fn uninstall_and_update_forward_verbatim() {
     assert_eq!(uninstall_plugin_impl(&home, "foo").unwrap().exit_code, 0);
     assert_eq!(update_plugins_impl(&home).unwrap().exit_code, 0);
     let log = std::fs::read_to_string(home.pnpm_dir.join("pnpm.log")).unwrap();
-    assert!(log.contains("remove foo"));
-    assert!(log.contains("update"));
+    let plain = log.replace('"', "");
+    assert!(plain.contains("remove foo"), "日志：{log}");
+    assert!(plain.contains("update"), "日志：{log}");
     let _ = std::fs::remove_dir_all(&work);
 }
 

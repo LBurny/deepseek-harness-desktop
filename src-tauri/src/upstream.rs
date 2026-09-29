@@ -4,7 +4,7 @@
 //! tests/upstream_contract.rs 红了就对照本文件逐条改（每条注明上游出处
 //! 与影响面）。事实清单的文档形态见 docs/design.zh-CN.md §15。
 //!
-//! 当前事实基线：@deepseek-ai/dsh 0.1.6-alpha.1（子包为浮动区间，抓取时解析到
+//! 当前事实基线：@deepseek-ai/dsh 0.2.0-rc.1（子包为浮动区间，抓取时解析到
 //! 最新 rc；npm latest 标签可能滞后，fetch-runtime.ps1 须显式 -DshVersion）。
 //!
 //! 0.1.2 跟版（2026-09-04 执行）：契约与 runbook 见
@@ -20,6 +20,19 @@
 //! mobile.css 规则随之）、新增流式上传路由（壳代理须开流式旁路，见 remote/proxy.rs）、
 //! 面板槽位体系重排（conversation/details → keyed main + rightbar + sidebar.panellist）、
 //! 会话格式升到 V3（用户数据单向，升级后不可降级读取）。
+//!
+//! 0.2.0 跟版（2026-09-29 执行）：跨 6 个上游版本，逆向面动四处：
+//! ①会话格式 V3→V4（用户数据单向，dsh 自带 v3→v4 迁移包）；②预设独立包
+//! dsh-agent-presets 消失，minimal 预设改为 dsh-web-app/presets/minimal.patch.yml
+//! 的 cordis patch insert 行（PRESET_DIR_SEGMENTS/PRESET_COMPOSITION_FILE 随之）；
+//! ③`dsh web` 不再是 bin.js 专用子命令（通用 profile 缩写展开 `dsh web` ≡
+//! `--profile web`，--port/--no-open 定义在 dsh-web-app），spawn 形态不变
+//!（fetch-runtime 冒烟 + probe_entry `web --help` 双闸守着）；④上游原生修复
+//! explorer 隐藏窗口（windowsHide 参数化为 `window === "hidden"`，explorer 走
+//! runExplorer 显式 "visible"，控制台应用仍 "hidden"）——revealshow.rs 补丁按
+//! 探针既定指引退役。手机端 mobile.css 两处小修：输入框 Lexical contenteditable
+//! 化后 16px 字号规则补 contenteditable 选择器、侧栏抽屉宽度/阴影子规则适配
+//! 新增的 display:contents 槽位包装。
 
 use std::path::{Path, PathBuf};
 
@@ -53,11 +66,16 @@ pub fn dsh_node_modules_dir(runtime_dir: &Path) -> PathBuf {
 }
 
 // ── 进程命令形（process.rs spawn）────────────────────────
-/// 上游出处：bin.js 的 web 子命令，仅绑 127.0.0.1。
+/// 上游出处：bin.js 的 web 入口，仍仅绑回环 127.0.0.1。
+/// **0.2.0 形态**：bin.js 不再声明专用 web 子命令，`dsh web` 经通用 profile
+/// 缩写展开（`dsh <name>` → `--profile <name> …`）落到 dsh-web-app 的 serve
+/// 命令——`--port`/`--no-open` 旗标也定义在该包。spawn 形态 `web --port N
+/// --no-open` 实测不变（fetch-runtime.ps1 冒烟 + 契约 probe_entry `web --help`
+/// 输出含 --no-open，双闸守门）。
 pub const DSH_WEB_SUBCOMMAND: &str = "web";
 pub const DSH_PORT_FLAG: &str = "--port";
-/// dsh-web-app 的 openBrowser 默认 true（rc.8 起；startup.js webCommand 定义
-/// `--no-open` 反向开关），就绪后把 Web UI 丢给系统默认浏览器——壳内嵌 WebView
+/// dsh-web-app 的 openBrowser 默认 true（rc.8 起；serve 命令定义 `--no-open`
+/// 反向开关），就绪后把 Web UI 丢给系统默认浏览器——壳内嵌 WebView
 /// 就是浏览器，spawn 必须带此旗标，否则每次启动额外弹系统浏览器。
 /// 影响：process.rs spawn 参数。
 pub const DSH_NO_OPEN_FLAG: &str = "--no-open";
@@ -141,9 +159,10 @@ pub const SIDEBAR_PANELLIST_SLOT: &str = "sidebar.panellist";
 
 // ── 会话格式版本（契约哨兵；壳不读写会话日志，只钉漂移）──────────
 /// 上游出处：@deepseek-ai/dsh-session 的 SESSION_FORMAT_VERSION（0.1.2 = 0，
-/// 0.1.5 = 3）。恢复旧会话时生成新格式日志并**保留原文件**，但升级后的会话
-/// 不支持降级读取——用户数据单向。影响面：跟版/回滚决策（发版后别回退 dsh 版本）。
-pub const SESSION_FORMAT_VERSION_EXPECTED: u32 = 3;
+/// 0.1.5 = 3，0.2.0 = 4）。恢复旧会话时生成新格式日志并**保留原文件**，但升级后的会话
+/// 不支持降级读取——用户数据单向（dsh 依赖树自带 session-format-v3-to-v4 迁移包）。
+/// 影响面：跟版/回滚决策（发版后别回退 dsh 版本）；发版说明必须明示单向升级。
+pub const SESSION_FORMAT_VERSION_EXPECTED: u32 = 4;
 
 // ── 0.1.2 事件词表（$events 流上的 cordis 事件名；prep §4.2 转发清单）──────
 /// 会话新增（emit，args[0]=SessionSummary；origin=="subagent" 标记子代理——取代旧
@@ -174,11 +193,14 @@ pub const KEY_PREFERENCE: &str = "preference";
 
 // ── 内测声明（welcome.rs 首启豁免播种）────────────────────
 /// dsh-client-ui-settings-models 的 welcome notice（"内测声明"对话框）：设置
-/// 命名空间 ui-onboarding 的 welcomeNoticeVersion ≠ 当前文案版本时每次启动弹窗
-/// （dsh-client-ui-settings-models/lib/client.js 的 WelcomeNoticeStore）。
+/// 命名空间的 welcomeNoticeVersion ≠ 当前文案版本时每次启动弹窗
+///（dsh-client-ui-settings-models/lib/client.js 的 WelcomeNoticeStore）。
 /// 壳面向最终用户，启动时把运行时里提取的文案版本预写进 settings.yaml。
 /// 影响：welcome.rs。
-pub const WELCOME_NOTICE_NAMESPACE: &str = "ui-onboarding";
+/// **0.2.0 改名**：命名空间从 ui-onboarding 迁到 ui-settings-general（上游常量
+/// WELCOME_NOTICE_SETTINGS_NAMESPACE；0.2.0 首个 rc 实测），字段名不变——旧
+/// 装机 settings.yaml 里的 ui-onboarding 段成为无害残留，壳不清理。
+pub const WELCOME_NOTICE_NAMESPACE: &str = "ui-settings-general";
 pub const WELCOME_NOTICE_ACK_FIELD: &str = "welcomeNoticeVersion";
 /// 文案版本提取 needle（client.js 未压缩，形如 `WELCOME_NOTICE_VERSION = "2026-08-13.1"`）。
 pub const WELCOME_NOTICE_VERSION_NEEDLE: &str = "WELCOME_NOTICE_VERSION = \"";
@@ -311,39 +333,30 @@ pub const OIA_CLIENT_FILE_SEGMENTS: &[&str] = &[
 pub const OIA_CLIENT_APPS_STORE_NEEDLE: &str =
     "\t\t\tapps = (0, _deepseek_ai_dsh_client_store.createSnapshotStore)(null);";
 
-// ── explorer 窗口可见性补丁（revealshow.rs；MARKER 与补丁内容是我方产物）──
-// 症状：文件卡片菜单「在文件资源管理器中显示」/「打开所在文件夹」点了没反应
-// （UI 回「已请求在文件管理器中显示」，桌面不弹窗口）。链路：客户端
-// POST /api/present.open?…&action=reveal → dsh-client-ui-deliverables host
-// handler → sessionController.openWorkspacePath → 本包 revealNativePath() →
-// run("explorer.exe", ["/select,", <file url>]) → runNativeCommand() 的
-// execFile(…, { encoding:"utf8", signal, windowsHide: true })。
-// 实测（本机 Win10 单变量对照）：windowsHide=true 时 Explorer 窗口确实建出来了、
-// 路径与选中文件都对，但 IsWindowVisible=false（HTTP 204 照常回，只表现为"没反应"）；
-// 置 false 或省略即可见。机制：libuv 的 windowsHide 在子进程 STARTUPINFO 上置
-// STARTF_USESHOWWINDOW + SW_HIDE，Explorer 文件夹窗口走 SW_SHOWDEFAULT 继承了
-// 隐藏态。同 runner 的 powershell.exe Invoke-Item（openNativePath）实测可见
-// （经 ShellExecute 交已运行的桌面 explorer），所以只豁免 explorer.exe——其余
-// 控制台应用的控制台窗口必须保持隐藏（壳硬性"不闪控制台"约定）。
-/// dsh-native-command 包内文件（基准同 OIA_CLIENT_FILE_SEGMENTS）。
-pub const NATIVE_COMMAND_FILE_SEGMENTS: &[&str] =
-    &["@deepseek-ai", "dsh-native-command", "lib", "index.js"];
-/// 隐藏针：runNativeCommand 的 execFile 选项行（上游出处 lib/types/runner.js
-/// 区域，2-Tab 缩进、补丁锚点、唯一出现——revealNativePath 的 explorer 调用
-/// 与 openNativePath 的 powershell 调用共用这一份选项）。
-pub const NATIVE_COMMAND_HIDE_NEEDLE: &str = "\t\twindowsHide: true";
+// ── explorer 窗口可见性（revealshow.rs 补丁已于 0.2.0 跟版时退役）──────────
+// 症状（0.4.x~0.5.18）：文件卡片菜单「在文件资源管理器中显示」/「打开所在文件夹」
+// 点了没反应——dsh-native-command 的 runNativeCommand 以 execFile(…,
+// windowsHide: true) 拉起 explorer.exe，libuv 的 STARTF_USESHOWWINDOW+SW_HIDE
+// 被 Explorer 文件夹窗口的 SW_SHOWDEFAULT 继承，窗口存在但不可见。壳侧曾以
+// revealshow.rs 原地补丁豁免 explorer.exe（签名门控+marker 幂等）。**0.2.0 上游
+// 原生修复**：runner 重写为 runNativeCommand(command, args, signal, window)，
+// 选项行变 `windowsHide: window === "hidden"`，explorer.exe 一律经 runExplorer()
+// 以 "visible" 调用、控制台应用仍 "hidden"——与壳补丁同语义且更干净，补丁模块、
+// 契约探针、upstream.rs 两常量（NATIVE_COMMAND_FILE_SEGMENTS/HIDE_NEEDLE）按
+// 既定指引整体删除。若上游回退（explorer 再次隐藏不可见），从 git 历史找回。
 
-// ── 预设签名（presets.rs 只读探测；补丁器已于 rc.8 退役，MARKER 与补丁
+// ── 预设签名（presets.rs 只读探测；补丁器已于 0.1.0 线 rc.8 退役，MARKER 与补丁
 // 内容曾是我方产物，随补丁器一并删除）──────────────────────────────────
-/// minimal 预设目录的 **node_modules 相对路径**（基准 = dsh_node_modules_dir）。
-/// 0.1.2 起预设从 dsh 包搬入独立的 @deepseek-ai/dsh-agent-presets 包（apps/cli 的
-/// files 收缩为 lib/*.js；上游出处：preset/agent-presets/package.json files:
-/// lib+presets）。发布形态 2026-09-04 rc.1 真实包实测落盘：
-/// dsh/node_modules/@deepseek-ai/dsh-agent-presets/presets/minimal。
+/// minimal 预设文件的 **node_modules 相对路径**（基准 = dsh_node_modules_dir）。
+/// 0.1.2 起预设从 dsh 包搬入独立的 @deepseek-ai/dsh-agent-presets 包；**0.2.0 起
+/// 该包消失**，预设改为 @deepseek-ai/dsh-web-app/presets/ 下的 cordis patch 文件
+///（minimal.patch.yml / standard.patch.yml 等，内容是 `insert:` 一枚
+/// @deepseek-ai/dsh-agent-preset 声明行；发布形态 0.2.0 首个 rc 真实包实测落盘）。
 /// 影响：tests/upstream_contract.rs probe_presets 的目录拼装（presets.rs 本身
-/// 只消费最终目录，签名判定逻辑不变）。
-pub const PRESET_DIR_SEGMENTS: &[&str] = &["@deepseek-ai", "dsh-agent-presets", "presets", "minimal"];
-pub const PRESET_COMPOSITION_FILE: &str = "agent.cordis.yml";
+/// 只消费最终目录，签名判定逻辑不变——minimal.patch.yml 仍含带 win32 门控的
+/// 持久 bash 引用，UpstreamHandled 语义保持）。
+pub const PRESET_DIR_SEGMENTS: &[&str] = &["@deepseek-ai", "dsh-web-app", "presets"];
+pub const PRESET_COMPOSITION_FILE: &str = "minimal.patch.yml";
 /// 破损签名：引用了 PTY 持久 bash 工具。rc.8 起该行仍在但带 win32 禁用门控
 /// （上游已自修），所以单凭此 needle 命中不再意味着需要补丁。
 pub const PRESET_BROKEN_NEEDLE: &str = "dsh-tool-bash-persistent";
@@ -352,8 +365,9 @@ pub const PRESET_BROKEN_NEEDLE: &str = "dsh-tool-bash-persistent";
 pub const PRESET_PLATFORM_NEEDLE: &str = "win32";
 /// 0.1.5 起 minimal 预设删掉整个 filesystem 组（fs-local + str-replace-editor），
 /// 只剩持久 shell——"极简模式"从"持久 shell + 文件编辑"降为单工具（**用户可感**，
-/// 上游默认工具调整的一部分）。探针断言该串**不再出现**在 minimal 的
-/// agent.cordis.yml 里：它重新出现 = 上游把文件工具装回去了，发版说明口径要跟着改。
+/// 上游默认工具调整的一部分）。探针断言该串**不再出现**在 minimal 预设文件里
+///（0.2.0 起载体 = dsh-web-app/presets/minimal.patch.yml）：它重新出现 = 上游把
+/// 文件工具装回去了，发版说明口径要跟着改。
 pub const PRESET_MINIMAL_EDITOR_ABSENT_NEEDLE: &str = "str-replace-editor";
 
 // ── 远程代理（remote/proxy.rs 的 bundle 改写）────────────
@@ -418,8 +432,9 @@ pub const PNPM_CMD_FILE: &str = "pnpm.cmd";
 pub const WORKSPACE_STORE_SEGMENTS: &[&str] = &["storages", "workspace.json"];
 /// SPA 在 localStorage 记当前会话的键（值形 {"sessionId":"session-…"}，切会话即写）。
 /// 实测落盘：0.1.2 在 @deepseek-ai/dsh-client-runtime（该包 0.1.2 后停发），
-/// **0.1.5 起在 @deepseek-ai/dsh-api-session-controller/lib/client.js** ——探针是
-/// 全树 tree_find，换包不影响判绿，但别照旧注释去找那个已消失的包。
+/// 0.1.5 起在 @deepseek-ai/dsh-api-session-controller/lib/client.js——**0.2.0 起
+/// 迁至 @deepseek-ai/dsh-client-ui-workspace/lib/client.js**（createSnapshotStore
+/// 带 persist）。探针是全树 tree_find，换包不影响判绿，但别照旧注释去找旧包。
 /// 影响面：改名 = project.html 取不到当前会话（面板显示"未找到会话"）。
 pub const LOCALSTORAGE_CURRENT_SESSION_KEY: &str = "dsh.sessions.current";
 /// workspace.json schema 锚点字段（dsh-workspace/lib/index.js 内必现）。
@@ -546,27 +561,20 @@ pub const NOTICE_SUMMARY_NEEDLE: &str = "noticeSummary";
 /// 上游再动命令旗标/注册面时探针翻红，提醒复核预装插件。
 pub const COMMANDS_ATTACHMENT_FLAG: &str = "attachments";
 
-// ── dsh 跨进程写锁（locks.rs 陈旧锁自愈的依据）─────────────────
-/// 锁文件的命名：目标文件的**兄弟**路径 `<filename>.lock`。上游出处：
-/// @deepseek-ai/dsh-atomic-write/lib/index.js 的 withFileLock（`wx` 独占创建、
-/// 内容 `${process.pid}\n`、只在 finally 里 rm）。关键性质：**竞争方永不删除
-/// 已存在的锁**（源码注释原文 orphan recovery is an operator action），过期只
-/// 报错、不猜所有权。影响面：持有方被硬杀（Windows 的 TerminateProcess）即永久
-/// 残留 → 之后每次启动都在 boot 阶段超时，应用再也起不来（机器 B 实踩：
-/// `.credentials.yaml.lock` 卡住 dsh-client-connection 的 apply，插件树加载失败、
-/// 进程直接退出，壳只看到"就绪行没出现"）。locks.rs::heal_stale_locks 在每次
-/// spawn 前按 pid 存活性清理；上游一旦自己做孤儿恢复、或改锁名/内容格式，
-/// tests/upstream_contract.rs 的锁探针会翻红，届时撤掉自愈。
-pub const LOCK_FILE_SUFFIX: &str = ".lock";
-/// 凭证写入的锁等待预算（上游常量 DOCUMENT_LOCK_WAIT_MS = 30000）。出处同上的
-/// 调用方 @deepseek-ai/dsh-credentials-local/lib/index.js。影响面：诊断面板/日志
-/// 里解释"卡 30s 才报错"的数值来源。
-pub const CREDENTIALS_LOCK_WAIT_SECS: u64 = 30;
-/// 陈旧锁扫描的最大目录深度（相对 DSH_HOME；0=根层）与跳过的目录名。
-/// 锁的落点都在 home 根与浅层（credentials.yaml / settings.yaml 及其它状态文件），
-/// node_modules 下是插件树（深且无锁），整棵跳过。
-pub const LOCK_SCAN_MAX_DEPTH: usize = 3;
-pub const LOCK_SCAN_SKIP_DIRS: &[&str] = &["node_modules"];
+// ── dsh 跨进程写锁（locks.rs 自愈已于 0.2.0 跟版时退役）─────────────────
+// 0.5.13 时代的事实：锁是 `<file>.lock` 兄弟文件（wx 建、内容 `${pid}\n`、只在
+// finally 里删），且**竞争方永不删除已存在的锁**（源码注释原文 orphan recovery
+// is an operator action）——持有方被壳硬杀即永久残留，之后每次启动都在 boot
+// 阶段超时（凭证写入预算 30s）、插件树失败退出，壳只见"就绪行没出现"（机器 B
+// 实踩）。壳侧对策曾是 locks.rs::heal_stale_locks 每次 spawn 前按 pid 存活性
+// 预扫清理。**0.2.0 上游自带孤儿接管**：holderExited() 对 `${pid}\n` 记录做
+// 信号探活（ESRCH=持有者已死），takeOverExitedLock() 经 claim 文件防竞态后
+// 移除死锁并重试——与壳自愈同语义，locks.rs 按预案退役（模块、调用点、
+// LOCK_FILE_SUFFIX/SCAN_* 常量均已删）。残余边界：记录不完整/非纯 pid 的锁
+// 上游只等待不接管（corrupted lock 仍可拖满 30s 预算）——理论边缘（创建与
+// 写 pid 间隙崩溃才产生），未观测到；真发生时锁路径会出现在 dsh 启动日志。
+// 哨兵：tests/upstream_contract.rs probe_locks 断言接管机制仍在，上游回退则
+// 从 git 历史恢复 locks.rs。
 
 // ── 韧性栈（API 重试的静默失效哨兵；2026-09-17 源码核实）─────────────
 /// LLM 请求失败自动重试的启用点：dsh 默认插件清单（@deepseek-ai/dsh-base/

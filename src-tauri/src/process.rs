@@ -221,16 +221,11 @@ impl DshProcess {
                 self.inner.paths.dsh_bin.display(),
                 self.inner.paths.work_dir.display()
             ));
-            // 陈旧锁自愈：dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（wx 建、
-            // 内容 pid、只在 finally 里删，竞争方永不删别人的锁）。壳在 Windows 上
-            // 只能 taskkill /F 硬杀，dsh 的 SIGTERM 优雅退场拿不到信号——恰好持锁
-            // 时被杀，锁文件就永久残留，之后每次启动都在 boot 阶段等它超时（凭证
-            // 写入预算 30s）、插件树加载失败、进程退出，用户视角是"应用再也起不来"
-            // （机器 B 实踩）。每次 spawn 前扫一遍 DSH_HOME：死 pid 的锁删掉、
-            // 活着的留着并记日志（locks.rs 头注有完整根因与保守策略）。
-            for finding in crate::locks::heal_stale_locks(&self.inner.paths.home, self.inner.platform.as_ref()) {
-                self.log(finding.log_line());
-            }
+            // 陈旧锁自愈已退役（0.2.0 跟版）：dsh-atomic-write 的 contender 现在
+            // 自带孤儿接管——持有者 PID 探活不存在（ESRCH）即移除锁并重试
+            //（takeOverExitedLock，claim 文件防竞态）。0.5.13 时代"壳硬杀 dsh →
+            // 死锁永久卡启动"的场景由上游根治，壳不再预扫（墓碑与残余边界见
+            // upstream.rs 段注；契约 probe_locks 盯着上游不回退）。
             let mut cmd = Command::new(&self.inner.paths.node_exe);
             // Node 默认请求头上限 16KB：WebView2 罐或用户自带浏览器攒下的
             // dsh-auth-* cookie + 插件 bundle 组合 URL 可超限 → dsh 431 → 主窗口

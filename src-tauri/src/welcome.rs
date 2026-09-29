@@ -1,9 +1,10 @@
 //! 内测声明豁免播种：dsh 的 welcome notice（"内测声明"对话框）在 settings.yaml
-//! 的 ui-onboarding.welcomeNoticeVersion ≠ 当前文案版本时，每次启动都弹窗。
-//! 壳面向最终用户——启动时从运行时 client.js 提取当前文案版本，预写进
-//! settings.yaml（Value 级改写，其余键不动），桌面用户永不见该对话框；
-//! 上游 bump 文案版本时提取自动跟随、仍豁免。needle 由契约测试守门
-//! （tests/upstream_contract.rs），提取/写盘失败只记 events.log 不阻断启动。
+//! 的 welcomeNoticeVersion（设置命名空间见 upstream::WELCOME_NOTICE_NAMESPACE，
+//! 0.2.0 起是 ui-settings-general，旧装机残留的 ui-onboarding 段无害）≠ 当前
+//! 文案版本时，每次启动都弹窗。壳面向最终用户——启动时从运行时 client.js 提取
+//! 当前文案版本，预写进 settings.yaml（Value 级改写，其余键不动），桌面用户
+//! 永不见该对话框；上游 bump 文案版本时提取自动跟随、仍豁免。needle 由契约
+//! 测试守门（tests/upstream_contract.rs），提取/写盘失败只记 events.log 不阻断启动。
 
 use serde_yaml::{Mapping, Value};
 use std::fs;
@@ -54,8 +55,9 @@ fn extract_notice_version(dsh_bin: &Path) -> Result<String, String> {
     Ok(value)
 }
 
-/// 播种/更新 settings.yaml 的 ui-onboarding.welcomeNoticeVersion。
-/// 文件缺失则新建（仅含该节）；损坏（YAML 解析失败/根不是 map）则不动盘报错。
+/// 播种/更新 settings.yaml 的 welcomeNoticeVersion（命名空间随
+/// upstream::WELCOME_NOTICE_NAMESPACE）。文件缺失则新建（仅含该节）；
+/// 损坏（YAML 解析失败/根不是 map）则不动盘报错。
 pub fn seed_welcome_notice(home: &Path, dsh_bin: &Path) -> Result<WelcomeOutcome, String> {
     let version = extract_notice_version(dsh_bin)?;
     let path = home.join(crate::upstream::SETTINGS_FILE);
@@ -132,7 +134,10 @@ mod tests {
         let first = seed_welcome_notice(home.path(), &bin).unwrap();
         assert!(matches!(first, WelcomeOutcome::Seeded));
         let text = fs::read_to_string(home.path().join("settings.yaml")).unwrap();
-        assert!(text.contains("ui-onboarding:"), "实际文件：{text}");
+        assert!(
+            text.contains(&format!("{}:", crate::upstream::WELCOME_NOTICE_NAMESPACE)),
+            "实际文件：{text}"
+        );
         assert!(text.contains("welcomeNoticeVersion: 2099-01-02.3"), "实际文件：{text}");
         let second = seed_welcome_notice(home.path(), &bin).unwrap();
         assert!(matches!(second, WelcomeOutcome::AlreadySeeded));
@@ -144,7 +149,10 @@ mod tests {
         let home = tempfile::tempdir().unwrap();
         fs::write(
             home.path().join("settings.yaml"),
-            "ui-theme:\n  preference: dark\nui-onboarding:\n  welcomeNoticeVersion: 2000-01-01.1\n",
+            format!(
+                "ui-theme:\n  preference: dark\n{}:\n  welcomeNoticeVersion: 2000-01-01.1\n",
+                crate::upstream::WELCOME_NOTICE_NAMESPACE
+            ),
         )
         .unwrap();
         let outcome = seed_welcome_notice(home.path(), &bin).unwrap();

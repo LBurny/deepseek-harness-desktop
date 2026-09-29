@@ -116,8 +116,12 @@
     z-index: 30;
     overflow: visible;
   }
-  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) > [class*="_sidebarCol"] > [class*="_root"] {
-    width: min(300px, 84vw);
+  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) > [class*="_sidebarCol"] > [class*="_root"],
+  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) > [class*="_sidebarCol"] > [data-slot="sidebar"] > [class*="_root"] {
+    /* 0.2.0 起根节点带行内 width:280px（须 !important 才压得过），且 sidebarCol
+       与根之间多了 display:contents 的槽位包装（子选择器按 DOM 树匹配，必须
+       多写一层包装变体；两条变体并留以同时兼容新旧包装形态） */
+    width: min(300px, 84vw) !important;
     box-shadow: 16px 0 40px rgba(0, 0, 0, 0.3);
   }
   /* 列宽拖拽手柄触屏无用且会挡住边缘触控 */
@@ -197,10 +201,13 @@
    * 输入框被推出可视区）。proxy.rs 已把 viewport meta 改写为禁缩放形态作为主
    * 防线，本规则是双保险：上游改了 meta 值导致改写 miss 时，16px 字号从触发
    * 条件上消灭缩放。composer 实测字号 var(--dsh-content-font-size,14px)，锚点
-   * composerStack（native 对话输入卡片祖先）+ 原生 textarea；16px 会把
+   * composerStack（native 对话输入卡片祖先）+ 输入控件；0.2.0 起输入框从
+   * textarea 改为 Lexical contenteditable div（role=textbox），两个选择器都要
+   * 覆盖（0.2.0 跟版实测：只留 textarea 时整条规则落空）；16px 会把
    * line-height(calc(24px+delta)) 顶高一档，行高跟随无碍。
    */
-  [class*="_composerStack"] textarea {
+  [class*="_composerStack"] textarea,
+  [class*="_composerStack"] [contenteditable="true"] {
     font-size: 16px;
   }
 
@@ -222,15 +229,6 @@
     bottom: calc(100% + 8px);
     max-width: calc(100vw - 24px);
     overflow-y: auto;
-  }
-
-  /*
-   * 产物块（P4kPIW_*）：手机上"在文件夹中显示"按钮没有意义——它唤起的是 PC
-   * 端的资源管理器，手机远程端看不见也点不到，还白占一行。隐藏按钮，保留
-   * "产物"标签与文件药丸（点击查看文件内容仍可用）。
-   */
-  [class*="_showFolder"] {
-    display: none;
   }
 
   /*
@@ -402,10 +400,10 @@
   }
   /* 后台任务药丸（"N 个后台任务"，含活跃态的圆点）：触发器的宽度上限跟住 root，
      计数补省略号——省下的正是"4 个后台任务 ⌄"到"4 个… ⌄"的那段。
-     注意这三个本地名（root/trigger/count）不独属后台任务包：同一槽位的「计划」
-     药丸（dsh-client-ui-schedule，order 10）用的是同一套名字——两者是同一设计语言
-     的同款药丸，规则一并覆盖正合意图（同样从"挤标题"变成"截断"），菜单行各段
-     名字不同（row/kind/label/status/duration 等）不受影响。 */
+     注意这几个本地名不独属后台任务包：同一槽位的「计划」药丸
+    （dsh-client-ui-schedule，order 10）用同款 root/trigger（0.2.0 实测无 count 段）
+     ——两者是同一设计语言的同款药丸，规则一并覆盖正合意图（同样从"挤标题"变成
+     "截断"），菜单行各段名字不同（row/kind/label/status/duration 等）不受影响。 */
   header[class*="_header"] [class*="_headerActions"] [class*="_root"] {
     min-width: min(34px, 9vw);
   }

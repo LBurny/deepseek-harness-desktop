@@ -29,8 +29,7 @@ src-tauri/src/
                     就绪行是 launch token 唯一来源（pump 先捕获再脱敏转发）；wait_token 静默
                     超时 + npm 冷装警告切 10min 长预算；Ready 落耗时分解行；子进程 PATH 前置
                     内嵌 node 目录 + profile 的 node_modules/.bin；指数退避、stop/restart；
-                    **端口优先复用记忆值**；**spawn 前先跑 locks.rs 陈旧锁自愈**
-  locks.rs          陈旧锁自愈：spawn 前删 DSH_HOME 里持有者已退出的 *.lock（见坑区）
+                    **端口优先复用记忆值**
   dsh_session.rs    BrowserAuth 凭证：launch token 解析 + token 换 cookie（绑 127.0.0.1:<port>
                     authority，换端口即失效）；凭证只在内存、日志脱敏（token 经 redact_token）
   runtime.rs        ensure_runtime：可写则原地运行内嵌运行时，只读则回退部署副本；
@@ -63,9 +62,6 @@ src-tauri/src/
   oiacache.rs       open-in-app 可用性缓存补丁（apps store 加 persist——按钮原本等
                     每进程一次 ~2.9s 冷探测才渲染；第二次起首帧即渲染，细节见
                     upstream.rs 段注）
-  revealshow.rs     资源管理器"显示/打开所在文件夹"补丁（dsh-native-command 的
-                    windowsHide 把 explorer 窗口压成不可见；只豁免 explorer.exe，
-                    细节见 upstream.rs 段注）
   welcome.rs        内测声明豁免播种（失败只记 events.log，回退 dsh 原生弹一次）
   update.rs         检查更新：发布仓 releases/latest + 下载 *_x64-setup.exe；install_update
                     必传 /UPDATE /P /R（见坑区）
@@ -157,10 +153,10 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 - **toast 点击激活只能走协议激活**：in-process Activated 回调 Win10 不可靠；XML 带 `activationType="protocol" launch="dshdesktop://open"` → single-instance 拦截 → show_main；依赖启动时 ensure_activation_registered（仅安装形态写，dev 跳过）。
 - **协议激活到顶统一走 show_main → platform bring_to_front**：两段择时（250/550ms）→ TOPMOST → AttachThreadInput 借权限 → SetForegroundWindow → NOTOPMOST；二次实例在 main 开头 `AllowSetForegroundWindow(ASFW_ANY)` 广播给主实例；每步落 events.log。教训：**先验证调用链再加固机制**（回调里内联三件套没调 show_main，加固全落在走不到的路径上）。
 - **toast 图标只有顶部行小图标**（HKCU AppUserModelId 的 IconUri → 随包 256px `icons/128x128@2x.png`），XML 不含 `<image>`（appLogoOverride 叠双图标）；锚定测试：bundle.resources 漏映射则 IconUri 静默失效、断言 XML 无 `<image>`。
-- **dsh 写锁不自愈 → 硬杀一次可能永久起不来（0.5.13 修）**：锁是 `<file>.lock` 兄弟文件（wx 建、内容 pid、只 finally 删，上游明确 orphan recovery is an operator action）；壳只能 taskkill /F 硬杀，dsh 的 SIGTERM 优雅退场拿不到信号——持锁时被杀即永久残留，之后每次启动在 boot 阶段等锁超时（凭证写入 30s）、插件树失败退出，壳只见"就绪行没出现"。对策：locks.rs 每次 spawn 前清持有者已退出的 `*.lock`（pid 死了才删/活着且镜像是 node 的留/无 pid 要够老；限深 3 层、跳过 node_modules、不进 junction；逐条落 events.log）。旧版急救：`scripts/check-dsh-locks.ps1`（-Remove 只清死锁）。
+- **dsh 写锁死锁曾致"硬杀一次永久起不来"（0.5.13 修；0.2.0 起上游原生接管，壳自愈退役）**：锁是 `<file>.lock` 兄弟文件（wx 建、内容 pid、只 finally 删）。0.1.x 上游明确 orphan recovery is an operator action，壳侧曾是 locks.rs 每次 spawn 前清持有者已退出的 `*.lock`（判定保守、逐条落 events.log）。**0.2.0 上游 dsh-atomic-write 自带孤儿接管**：contender 对持有者 PID 信号探活（ESRCH=已死）即经 claim 文件防竞态移除锁并重试——与壳自愈同语义，locks.rs/probe 旧断言/LOCK_* 常量按预案删除（墓碑与残余边界见 upstream.rs 段注；记录不完整的锁上游只等待不接管，理论边缘）。旧版急救脚本保留：`scripts/check-dsh-locks.ps1`（-Remove 只清死锁）。契约 probe_locks 转为哨兵盯上游接管机制不回退。
 - **模型触发器的图标只有一枚（0.1.5 起）**：上游自带 triggerIcon（默认 display:none，容器 ≤360px 才亮）；壳旧 ::before 火花补丁与它并排成两枚——已删自造、mobile.css 在 700px 断点点亮上游那枚（361~700px 区间否则一个图标都不剩）。回归 model_trigger_iconified_rule + 契约探针 MODEL_TRIGGER_ICON_NEEDLE。
 - **回合统计行搬移锚点是 `data-composer-stats`（0.1.5 起）**：StatsPills 行的分隔点"·"在药丸 label 内部，旧锚点（直接子代 ≥2 个 _sep / `:has(> _sep)`）恒失配——行留在输入区下方、信息页恒空态。mobile.js/css 已改锚该属性；面板只藏行级分隔符（药丸内部的 · 保留，否则计数与速率文本粘连）。契约探针 COMPOSER_STATS_ROW_HOOK。
-- **「在文件资源管理器中显示」点了没反应**：文件卡片菜单（「在文件资源管理器中显示」/「打开所在文件夹」）走 dsh-native-command 的 `revealNativePath()` → `execFile("explorer.exe", ["/select,", <file url>], { windowsHide: true })`；libuv 的 windowsHide 在子进程 STARTUPINFO 上置 `STARTF_USESHOWWINDOW + SW_HIDE`，而 Explorer 文件夹窗口走 `SW_SHOWDEFAULT` 继承隐藏态——实测窗口确实建出来了（路径/选中都对、HTTP 204 照常回，故 UI 回「已请求…」）但 `IsWindowVisible=false`。对策 = revealshow.rs 启动期原地补丁（签名门控+marker 幂等）：`windowsHide: !/explorer\.exe$/i.test(command)`，**只豁免 explorer.exe**（powershell 的 `Invoke-Item` 走 ShellExecute 本来就可见；控制台应用的控制台必须保持隐藏，不能全局置 false）。验证：`cargo test --lib revealshow`；真机点一次卡片菜单应弹出带选中文件的资源管理器窗口。
+- **「在文件资源管理器中显示」点了没反应（0.2.0 起上游原生修复，壳补丁已退役）**：症状链路是 dsh-native-command 的 `revealNativePath()` → `execFile("explorer.exe", ["/select,", <file url>], { windowsHide: true })`；libuv 的 windowsHide 在子进程 STARTUPINFO 上置 `STARTF_USESHOWWINDOW + SW_HIDE`，而 Explorer 文件夹窗口走 `SW_SHOWDEFAULT` 继承隐藏态——窗口确实建出来了（路径/选中都对、HTTP 204 照常回，故 UI 回「已请求…」）但 `IsWindowVisible=false`。0.4.x~0.5.18 的对策 = revealshow.rs 原地补丁（签名门控+marker 幂等）只豁免 explorer.exe；**0.2.0 上游把 runner 参数化**（`windowsHide: window === "hidden"`，explorer 经 runExplorer 显式 "visible"），按探针既定指引删除 revealshow.rs/probe_revealshow/NATIVE_COMMAND_* 常量（墓碑段注留回退路径）。验证：真机点一次卡片菜单应弹出带选中文件的资源管理器窗口。
 - **手机端会话头部标题被挤没、与右侧按钮重叠（0.5.18 修）**：上游头部行 `titleRow` 里 `headerUtilities`/`headerCorner` 都是 `flex:none`、`crumbs`（会话名面包屑）是 `min-width:0`，且头部无任何窄屏适配——390px 实测（临时实例 + Playwright）标题被挤到 **0 宽**（会话名完全不可见），叠加"模式"药丸（68px）与"N 个后台任务"药丸（101px）后 `headerActions` 内容 177px 撑破自身盒子、与右侧固定件**重叠 9px**。对策都在 `mobile.css` 的 ≤700px 段（只动弹性参数、不藏控件）：三者各留 `min(px, vw)` 下限并允许收缩；"模式"药丸改 `inline-block`（文案是**匿名弹性项**，容器上的 text-overflow 对它无效——原生超宽是硬裁而非省略号），其图标随之转回行内（原生 `display:block` 会另起一行）；"后台任务"计数补省略号、触发器宽度跟住 root；头部内边距 20/28→12/12。320/360/375/390/414/500/600/700/720 九档实测行内间隙恒 12px、行溢出 0、头部高 76px，≥600px 三件恢复原生完整形态。**选择器必须限定在 `header[class*="_header"]` 之下**——`[class*="_headerActions"]` 裸匹配会命中侧栏的 `bhn1Oq_headerActions`（div，不在 `<header>` 内）；槽位贡献外层是 `display:contents` 包装，`min-width` 得写到包装层下的直接子代上（写在包装层是空操作）。
 - **dsh 端口必须跨启动稳定，否则客户端偏好全丢**：上游把若干 UI 偏好存在浏览器 localStorage（`dsh-client-store` 的 `persist`，无服务端副本）——会话头部"打开方式"选择（`dsh.open-in-app.choice`，VS Code / 文件资源管理器）、会话宽度 `dsh.conversation.contentWidth`、当前会话 `dsh.sessions.current`、轨迹时长 `dsh.trajectory.duration`；而 localStorage 按 **origin（含端口）** 隔离，早先每次 spawn 都 `free_port()` 随机取端口 = 每次全新源站 → 用户选的 VS Code 重启就变回文件资源管理器（0.5.14 修，实锤：WebView2 的 Local Storage leveldb 里同库并存 7 个 `http://127.0.0.1:<port>` 源站，每个各存各的）。对策 = port.rs 记忆端口：Ready 时把端口写进壳数据目录 `dsh-port.txt`，下次启动探活通过就复用（2s 重试预算；被占则换新端口并在 Ready 后改写记忆，一轮收敛；同一轮重试回避它防"在旧端口反复撞"）。
 - **pnpm store 在 `F:\Code\pnpm-store`（2026-09-21 从 `H:\.pnpm-store` 迁出）**：配置在 user 级 `%LOCALAPPDATA%\pnpm\config\config.yaml` 的 `storeDir`，`pnpm store path` 应回 `F:\Code\pnpm-store\v11`，项目 `node_modules/.modules.yaml` 的 `storeDir` 也应一致。三条连带坑：①**跨盘 = copy 模式**——项目盘与 store 不同盘时 pnpm 无法硬链接，安装会打印 "Packages are copied from the content-addressable store to the virtual store"，H: 上的项目（含本仓）`node_modules` 是真实副本，装得更慢更占空间；想要硬链接收益就得让 store 与项目同盘。②**重装时会删残 node_modules**——pnpm 判定需要重装（storeDir / lockfile 变了等）时先删 `node_modules/.pnpm`、再删顶层 symlink，此时链接已断、它删不动 → `ERR_PNPM_PACKAGE_MANAGER_REMOVE_MODULES_DIR … 拒绝访问 (os error 5)` 退出，留下只剩几个断链 symlink 的 node_modules（两次把 `pnpm release` 挡在执行之前）。修法：MSYS `rm -rf node_modules/*`（走 lstat，能删断链）后 `pnpm install --frozen-lockfile`。③**别用 robocopy 搬 store**——robocopy 不认硬链接，把共享块实体化成独立副本（实测源库 7GB 唯一数据 → 目标 70GB / 几十万文件 / 8.8MB·s⁻¹）。
@@ -168,11 +164,11 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 310 个，其中 4 条 ignored（补丁模块的 `apply_to_real_runtime` 开发辅助等），含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 293 个，其中 3 条 ignored（补丁模块的 `apply_to_real_runtime` 开发辅助等），含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 
-平台差异收口在 `platform/mod.rs` 的 Platform trait（可执行名、运行时目录、triplet、杀进程树、子进程配置、进程存活/镜像、系统深浅色）。CI matrix 的 macos/linux 行已注释，启用前需实现对应 platform 文件并让 fetch-runtime 支持对应 triplet；注意 process_alive 在桩平台恒 false，依赖它的逻辑（locks.rs 自愈）须保留 Windows 门。
+平台差异收口在 `platform/mod.rs` 的 Platform trait（可执行名、运行时目录、triplet、杀进程树、子进程配置、进程存活/镜像、系统深浅色）。CI matrix 的 macos/linux 行已注释，启用前需实现对应 platform 文件并让 fetch-runtime 支持对应 triplet；注意 process_alive 在桩平台恒 false。
 
 ## 已知限制
 

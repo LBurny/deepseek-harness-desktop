@@ -120,7 +120,11 @@ function Add-ChangelogEntry {
   if ($AppVer) {
     $block = "$nl## [$AppVer] - $(Get-Date -Format 'yyyy-MM-dd')$nl${nl}### Changed$nl${nl}$bullet$nl"
   } else {
-    $body = $f.Text.Substring($idx)
+    # 只扫 Unreleased 段内（到下一个 '## [' 段头为止）——Substring 到文件尾会把
+    # 后面历史段的 ### Changed 也算进去，0.1.6 跟版实踩误报"已有 ### Changed"。
+    $rest = $f.Text.Substring($idx)
+    $next = $rest.IndexOf("`n## [")
+    $body = if ($next -ge 0) { $rest.Substring(0, $next) } else { $rest }
     if ($body -match '### Changed') { return @{ Status = 'mismatch'; Detail = 'Unreleased 下已有 ### Changed，请手工归并' } }
     $block = "$nl### Changed$nl${nl}$bullet$nl"
   }
@@ -224,6 +228,18 @@ if ($SelfTest) {
       $r = Add-ChangelogEntry $p '0.1.1-rc.2' '0.1.2-rc.1' $null
       Assert-Equal $r.Status 'added' '状态'
       Assert-Equal ((Read-FileText $p).Text -match '(?s)## \[Unreleased\].*### Changed.*0\.1\.1-rc\.2 → 0\.1\.2-rc\.1.*## \[0\.3\.0\]') $true 'Unreleased 结构'
+    }
+    T 'Add-ChangelogEntry 不被后续历史段的 ### Changed 干扰' {
+      $p = Join-Path $tmp 'CHANGELOG3.md'
+      Write-FileText $p "# Changelog`n`n## [Unreleased]`n`n## [0.3.0] - 2026-08-21`n`n### Changed`n`n- older entry`n" $false
+      $r = Add-ChangelogEntry $p '0.1.1-rc.2' '0.1.2-rc.1' $null
+      Assert-Equal $r.Status 'added' '状态'
+    }
+    T 'Add-ChangelogEntry 仍拒 Unreleased 内已有 ### Changed' {
+      $p = Join-Path $tmp 'CHANGELOG4.md'
+      Write-FileText $p "# Changelog`n`n## [Unreleased]`n`n### Changed`n`n- pending`n`n## [0.3.0] - 2026-08-21`n" $false
+      $r = Add-ChangelogEntry $p '0.1.1-rc.2' '0.1.2-rc.1' $null
+      Assert-Equal $r.Status 'mismatch' '状态'
     }
   } finally { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
   Write-Host ("SelfTest：{0}/{1} 通过" -f ($total - $fails), $total)

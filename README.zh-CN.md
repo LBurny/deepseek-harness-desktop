@@ -66,7 +66,7 @@ dsh 事件（批准请求、提问）通过其 WebSocket 通道 `/api/events.mux
 pnpm install
 
 # 准备内嵌运行时（二选一）
-powershell -File scripts/fetch-runtime.ps1        # 真实运行时（Node 24 + dsh 0.1.6-alpha.1 + cloudflared）
+powershell -File scripts/fetch-runtime.ps1        # 真实运行时（Node 24 + dsh 0.2.0-rc.1 + cloudflared）
 powershell -File scripts/use-fixture-runtime.ps1  # 轻量 fake-dsh fixture，供壳调试
 
 pnpm tauri dev

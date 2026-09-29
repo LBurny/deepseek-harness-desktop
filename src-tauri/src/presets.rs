@@ -10,6 +10,12 @@
 //! 随之退役；保留签名判定是因为 tests/upstream_contract.rs 靠它当回归哨兵——
 //! 上游若回退 win32 修复（状态回到 NeedsPatch），契约套件翻红，从 git 历史
 //! 找回补丁器。
+//!
+//! 预设落点变迁：0.1.2 起在独立的 dsh-agent-presets 包（presets/minimal/
+//! agent.cordis.yml）；0.2.0 起该包消失，改为 dsh-web-app/presets/minimal.patch.yml
+//! 的 cordis patch insert 行（upstream::PRESET_DIR_SEGMENTS/COMPOSITION_FILE
+//! 已跟随）。签名判定逻辑不变：minimal.patch.yml 仍含带 win32 门控的持久
+//! bash 引用，UpstreamHandled 语义保持。
 
 use std::fs;
 use std::path::Path;
@@ -63,15 +69,18 @@ mod tests {
 
     #[test]
     fn signature_state_classification() {
+        // 组合文件名取 upstream 常量（0.1.2 前是 agent.cordis.yml，0.2.0 起是
+        // minimal.patch.yml——测试跟随常量，落点再搬家不用改这里）。
+        let composition = crate::upstream::PRESET_COMPOSITION_FILE;
         // rc.6 形态：破损签名 + 无平台分支 → NeedsPatch
         let dir = tempfile::tempdir().unwrap();
-        fs::write(dir.path().join("agent.cordis.yml"), UPSTREAM_COMPOSITION_RC6).unwrap();
+        fs::write(dir.path().join(composition), UPSTREAM_COMPOSITION_RC6).unwrap();
         assert_eq!(preset_signature_state(dir.path()), SignatureState::NeedsPatch);
 
         // rc.8 形态：仍引用持久 bash，但带 win32 平台门控 → UpstreamHandled
         let fixed = tempfile::tempdir().unwrap();
         fs::write(
-            fixed.path().join("agent.cordis.yml"),
+            fixed.path().join(composition),
             UPSTREAM_COMPOSITION_RC6.replace(
                 "name: '@deepseek-ai/dsh-tool-bash-persistent'",
                 "name: '@deepseek-ai/dsh-tool-bash-persistent'\n      disabled: !!js process.platform === 'win32'",
@@ -86,7 +95,7 @@ mod tests {
         // 历史补丁文件（marker 在）仍正确分类 → AlreadyPatched
         let patched = tempfile::tempdir().unwrap();
         fs::write(
-            patched.path().join("agent.cordis.yml"),
+            patched.path().join(composition),
             format!("# {MARKER}\n{UPSTREAM_COMPOSITION_RC6}"),
         )
         .unwrap();

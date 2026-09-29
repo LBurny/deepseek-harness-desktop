@@ -38,11 +38,10 @@ dsh 本身提供 `dsh web` 命令：在本机 127.0.0.1 上启动一个 Web UI �
 │ Rust 核心（src-tauri/src/）                                               │
 │  lib.rs      组装：插件 → setup（代码创建主窗口）→ 事件桥（dsh 状态 → 前端事件/窗口导航）│
 │  download.rs 主窗口下载处理：on_download 落系统下载目录 + 去重 + toast  │
-│  presets.rs  启动期改写 shipped minimal 预设为 win32 pwsh 变体（签名门控）│
+│  presets.rs  minimal 预设签名只读探测（补丁器已退役，留作契约哨兵）       │
 │  runtime.rs  运行时定位：原地运行 / 只读回退部署 / 旧副本清理               │
 │  process.rs  DshProcess 监督循环：spawn、就绪探测、指数退避重启             │
-│  locks.rs    陈旧锁自愈：spawn 前清 DSH_HOME 里持有者已退出的 *.lock        │
-│  notify/     WS 订阅 dsh 事件(mux+host 双下行) → 分类/台账 → 原生通知      │
+│  notify/     WS 订阅 dsh 事件(/api/remote.mux 单通道) → 分类/台账 → 原生通知 │
 │  theme.rs    轮询 dsh 主题设置 → DWM 标题栏着色                            │
 │  progress.rs 首启进度模型：阶段权重、百分比映射、结构化事件负载             │
 │  tray.rs     托盘菜单；diagnostics.rs 状态/日志；commands.rs 基础命令     │
@@ -132,7 +131,7 @@ Failed（不再自动重启，前端/托盘可手动 restart）
 - **端口**：**优先复用上次真正绑上的端口**——Ready 时把端口写进壳数据目录的 `dsh-port.txt`，下次启动探活（bind 试探，与 dsh 的 Node 监听同语义：不设 `SO_REUSEADDR`）通过就复用它，否则 `free_port()` 让 OS 分配新端口。探活给 2s 重试预算（`port::REUSE_GRACE`，覆盖上个进程刚退、监听套接字尚未回收的瞬间）；端口确实被别的进程占着就换新端口、Ready 后改写记忆，下一轮收敛到新端口，同一轮内的重试回避记忆端口（否则"换端口重试"会退化成在同一个端口上反复撞，白等满 5 轮才 Failed）。**复用是 Web 源站跨启动稳定的唯一途径**：浏览器 localStorage 按 origin（含端口）隔离，端口每次都变等于每次都是全新源站——dsh 客户端走 localStorage 的偏好（会话头部"打开方式"选择 VS Code / 文件资源管理器、会话宽度 `dsh.conversation.contentWidth`、当前会话 `dsh.sessions.current`、轨迹时长）重启即回默认值（上游 `dsh-client-store` 的 `persist` 只写 localStorage，无服务端副本），用户视角是"我选的打开方式不持久化"。free_port 返回到实际使用之间仍有竞态窗口，靠"就绪超时即杀、换端口重试"兜底；`wait_ready` 轮询 `http://127.0.0.1:<port>/` 直到拿到**任意** HTTP 响应（不要求 200）。
 - **wait_token 是静默超时而非固定时长（0.5.6 起）**：等 token 就绪行期间，pump 每收到一行 stdout/stderr 都刷新活动时间，持续静默才计时（普通预算 60s）；见到 npm 冷装警告行（`npm warn exec … will be installed`，npx 解析未缓存包、MCP 条目联网安装的标志）切 install 长预算 10min（npm fetch 可能数分钟无输出），absolute 10min 封顶防"一直打印但永不就绪"挂死。旧固定 60s 在冷装场景把快装完的进程杀树、白等一轮再靠 npm 缓存余温重启（0.5.5 实踩：上游 MCP 包发版后的首次启动必现）。Ready 前落耗时分解行 `[dshdesktop] ready: port=N total=Xs http=Ys token=Zs`——诊断面板"上次启动"行的数据源（格式锚定 diagnostics::parse_boot_timing 与 tests/process.rs）。
 - **stop/restart**：两个 `tokio::sync::Notify`。stop 置 shutdown 标志并通知，循环杀掉进程树（`taskkill /T /F`，dsh 可能派生 python 等子孙）后进入 `Stopped`；restart 在循环存活时通知其立即重来，循环已退出（Failed/Stopped）时重新 spawn 一个监督循环。
-- **陈旧锁自愈（0.5.13 起，`locks.rs`）**：每次 spawn 前扫 DSH_HOME 里持有者已退出的 `*.lock` 并删除。dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（`wx` 独占创建、内容 `${pid}\n`、只在 finally 里删，上游明确不做孤儿恢复），而 Windows 上壳只能用 `taskkill /F` 硬杀——恰好持锁时被杀就把锁永久留在盘上，之后每次启动都在 boot 阶段等锁超时（`.credentials.yaml` 的凭证写入预算 30s）、插件树加载失败、进程退出，壳只看到"就绪行没出现"，重试多少次都一样（机器 B：应用再也起不来）。判定保守：pid 可解析且进程已退出（或被无关进程复用 pid）才删，内容不是 pid 的要够老（5min）才删，持有者活着且镜像是 node 的一律保留；扫描限深 3 层、跳过 node_modules、不进符号链接/junction。每条判定进 events.log，误删可追溯。上游一旦自己做孤儿恢复，`tests/upstream_contract.rs` 的锁探针翻红提醒撤掉。
+- **陈旧锁自愈（0.5.13~0.5.18，`locks.rs`；0.2.0 跟版时退役）**：dsh 的跨进程写锁是目标文件的兄弟 `<file>.lock`（`wx` 独占创建、内容 `${pid}\n`、只在 finally 里删），而 Windows 上壳只能用 `taskkill /F` 硬杀——恰好持锁时被杀就把锁永久留在盘上，之后每次启动都在 boot 阶段等锁超时（`.credentials.yaml` 的凭证写入预算 30s）、插件树加载失败、进程退出，壳只看到"就绪行没出现"（机器 B：应用再也起不来）。壳侧曾是每次 spawn 前扫 DSH_HOME、按 pid 存活性保守清理（判定与日志细节见 git 历史与 upstream.rs 段注）。**0.2.0 上游自带孤儿接管**（`dsh-atomic-write` 的 `holderExited()` 信号探活 ESRCH + `takeOverExitedLock()` claim 文件防竞态后移除重试），与壳自愈同语义，`locks.rs` 按预案退役；残余边界（记录不完整的锁上游只等待不接管）见 upstream.rs 段注。`tests/upstream_contract.rs` 的锁探针转为哨兵：上游回退则从 git 历史恢复。
 - **Job Object 防孤儿**：spawn 成功后立即 `Platform::register_child(pid)` 把子进程挂进全局 `KILL_ON_JOB_CLOSE` Job（`platform/windows.rs` 的 `job` 模块，句柄刻意永不关闭）。本进程以任何方式退出——包括被 NSIS 安装器/任务管理器强杀——内核都在最后句柄回收时连带终止全部成员及其子孙。0.1.8 之前没有这层保护：安装器只杀主程序，孤儿 node.exe/cloudflared.exe 锁住 runtime 目录导致重装中止（"Can't write: ...\cloudflared.exe"）。cloudflared 监督循环（remote/tunnel.rs）同样注册。
 - **tokio 陷阱**：`Child::kill()` 返回 future，不 await 就不执行；泄漏的子进程若继承了 stdout 管道，外层等管道 EOF 会永远阻塞（集成测试曾因此假挂起）。所有子路径都必须 `kill_on_drop` + 显式 `child.wait().await` + 测试里 stdio 全 null。
 
@@ -236,7 +235,7 @@ pub trait Platform: Send + Sync {
 ```
 scripts/fetch-runtime.ps1
   1. 下载 Node v24.19.0 win-x64 zip，只取 node.exe
-  2. npm install --prefix dsh --omit=dev @deepseek-ai/dsh@0.1.6-alpha.1
+  2. npm install --prefix dsh --omit=dev @deepseek-ai/dsh@0.2.0-rc.1
   3. 冒烟：node bin.js --help
   4. 调 scripts/prune-runtime.ps1 精简
 产物：src-tauri/runtime/windows-x64/（gitignore，不入库）
@@ -269,7 +268,7 @@ scripts/fetch-runtime.ps1
 
 | 层 | 内容 | 命令 |
 | --- | --- | --- |
-| Rust 单元测试（251） | runtime 部署/回退/路径归一化/复制进度回调、progress 阶段权重与百分比映射、theme BOM 解析与首启播种、notify 帧分类/子代理台账/摘要、LogRing 淘汰、port 分配/就绪探测/记忆端口读写与复用（含占用回退、短暂占用等待、低端口拒绝）、platform 基础、zoom clamp/持久化/钩子脚本内嵌设置、settings 模型/校验/持久化/提示音枚举/通知规则门控与旧键迁移、skills frontmatter 解析/列表/启停/删除/导入冲突、mcp patch 解析/启停/删除/upsert 校验与高级键保留/种子 marker/三源解析与导入冲突、remote 隧道 URL 解析与 token 脱敏、四个前端补丁模块（pickerpatch/mcpgate/oiacache/revealshow）的签名匹配与 marker 幂等 | `cd src-tauri && cargo test` |
+| Rust 单元测试（241） | runtime 部署/回退/路径归一化/复制进度回调、progress 阶段权重与百分比映射、theme BOM 解析与首启播种、notify 帧分类/子代理台账/摘要、LogRing 淘汰、port 分配/就绪探测/记忆端口读写与复用（含占用回退、短暂占用等待、低端口拒绝）、platform 基础、zoom clamp/持久化/钩子脚本内嵌设置、settings 模型/校验/持久化/提示音枚举/通知规则门控与旧键迁移、skills frontmatter 解析/列表/启停/删除/导入冲突、mcp patch 解析/启停/删除/upsert 校验与高级键保留/种子 marker/三源解析与导入冲突、remote 隧道 URL 解析与 token 脱敏、三个前端补丁模块（pickerpatch/mcpgate/oiacache；revealshow 已随 0.2.0 跟版退役）的签名匹配与 marker 幂等 | `cd src-tauri && cargo test` |
 | 进程集成测试（9，tests/process.rs） | 用 `tests/fixtures/fake-dsh.cjs`（可脚本化崩溃的假 dsh）验证 就绪→HTTP 200→stop、崩溃→自动重启→二次 Ready、**端口跨启动复用（Web 源站稳定：首个进程 Ready 落盘 `dsh-port.txt`、第二个进程读回同一端口）** | 同上 |
 | 通知集成测试（2，tests/notify_ws.rs） | fixture 双 WS 端点发事件帧，验证 approval 过滤、turn/end 完成通知（含标题）、子代理过滤 | 同上 |
 | 远程访问集成测试（16，tests/remote_{proxy,tunnel,manager,project}.rs） | 门岗 403/302/cookie/转发/浏览器标记头剥离（防 dsh 信任栅栏 403）/WS 桥接/503/停服释放端口、门岗中间件覆盖壳自有路由回归、fake-cloudflared URL 解析与崩溃重启、manager 全链路（缺文件 error、up→stop、start 幂等）、"项目"标签 resolve/list/file 全链路与路径逃逸 403/体积 413/下载头 | 同上 |
@@ -321,18 +320,18 @@ scripts/fetch-runtime.ps1
 
 **回滚**：新版 dsh 出严重问题、壳又要先发补丁时，`-DshVersion` 回退到上一可用版本重打包即可——用户数据全在 `dsh-home`，与 dsh 版本解耦。
 
-## 15. 附录：dsh 上游事实清单（0.1.6-alpha.1）
+## 15. 附录：dsh 上游事实清单（0.2.0-rc.1）
 
 > 本表是文档形态；代码化身在 `src-tauri/src/upstream.rs`（单一事实源），
 > 自动核对由 `tests/upstream_contract.rs` 执行。跟版改了 upstream.rs 就同步本表。
 
 | 事实 | 值 |
 | --- | --- |
-| npm 包 | `@deepseek-ai/dsh@0.1.6-alpha.1`（子包依赖为浮动区间，抓取时解析到最新 rc；npm latest 标签可能滞后于最新 rc，fetch 须显式 `-DshVersion`；dsh-web-app rc.8 起 openBrowser 默认 true） |
+| npm 包 | `@deepseek-ai/dsh@0.2.0-rc.1`（子包依赖为浮动区间，抓取时解析到最新 rc；npm latest 标签可能滞后于最新 rc，fetch 须显式 `-DshVersion`；dsh-web-app rc.8 起 openBrowser 默认 true） |
 | Node 要求 | `^22.19 \|\| >=24`（上游仓库声明；发布 tarball 不含 engines 字段，契约套件实测确认。随包内嵌 v24.19.0） |
 | 入口 | `node_modules/@deepseek-ai/dsh/lib/bin.js` |
-| Web 命令 | `bin.js web --port <N> --no-open`，仅绑 127.0.0.1；`--no-open` 抑制系统浏览器弹出（dsh-web-app rc.8 起 openBrowser 默认 true） |
-| 内测声明 | `dsh-client-ui-settings-models/lib/client.js` 的 welcome notice：`settings.yaml` 的 `ui-onboarding.welcomeNoticeVersion` ≠ 文案版本（如 `2026-08-13.1`，从 client.js 提取）时每次启动弹窗 → 壳 welcome.rs 启动期预写豁免；0.1.2 持久化三元式落 `dsh-client-ui-settings/lib/client.js`（接收者改 `ctx.remote.$host.isLoopback ? "host" : "memory"`，needle 须含接收者前缀否则改写出语法错误） |
+| Web 命令 | `bin.js web --port <N> --no-open`，仅绑 127.0.0.1；`--no-open` 抑制系统浏览器弹出（dsh-web-app rc.8 起 openBrowser 默认 true）。**0.2.0 起 bin.js 不再声明专用 web 子命令**：`dsh web` 经通用 profile 缩写展开（`dsh <name>` → `--profile <name> …`）落到 dsh-web-app 的 serve 命令，`--port`/`--no-open` 也定义在该包——spawn 形态实测不变（fetch 冒烟 + 契约 `web --help` 双闸） |
+| 内测声明 | `dsh-client-ui-settings-models/lib/client.js` 的 welcome notice：`settings.yaml` 的 `welcomeNoticeVersion`（命名空间 **0.2.0 起 `ui-settings-general`**，0.1.x 为 `ui-onboarding`、旧装机残留无害）≠ 文案版本（如 `2026-09-28.1`，从 client.js 提取）时每次启动弹窗 → 壳 welcome.rs 启动期预写豁免；0.1.2 持久化三元式落 `dsh-client-ui-settings/lib/client.js`（接收者改 `ctx.remote.$host.isLoopback ? "host" : "memory"`，needle 须含接收者前缀否则改写出语法错误） |
 | 鉴权（0.1.2 BrowserAuth） | 无关闭开关（回环也在门内）：每进程 launch token 经 stdout 就绪行 `dsh web: http://127.0.0.1:<port>/?token=<t>` 打印（**晚于 HTTP 绑定**，须持续 pump）；`GET /?token=<t>` → 303 + Set-Cookie `dsh-auth-<b64url(sha256(authority))>=v1.…`（HttpOnly/SameSite=Strict，30 天，**绑 authority——换端口即失效**）；静态资产无门、`/api/*` 与 WS 全在门内，无凭证 GET / → 401 `dsh web authentication required` → 壳 dsh_session.rs 统一凭证（token 解析 + 现换 cookie） |
 | 事件通道 | 单 WS `/api/remote.mux`（0.1.2 起；旧 events.mux/events.host 已移除）。客户端帧 `{type:"open",streamId,endpoint,payload:{args}}` / `{type:"cancel"}`；服务端帧 `{type:"item"\|"end"\|"error",streamId,…}`（error 对象实测字段集 `["code","details","message"]`）；服务端 30s 心跳 Ping |
 | $events 事件桥 | open 端点 `$events`（**args 必须为空**）：首条 item `{type:"ready",clientId,host}`；随后 `{type:"emit",event,args[]}`（api-session/added、api-session/removed、settings/document-updated…）与 `{type:"waterfall",event,eventId,request}`（approval/request、user-questions/request）。0.1.5 转发清单新增 `goal/activation-changed`（emit；壳对未订阅事件一律忽略，别据此加通知——目标暂停不是用户回合完成）。**严禁实现 `$events/result` 回包**——任一客户端回 result 即抢先替用户结算审批 |
@@ -340,12 +339,13 @@ scripts/fetch-runtime.ps1
 | RPC 信封 | POST `/api/<method>`，`{type:"client-request",rpcId,method,payload:{args}}` → 恒 200 `{type:"server-response",rpcId,result:{ok,value}}`；**参数按 typert 描述符 wire 名传**（session/list 形参 `_request`、session/follow 形参 `request`，裸对象被拒 arguments-invalid） |
 | 设置文件 | `$DSH_HOME/settings.yaml` → `ui-theme.preference: light\|dark\|system` |
 | 信任栅栏 | Host fence（loopback/trustedHosts）+ sec-fetch-site cross-site → 403、Origin.host ≠ Host → 403（代理剥浏览器标记头的依据不变）；0.1.2 起鉴权 401 优先级在栅栏之前 |
-| Agent 预设 | **0.1.2 起独立成包** `@deepseek-ai/dsh-agent-presets/presets/{minimal,…}`（node_modules 下）；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵）。**0.1.5 起 minimal 只剩持久 shell**：整个 `filesystem` 组被删（`fs-local` 与 `str-replace-editor` 都不再挂），极简模式从「持久 shell + 文件编辑」降为单工具——签名哨兵仍绿（`dsh-tool-bash-persistent` + win32 门控都在），故另加一条「已无 str-replace-editor」探针守语义变更 |
+| Agent 预设 | **0.1.2 起独立成包** `@deepseek-ai/dsh-agent-presets/presets/{minimal,…}`（node_modules 下）；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵）。**0.1.5 起 minimal 只剩持久 shell**：整个 `filesystem` 组被删（`fs-local` 与 `str-replace-editor` 都不再挂），极简模式从「持久 shell + 文件编辑」降为单工具——签名哨兵仍绿（`dsh-tool-bash-persistent` + win32 门控都在），故另加一条「已无 str-replace-editor」探针守语义变更。**0.2.0 起 dsh-agent-presets 包消失**，预设改为 `@deepseek-ai/dsh-web-app/presets/` 下的 cordis patch 文件（minimal = `minimal.patch.yml`，内容为 `insert:` 一枚 agent-preset 声明行；win32 门控与单工具语义不变，`PRESET_DIR_SEGMENTS`/`PRESET_COMPOSITION_FILE` 已跟随） |
 | 目录选择器 browse | host `dsh-host-directory-picker-browse/lib/index.js`：`list()` 只认全限定路径、无盘符枚举入口；client `dsh-client-ui-directory-picker-browse/lib/client.js`：`showHidden` 默认 false 且开框重置、`displayCrumbs` 把 home 前缀折叠成"主页" → 壳 pickerpatch.rs 启动期原地补丁（`"dsh:drives"` 哨兵盘符层 + 默认显示隐藏 + 哨兵面包屑/禁用打开） |
-| 图片附件 | 0.1.2：输入仅拖拽/剪贴板两条入口；host `dsh-attachment` 只认 png/jpeg/webp/gif（sharp 校验，3.5MB/图、20 图/条）→ 壳 mobile.js 注入附件按钮走合成 paste 复用该管线（文档类型上游不支持）。**0.1.5 起上游自带通用文件上传**（任意类型、与图片同区混排、进度/取消/切会话续显，模型按已保存路径读），手机端「回形针」按钮的存在价值需真机重估（保留则确认与原生上传共存不冲突）——见真机验收清单 |
+| 图片附件 | 0.1.2：输入仅拖拽/剪贴板两条入口；host `dsh-attachment` 只认 png/jpeg/webp/gif（sharp 校验，3.5MB/图、20 图/条）→ 壳 mobile.js 注入附件按钮走合成 paste 复用该管线（文档类型上游不支持）。**0.1.5 起上游自带通用文件上传**（任意类型、与图片同区混排、进度/取消/切会话续显，模型按已保存路径读）→ 壳停止注入、按钮退化为兜底。**0.2.0 起上游把附件入口并进 "+" 按钮**（aria-label「添加文件或调用指令」，不再含「附件」字样）→ 兜底自动恢复注入，0.2.0 跟版实测无双回形针、功能正常 |
 | 预设根 | 旧版（0.1.1 线）时代 composeProfile 强制重写 roots 的行为上游已删（prep §一）；`$DSH_HOME/.agent-presets` 用户根可正常生效——如需预设补丁理论上可走 patch 影子覆盖（当前无需求，签名哨兵继续盯 win32 修复不回退） |
 | WebView2 下载 | 宿主不处理 DownloadStarting 即静默取消；wry 默认放行且抑制下载 UI → 壳 download.rs 显式接管 |
 | 会话格式（0.1.5） | `SESSION_FORMAT_VERSION` 0 → **3**：恢复旧会话时生成 V3 新日志、**保留原文件**，但升级后的会话不支持降级读取 → **用户数据单向**，发版后别回退 dsh 版本（壳不读写会话日志，只钉版本漂移） |
+| 会话格式（0.2.0） | `SESSION_FORMAT_VERSION` 3 → **4**（依赖树自带 session-format-v3-to-v4 迁移包）：单向语义不变，旧壳会话在升级后首启被迁移且**不可回退**——降级壳版本等于丢弃 V4 会话 |
 | 流式上传与新增路由（0.1.5） | `POST /api/session/uploadFileBinary`（`dsh-client-file-upload`，`requestBody:"streaming"`，dsh 侧不限体积；普通 buffered `/api` 路由上限 300MB）→ **代理必须开流式旁路**（`upstream::is_streaming_body_route` → `forward_streaming`：逐块直通、先换 cookie、不重放）。另新增**免鉴权**的 `/open-in-app/*`（`apps`/`icon`/`open`，`dsh-host-open-in-app`）——通用反代即透传，手机端「在应用中打开」入口无意义、评估隐藏 |
 | 面板槽位（0.1.5） | `conversation`/`details`（单值槽）→ keyed `main`（保留 key `conversation`）+ `rightbar`，sidebar 内新增 `sidebar.panellist`，**`details` 槽删除**（原 Detail 面板移除）。影响：picker.rs 钉的 browse 表面挂在 `ui-workspace` 的 `directory-flow` 槽位，槽位重排后须真机点一次目录选择器；手机端 `_rightbarCol` 无面板打开时 0 宽（不侵入布局），打开文档/文件面板后的 ≤700px 形态待真机 |
 | 出站代理与 Windows 子进程（0.1.5） | 新增 `@deepseek-ai/dsh-http-proxy`：dsh 出站请求遵循 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY`，**回环永不走代理**（显式豁免 `localhost`/`127.0.0.1`/`::1` 与 `127.0.0.0/8`、IPv4-mapped）；`dsh-subprocess-local` 的 spawn/taskkill 新增 `windowsHide: platform === "win32"`（与壳的 CREATE_NO_WINDOW 并行，互不依赖） |
@@ -443,11 +443,11 @@ dsh 就绪行由 `dsh-web-app` 的 `announceReady()` 打印，它先 `loader.awa
 
 **漂移停手**：apps store 的 null 初值行形态变了（needle 缺失或多次出现）即停手，回退上游行为（按钮恢复晚出现）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_oiacache` 对已打补丁的树认 marker、对未打补丁的树逐字核对 needle（已改写的树 needle 必然失配，属预期形态）；上游若自己 persist 了 apps 列表即可删 oiacache.rs 与本探测。补丁后 bundle 内容哈希变化使 rev 自动失效，浏览器自动重新拉取，无缓存陈旧问题。
 
-## 22. 资源管理器「显示/打开所在文件夹」补丁（revealshow.rs）
+## 22. 资源管理器「显示/打开所在文件夹」补丁（revealshow.rs，**已退役**）
 
-文件卡片菜单的「在文件资源管理器中显示」/「打开所在文件夹」点了没反应：UI 照常回「已请求在文件管理器中显示」，桌面不弹窗口。链路是客户端 `POST /api/present.open?…&action=reveal` → `dsh-client-ui-deliverables` host handler → `sessionController.openWorkspacePath` → `@deepseek-ai/dsh-native-command` 的 `revealNativePath()` → `run("explorer.exe", ["/select,", <file url>])` → `runNativeCommand()` 的 `execFile(…, { encoding:"utf8", signal, windowsHide: true })`。**实测根因**（Win10 19045 单变量对照）：`windowsHide: true` 时 Explorer 窗口确实建出来了、路径与选中文件都对，但 `IsWindowVisible = false`——窗口存在而不可见；HTTP 204 照常返回，故壳只看到"成功"。机制：libuv 的 `windowsHide=true` 在子进程 `STARTUPINFO` 上置 `STARTF_USESHOWWINDOW + SW_HIDE`，而 Explorer 的文件夹窗口走 `SW_SHOWDEFAULT`，继承了这份隐藏显示态。同 runner 的 `powershell.exe` `Invoke-Item`（openNativePath，即「用默认应用打开」）实测仍可见——它经 ShellExecute 交给已运行的桌面 explorer，故**只豁免 explorer.exe**；powershell/cmd 等控制台应用的控制台窗口必须保持隐藏（`Platform::configure_child_command` 的 `CREATE_NO_WINDOW` 约定，§10），不能全局关掉 `windowsHide`。
+文件卡片菜单的「在文件资源管理器中显示」/「打开所在文件夹」曾点了没反应：UI 照常回「已请求在文件管理器中显示」，桌面不弹窗口。链路是客户端 `POST /api/present.open?…&action=reveal` → `dsh-client-ui-deliverables` host handler → `sessionController.openWorkspacePath` → `@deepseek-ai/dsh-native-command` 的 `revealNativePath()` → `run("explorer.exe", ["/select,", <file url>])` → `runNativeCommand()` 的 `execFile(…, { encoding:"utf8", signal, windowsHide: true })`。**实测根因**（Win10 19045 单变量对照）：`windowsHide: true` 时 Explorer 窗口确实建出来了、路径与选中文件都对，但 `IsWindowVisible = false`——窗口存在而不可见；HTTP 204 照常返回，故壳只看到"成功"。机制：libuv 的 `windowsHide=true` 在子进程 `STARTUPINFO` 上置 `STARTF_USESHOWWINDOW + SW_HIDE`，而 Explorer 的文件夹窗口走 `SW_SHOWDEFAULT`，继承了这份隐藏显示态。同 runner 的 `powershell.exe` `Invoke-Item`（openNativePath，即「用默认应用打开」）实测仍可见——它经 ShellExecute 交给已运行的桌面 explorer。
 
-**revealshow.rs 运行时补丁**（pickerpatch.rs/mcpgate.rs/oiacache.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_revealshow` 守门）：`windowsHide: true` → `windowsHide: !/explorer\.exe$/i.test(command)`（`command` 是同函数体首形参；`$` 锚 + 大小写不敏感 = 只豁免以 explorer.exe 结尾的命令）。调用点在 lib.rs 的 spawn_supervised 之前，失败只记 events.log。
+壳侧 0.4.x~0.5.18 曾以 revealshow.rs 原地补丁豁免 explorer.exe（pickerpatch.rs/mcpgate.rs/oiacache.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写）：`windowsHide: true` → `windowsHide: !/explorer\.exe$/i.test(command)`，其余控制台应用保持隐藏（`Platform::configure_child_command` 的 `CREATE_NO_WINDOW` 约定，§10）。
 
-**漂移停手**：runner 的选项行形态变了（needle 缺失或多次出现）即停手，回退上游行为（reveal 静默不可见）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_revealshow` 对已打补丁的树认 marker、对未打补丁的树逐字核对 needle（已改写的树 needle 必然失配，属预期形态）；上游若自己不再对 explorer.exe 设 `windowsHide`（或改成 `showWindow` 之类），即可删 revealshow.rs 与本探测。
+**0.2.0 上游原生修复，补丁整体退役**：runner 重写为 `runNativeCommand(command, args, signal, window)`，选项行变 `windowsHide: window === "hidden"`——explorer.exe 一律经 `runExplorer()` 以 `"visible"` 调用（并接受 explorer 委派的退出码 1），控制台应用仍显式 `"hidden"`，与壳补丁同语义且更干净。按探针既定指引删除 revealshow.rs、`probe_revealshow` 与 upstream.rs 的 `NATIVE_COMMAND_*` 两常量（墓碑段注保留机制与回退路径：上游若再回退成隐藏不可见，从 git 历史找回补丁器）。
 
