@@ -4,7 +4,9 @@
 
 use dshdesktop_lib::dsh_session::DshCreds;
 use dshdesktop_lib::port::free_port;
-use dshdesktop_lib::remote::proxy::{spawn_proxy, ProxyHandle, COOKIE_NAME};
+use dshdesktop_lib::remote::proxy::{
+    spawn_proxy_with_keepalive, Keepalive, ProxyHandle, COOKIE_NAME,
+};
 use futures::{SinkExt, StreamExt};
 use serde_json::{json, Value};
 use std::sync::Arc;
@@ -25,13 +27,31 @@ async fn start_proxy(
     Arc<str>,
     watch::Sender<Option<Arc<DshCreds>>>,
 ) {
+    start_proxy_ka(creds, Keepalive::default()).await
+}
+
+/// 起代理并注入保活参数（生产默认经 start_proxy 委托；测试用短间隔触发保活帧）
+async fn start_proxy_ka(
+    creds: Option<Arc<DshCreds>>,
+    keepalive: Keepalive,
+) -> (
+    ProxyHandle,
+    Arc<str>,
+    watch::Sender<Option<Arc<DshCreds>>>,
+) {
     let token: Arc<str> = dshdesktop_lib::remote::generate_token().into();
     let (tx, rx) = watch::channel(creds);
     // dsh-home 用一次性临时目录（keep 后不自动删除，测试进程结束由 OS 清理）
     let home = tempfile::tempdir().unwrap().keep();
-    let handle = spawn_proxy(token.clone(), rx, home, "127.0.0.1:0".parse().unwrap())
-        .await
-        .unwrap();
+    let handle = spawn_proxy_with_keepalive(
+        token.clone(),
+        rx,
+        home,
+        "127.0.0.1:0".parse().unwrap(),
+        keepalive,
+    )
+    .await
+    .unwrap();
     (handle, token, tx)
 }
 
@@ -984,6 +1004,97 @@ async fn upload_route_streams_without_buffering() {
     proxy.shutdown().await;
 }
 
+/// 保活：dsh 静默时代理必须按期间隔向浏览器发 Ping（防 Cloudflare ~100s
+/// 空闲斩杀——实测 /plugins/events 每 88~97s 被边缘掐断一次）。浏览器协议层
+/// 自动回 Pong，隧道双向都有字节流，斩杀窗口永不触发。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ws_bridge_pings_client_when_dsh_silent() {
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds) = start_proxy_ka(
+        Some(creds_for(fake.port)),
+        Keepalive {
+            ws_idle_ping: Duration::from_millis(80),
+            ..Default::default()
+        },
+    )
+    .await;
+    let url = format!("ws://127.0.0.1:{}/api/remote.mux", proxy.port);
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut()
+        .insert("cookie", format!("{COOKIE_NAME}={token}").parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    // 不发任何 open：假 dsh mux 保持静默。400ms（5 个间隔）内应收 ≥2 个 Ping、0 个 Text
+    let mut pings = 0u32;
+    let deadline = Instant::now() + Duration::from_millis(400);
+    while let Ok(Some(Ok(msg))) =
+        tokio::time::timeout(deadline - Instant::now(), ws.next()).await
+    {
+        match msg {
+            Message::Ping(_) => pings += 1,
+            Message::Text(t) => panic!("静默期不应有文本帧：{t}"),
+            _ => {}
+        }
+    }
+    assert!(pings >= 2, "400ms（5 个间隔）内应至少 2 个 Ping，实际 {pings}");
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 静默触发：dsh 有帧流动时一个 Ping 都不许发（保活帧只在真静默时出现，
+/// 活跃频道零额外开销、零干扰）
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn ws_bridge_no_ping_while_dsh_active() {
+    let (fake, tx) = spawn_dsh().await;
+    // ka=250ms：脚本帧按 ~60ms 间隔持续推来，计时每轮都被帧重置
+    let (proxy, token, _creds) = start_proxy_ka(
+        Some(creds_for(fake.port)),
+        Keepalive {
+            ws_idle_ping: Duration::from_millis(250),
+            ..Default::default()
+        },
+    )
+    .await;
+    let url = format!("ws://127.0.0.1:{}/api/remote.mux", proxy.port);
+    let mut req = url.into_client_request().unwrap();
+    req.headers_mut()
+        .insert("cookie", format!("{COOKIE_NAME}={token}").parse().unwrap());
+    let (mut ws, _) = tokio_tungstenite::connect_async(req).await.unwrap();
+    // 先 open $events（假 dsh 据此注册流，scripted 帧才有落点），
+    // 再每 ~60ms 推一帧带 marker 的 scripted 帧共 8 帧（覆盖到 480ms）
+    ws.send(Message::Text(
+        json!({"type":"open","streamId":"p1","endpoint":"$events","payload":{"args":{}}})
+            .to_string()
+            .into(),
+    ))
+    .await
+    .unwrap();
+    let producer = tokio::spawn(async move {
+        for i in 0..8u32 {
+            tokio::time::sleep(Duration::from_millis(60)).await;
+            let _ = tx.send(json!({ "marker": i }));
+        }
+    });
+    let deadline = Instant::now() + Duration::from_millis(600);
+    let mut pings = 0u32;
+    let mut markers = 0u32;
+    while let Ok(Some(Ok(msg))) = tokio::time::timeout_at(deadline.into(), ws.next()).await {
+        match msg {
+            Message::Ping(_) => pings += 1,
+            Message::Text(t) => {
+                if t.contains("marker") {
+                    markers += 1;
+                }
+            }
+            _ => {}
+        }
+    }
+    producer.await.unwrap();
+    assert!(markers >= 4, "scripted 帧应经桥原样到达，实际 {markers}");
+    assert_eq!(pings, 0, "dsh 活跃期不应发任何 Ping，实际 {pings}");
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
 /// 上传路由的 401 透传：代理拿不到 dsh-auth cookie 时，dsh 回的 401 必须原样
 /// 透传——绝不能被误转成 502（那是 forward_streaming 的传输失败码）。此处令
 /// token 交换失败（creds 用错 token）来制造"无 dsh-auth cookie"；代理门岗凭据
@@ -1029,6 +1140,98 @@ async fn upload_route_requires_cookie() {
         hits
     );
 
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// SSE 保活：上游静默时注入 `: keepalive` 注释（SSE 规范内注释，EventSource
+/// 解析时忽略），流不得被掐断；上游首行事件必须先于任何心跳原样到达
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn sse_response_gets_heartbeat_when_upstream_silent() {
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy_ka(
+        Some(creds_for(fake.port)),
+        Keepalive {
+            sse_idle_heartbeat: Duration::from_millis(80),
+            ..Default::default()
+        },
+    )
+    .await;
+    let base = format!("http://127.0.0.1:{}", proxy.port);
+    let r = client()
+        .get(format!("{base}/__fake/sse"))
+        .header("cookie", format!("{COOKIE_NAME}={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    assert_eq!(
+        r.headers().get("content-type").map(|v| v.to_str().unwrap()),
+        Some("text/event-stream"),
+        "SSE content-type 应原样透传"
+    );
+    // 持续读 350ms（约 4 个心跳间隔）：流保持打开、心跳按间隔注入
+    let mut body = Vec::new();
+    let mut stream = r.bytes_stream();
+    let deadline = Instant::now() + Duration::from_millis(350);
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        match tokio::time::timeout(remaining, stream.next()).await {
+            Ok(Some(Ok(chunk))) => body.extend_from_slice(&chunk),
+            Ok(Some(Err(e))) => panic!("SSE 流不应出错：{e}"),
+            Ok(None) => panic!("SSE 流不应结束（心跳持续保活中）"),
+            Err(_) => break,
+        }
+    }
+    let text = String::from_utf8_lossy(&body);
+    assert!(
+        text.starts_with("data: ready\n\n"),
+        "上游首行事件应先于任何心跳原样到达：{text:?}"
+    );
+    let beats = text.matches(": keepalive\n\n").count();
+    assert!(
+        beats >= 2,
+        "上游静默窗口内应注入 ≥2 个心跳，实际 {beats}：{text:?}"
+    );
+    // 收尾：SSE 响应体是长驻流，必须先断开客户端读端——否则代理与假 dsh 的
+    // graceful shutdown 会一直等在途请求上（心跳写向已关套接字即收尾，留足一拍）
+    drop(stream);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    fake.shutdown.notify_one();
+    proxy.shutdown().await;
+}
+
+/// 非 SSE 响应零注入：慢 JSON 在静默窗口内不得混入任何字节，正文逐字等于源
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn non_sse_response_gets_no_heartbeat() {
+    let (fake, _tx) = spawn_dsh().await;
+    let (proxy, token, _creds_tx) = start_proxy_ka(
+        Some(creds_for(fake.port)),
+        Keepalive {
+            sse_idle_heartbeat: Duration::from_millis(80),
+            ..Default::default()
+        },
+    )
+    .await;
+    let base = format!("http://127.0.0.1:{}", proxy.port);
+    // 上游睡 250ms（> 3 个心跳间隔）才回正文：SSE 判定若按"静默"而非
+    // content-type 走，这里必然混入心跳字节
+    let r = client()
+        .get(format!("{base}/__fake/slow-json"))
+        .header("cookie", format!("{COOKIE_NAME}={token}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(r.status(), 200);
+    let body = r.text().await.unwrap();
+    assert_eq!(body, r#"{"ok":true}"#, "非 SSE 正文应逐字透传");
+    assert!(
+        !body.contains(": keepalive"),
+        "非 SSE 响应不得注入任何心跳字节：{body}"
+    );
     fake.shutdown.notify_one();
     proxy.shutdown().await;
 }

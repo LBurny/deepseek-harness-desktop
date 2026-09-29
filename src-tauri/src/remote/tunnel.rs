@@ -1,6 +1,8 @@
 //! cloudflared quick tunnel 监督：spawn、URL 解析、指数退避重启、杀树停止。
 //! 结构对齐 process.rs 的 DshProcess，差异：就绪信号不是端口可达，而是 stdout 里
 //! 出现 trycloudflare URL（quick tunnel 的 URL 印在日志横幅里）；每次重启 URL 都会变。
+//! 连续失败达 RetryPolicy::max_failures 后不终态放弃：状态 Failed 保持可见，改为
+//! slow_retry 间隔的无限慢速重试（Cloudflare 抖动不是本地故障），一次 Up 即复位。
 //!
 //! 常驻模式（persistent=true，远程会话持久化用）：spawn 时**不挂** KILL_ON_JOB_CLOSE
 //! Job——防孤儿原则的唯一例外，刻意让隧道比应用进程活得久（应用退出/覆盖更新后
@@ -22,10 +24,35 @@ use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
 use tokio::process::Command;
 use tokio::sync::Notify;
 
-const MAX_BACKOFF: Duration = Duration::from_secs(30);
-const MAX_FAILURES: u32 = 5;
-/// quick tunnel 通常 10s 内出 URL；给 60s 兜底，超时杀树重启
-const UP_TIMEOUT: Duration = Duration::from_secs(60);
+/// 监督重试调参：前 `max_failures` 次失败走快速指数退避（`initial_backoff` 起，
+/// 封顶 `max_backoff`）；此后降级为 `slow_retry` 间隔的无限慢速重试——Cloudflare
+/// 抖动不是本地故障，终态放弃只会让用户手动开关恢复，慢速重试对上游 API 温和。
+/// 生产用默认值；测试经 `spawn_supervised_with_policy` 注入短间隔。
+#[derive(Debug, Clone, Copy)]
+pub struct RetryPolicy {
+    /// 快速退避预算：连续失败达到该值后降级慢速（不复位，Up 时才归零）
+    pub max_failures: u32,
+    /// 快速退避起点
+    pub initial_backoff: Duration,
+    /// 快速退避封顶
+    pub max_backoff: Duration,
+    /// 等 tunnel URL 的上限：quick tunnel 通常 10s 内出 URL，超时杀树重启
+    pub up_timeout: Duration,
+    /// 降级后的慢速重试间隔（每轮都慢速，直到 Up）
+    pub slow_retry: Duration,
+}
+
+impl Default for RetryPolicy {
+    fn default() -> Self {
+        Self {
+            max_failures: 5,
+            initial_backoff: Duration::from_millis(500),
+            max_backoff: Duration::from_secs(30),
+            up_timeout: Duration::from_secs(60),
+            slow_retry: Duration::from_secs(300),
+        }
+    }
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TunnelState {
@@ -56,6 +83,8 @@ struct Inner {
     work_dir: PathBuf,
     /// 常驻模式：不挂 Job Object，隧道刻意比应用进程活得久（见模块头注释）
     persistent: bool,
+    /// 失败退避/降级慢速重试的调参
+    policy: RetryPolicy,
     state: Mutex<TunnelState>,
     pid: AtomicU32,
     on_event: Box<dyn Fn(TunnelEvent) + Send + Sync>,
@@ -80,6 +109,30 @@ impl TunnelProcess {
         persistent: bool,
         events: impl Fn(TunnelEvent) + Send + Sync + 'static,
     ) -> Self {
+        Self::spawn_supervised_with_policy(
+            platform,
+            exe,
+            prefix_args,
+            target,
+            work_dir,
+            persistent,
+            RetryPolicy::default(),
+            events,
+        )
+    }
+
+    /// spawn_supervised 的注入版：测试用自定义 RetryPolicy 驱动降级重试路径
+    #[allow(clippy::too_many_arguments)]
+    pub fn spawn_supervised_with_policy(
+        platform: Arc<dyn Platform>,
+        exe: PathBuf,
+        prefix_args: Vec<String>,
+        target: String,
+        work_dir: PathBuf,
+        persistent: bool,
+        policy: RetryPolicy,
+        events: impl Fn(TunnelEvent) + Send + Sync + 'static,
+    ) -> Self {
         let this = Self {
             inner: Arc::new(Inner {
                 platform,
@@ -88,6 +141,7 @@ impl TunnelProcess {
                 target,
                 work_dir,
                 persistent,
+                policy,
                 state: Mutex::new(TunnelState::Starting),
                 pid: AtomicU32::new(0),
                 on_event: Box::new(events),
@@ -116,6 +170,34 @@ impl TunnelProcess {
         persistent: bool,
         events: impl Fn(TunnelEvent) + Send + Sync + 'static,
     ) -> Self {
+        Self::adopt_with_policy(
+            platform,
+            pid,
+            url,
+            exe,
+            prefix_args,
+            target,
+            work_dir,
+            persistent,
+            RetryPolicy::default(),
+            events,
+        )
+    }
+
+    /// adopt 的注入版：测试用自定义 RetryPolicy 驱动降级重试路径
+    #[allow(clippy::too_many_arguments)]
+    pub fn adopt_with_policy(
+        platform: Arc<dyn Platform>,
+        pid: u32,
+        url: String,
+        exe: PathBuf,
+        prefix_args: Vec<String>,
+        target: String,
+        work_dir: PathBuf,
+        persistent: bool,
+        policy: RetryPolicy,
+        events: impl Fn(TunnelEvent) + Send + Sync + 'static,
+    ) -> Self {
         let this = Self {
             inner: Arc::new(Inner {
                 platform,
@@ -124,6 +206,7 @@ impl TunnelProcess {
                 target,
                 work_dir,
                 persistent,
+                policy,
                 state: Mutex::new(TunnelState::Up { url }),
                 pid: AtomicU32::new(pid),
                 on_event: Box::new(events),
@@ -189,7 +272,7 @@ impl TunnelProcess {
 
     async fn supervise_loop(&self) {
         let mut failures = 0u32;
-        let mut backoff = Duration::from_millis(500);
+        let mut backoff = self.inner.policy.initial_backoff;
         loop {
             if self.inner.shutdown.load(Ordering::SeqCst) {
                 break;
@@ -237,18 +320,33 @@ impl TunnelProcess {
             tokio::select! {
                 _ = self.inner.up.notified() => {
                     failures = 0;
-                    backoff = Duration::from_millis(500);
+                    backoff = self.inner.policy.initial_backoff;
                 }
-                _ = tokio::time::sleep(UP_TIMEOUT) => {
-                    self.log("[dshdesktop] tunnel url not seen within 60s, killing");
+                _ = tokio::time::sleep(self.inner.policy.up_timeout) => {
+                    self.log(format!(
+                        "[dshdesktop] tunnel url not seen within {}s, killing",
+                        self.inner.policy.up_timeout.as_secs()
+                    ));
                     self.inner.platform.kill_process_tree(pid);
                     let _ = child.wait().await;
                     self.inner.pid.store(0, Ordering::SeqCst);
                     failures += 1;
-                    if failures >= MAX_FAILURES {
-                        self.set_state(TunnelState::Failed("cloudflared did not report a tunnel url".into()));
-                        break;
+                    if failures >= self.inner.policy.max_failures {
+                        // 不再终态放弃：状态 Failed 让 UI 可见，降级慢速无限重试；
+                        // failures 不复位，之后每轮都走慢速（对 Cloudflare API 温和），
+                        // Up 时由既有代码归零恢复快速
+                        self.set_state(TunnelState::Failed(
+                            "cloudflared did not report a tunnel url".into(),
+                        ));
+                        if !self.wait_slow_retry().await {
+                            break;
+                        }
+                        continue;
                     }
+                    self.log(format!(
+                        "[dshdesktop] restarting tunnel in {}ms",
+                        backoff.as_millis()
+                    ));
                     if !self.wait_backoff(&mut backoff).await {
                         break;
                     }
@@ -258,10 +356,17 @@ impl TunnelProcess {
                     self.log(format!("[dshdesktop] cloudflared exited before up: {status:?}"));
                     self.inner.pid.store(0, Ordering::SeqCst);
                     failures += 1;
-                    if failures >= MAX_FAILURES {
+                    if failures >= self.inner.policy.max_failures {
                         self.set_state(TunnelState::Failed("cloudflared crashed repeatedly".into()));
-                        break;
+                        if !self.wait_slow_retry().await {
+                            break;
+                        }
+                        continue;
                     }
+                    self.log(format!(
+                        "[dshdesktop] restarting tunnel in {}ms",
+                        backoff.as_millis()
+                    ));
                     if !self.wait_backoff(&mut backoff).await {
                         break;
                     }
@@ -292,9 +397,12 @@ impl TunnelProcess {
                 break;
             }
             failures += 1;
-            if failures >= MAX_FAILURES {
+            if failures >= self.inner.policy.max_failures {
                 self.set_state(TunnelState::Failed("too many consecutive crashes".into()));
-                break;
+                if !self.wait_slow_retry().await {
+                    break;
+                }
+                continue;
             }
             self.log(format!(
                 "[dshdesktop] restarting tunnel in {}ms",
@@ -315,9 +423,24 @@ impl TunnelProcess {
     /// 退避等待，期间响应 stop。返回 false 表示收到 stop，循环应终止。
     async fn wait_backoff(&self, backoff: &mut Duration) -> bool {
         let current = *backoff;
-        *backoff = (current * 2).min(MAX_BACKOFF);
+        *backoff = (current * 2).min(self.inner.policy.max_backoff);
         tokio::select! {
             _ = tokio::time::sleep(current) => true,
+            _ = self.inner.stop.notified() => {
+                self.set_state(TunnelState::Stopped);
+                false
+            }
+        }
+    }
+
+    /// 慢速重试等待（失败降级期），期间响应 stop。返回 false 表示收到 stop，循环应终止。
+    async fn wait_slow_retry(&self) -> bool {
+        self.log(format!(
+            "[dshdesktop] tunnel failing, slow retry in {}s",
+            self.inner.policy.slow_retry.as_secs()
+        ));
+        tokio::select! {
+            _ = tokio::time::sleep(self.inner.policy.slow_retry) => true,
             _ = self.inner.stop.notified() => {
                 self.set_state(TunnelState::Stopped);
                 false

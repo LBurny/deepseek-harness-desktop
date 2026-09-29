@@ -251,6 +251,40 @@ async fn app_page_nohead() -> Response {
         .into_response()
 }
 
+/// SSE 频道仿真（dsh /plugins/events 形态：先发一行事件后挂起、自身无心跳）：
+/// 代理须在上游静默窗口内注入 `: keepalive` 注释行，流不得被掐断
+/// （sse_response_gets_heartbeat_when_upstream_silent）
+async fn fake_sse() -> Response {
+    let stream = futures::stream::once(async {
+        Ok::<_, std::io::Error>(axum::body::Bytes::from_static(b"data: ready\n\n"))
+    })
+    .chain(futures::stream::pending::<Result<axum::body::Bytes, std::io::Error>>());
+    (
+        StatusCode::OK,
+        [(
+            "content-type",
+            HeaderValue::from_static("text/event-stream"),
+        )],
+        axum::body::Body::from_stream(stream),
+    )
+        .into_response()
+}
+
+/// 慢 JSON 仿真：上游静默越过 sse 心跳窗口才回正文——非 SSE 响应一个保活
+/// 字节都不许混入，正文逐字等于源（non_sse_response_gets_no_heartbeat）
+async fn fake_slow_json() -> Response {
+    tokio::time::sleep(Duration::from_millis(250)).await;
+    (
+        StatusCode::OK,
+        [(
+            "content-type",
+            HeaderValue::from_static("application/json"),
+        )],
+        r#"{"ok":true}"#,
+    )
+        .into_response()
+}
+
 async fn api(
     State(st): State<FakeState>,
     axum::extract::Path(path): axum::extract::Path<String>,
@@ -341,7 +375,11 @@ async fn mux_socket(st: FakeState, socket: WebSocket) {
         tokio::select! {
             // 客户端帧：open/cancel/close
             msg = rx.next() => {
-                let Some(Ok(Message::Text(text))) = msg else { break };
+                let Some(Ok(msg)) = msg else { break };
+                // 控制帧（Ping/Pong/Close）由协议层消化，不进 open/cancel 判定：
+                // 代理的保活 Ping 会让浏览器自动回 Pong 并经桥转发到这里，若把
+                // 非 Text 帧当连接终结，保活一开桥就断（假 dsh 须容忍控制帧）
+                let Message::Text(text) = msg else { continue };
                 let Ok(v) = serde_json::from_str::<Value>(&text) else { continue };
                 match v.get("type").and_then(|t| t.as_str()) {
                     Some("open") => {
@@ -420,6 +458,9 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
         .route("/", axum::routing::get(page))
         .route("/app", axum::routing::get(app_page))
         .route("/app-nohead", axum::routing::get(app_page_nohead))
+        // SSE 保活测试目标（真 dsh /plugins/events 无心跳，被边缘空闲斩杀）
+        .route("/__fake/sse", axum::routing::get(fake_sse))
+        .route("/__fake/slow-json", axum::routing::get(fake_slow_json))
         .route("/plugins/fake/client.js", axum::routing::get(plugin_client))
         .route(
             "/plugins/big/client.js",

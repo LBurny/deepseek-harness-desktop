@@ -18,7 +18,7 @@
 
 use crate::dsh_session::{self, DshCreds};
 use super::token_eq;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{FromRequest, Request, State};
 use axum::http::{header, HeaderMap, StatusCode};
@@ -26,7 +26,7 @@ use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
-use futures::{SinkExt, StreamExt};
+use futures::{SinkExt, Stream, StreamExt};
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
@@ -47,6 +47,28 @@ const WRONG_TOKEN_DELAY: Duration = Duration::from_millis(500);
 /// 请求体缓冲上限：重放（401 换 cookie 后重发一次）需要整读请求体；超过该
 /// 体积的上传类请求不重放（cookie 失效表现为一次 401，刷新页面即恢复）
 const REPLAY_BODY_LIMIT: usize = 64 * 1024 * 1024;
+
+/// 保活调参：防 Cloudflare ~100s 空闲斩杀（events.log 实测 /plugins/events
+/// 每 88~97s 被边缘掐一次，一周 278 次 `stream canceled by remote`）。静默触发——
+/// 频道活跃时一个保活帧都不发，零干扰零开销。生产取默认；测试经
+/// spawn_proxy_with_keepalive 注入短间隔触发观察。
+#[derive(Debug, Clone, Copy)]
+pub struct Keepalive {
+    /// dsh→客户端方向静默多久后代理向客户端发 WS Ping。浏览器协议层自动回
+    /// Pong，隧道双向都有字节流，斩杀窗口永不触发（Ping 不是数据帧，页面无感）
+    pub ws_idle_ping: Duration,
+    /// SSE 上游静默多久后注入 `: keepalive` 注释行（EventSource 解析时忽略注释）
+    pub sse_idle_heartbeat: Duration,
+}
+
+impl Default for Keepalive {
+    fn default() -> Self {
+        Self {
+            ws_idle_ping: Duration::from_secs(30),
+            sse_idle_heartbeat: Duration::from_secs(30),
+        }
+    }
+}
 
 const GATE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><title>DSHDesktop</title></head>\
 <body style=\"font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0\">\
@@ -166,6 +188,63 @@ async fn gzip_bytes(body: Vec<u8>) -> Option<Vec<u8>> {
         .flatten()
 }
 
+/// 响应是否为 SSE（content-type 主类型匹配，容忍 ;charset 后缀与大小写）
+fn is_event_stream(headers: &HeaderMap) -> bool {
+    headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .is_some_and(|v| {
+            v.split(';')
+                .next()
+                .unwrap_or(v)
+                .trim()
+                .eq_ignore_ascii_case("text/event-stream")
+        })
+}
+
+/// SSE 心跳注入：上游静默超 idle 即产出一行 `: keepalive` 注释（SSE 规范内注释，
+/// EventSource 解析时忽略），上游有事件流动时一行都不注入。防 Cloudflare ~100s
+/// 空闲斩杀（events.log 实测 /plugins/events 每 88~97s 被边缘掐一次）。
+fn sse_keepalive_stream(
+    upstream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
+    idle: Duration,
+) -> impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static {
+    let pinned = Box::pin(upstream);
+    futures::stream::unfold(pinned, move |mut up| async move {
+        tokio::select! {
+            chunk = up.next() => chunk.map(|r| (r, up)),
+            // 上游静默到点：注入注释行继续流。计时随任何上游块重置，严格静默触发
+            _ = tokio::time::sleep(idle) => {
+                Some((Ok(Bytes::from_static(b": keepalive\n\n")), up))
+            }
+        }
+    })
+}
+
+/// 响应透传尾部：复制状态+头（剥逐跳头），体逐块流回；SSE 体套上游静默心跳。
+/// 只服务流式透传路径——缓冲改写/gzip 路径在到达前已 return，不经这里。
+fn passthrough_response(res: reqwest::Response, sse_idle: Duration) -> Response {
+    let sse = is_event_stream(res.headers());
+    let mut builder = Response::builder().status(res.status());
+    for (name, value) in res.headers() {
+        if matches!(
+            name.as_str(),
+            "connection" | "transfer-encoding" | "keep-alive" | "upgrade"
+        ) {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    let body = if sse {
+        Body::from_stream(sse_keepalive_stream(res.bytes_stream(), sse_idle))
+    } else {
+        Body::from_stream(res.bytes_stream())
+    };
+    builder
+        .body(body)
+        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+}
+
 /// 插件客户端 bundle 路径。两种形态都要命中：
 /// - 单插件（0.1.1 及以前）：`/plugins/<id>/client.js[?rev=N]`
 /// - 合并加载（0.1.2 起，真机实测）：`/plugins/??<a>/client.js,<b>/client.js,...&rev=N`
@@ -242,6 +321,8 @@ pub(crate) struct ProxyState {
     pub(crate) client: reqwest::Client,
     /// dsh-home（project.rs 解析 storages/workspace.json 用），与 skills/mcp 同源
     pub(crate) dsh_home: PathBuf,
+    /// 保活参数（WS 静默 Ping / SSE 静默心跳）
+    pub(crate) keepalive: Keepalive,
 }
 
 pub struct ProxyHandle {
@@ -276,6 +357,17 @@ pub async fn spawn_proxy(
     dsh_home: PathBuf,
     bind: SocketAddr,
 ) -> std::io::Result<ProxyHandle> {
+    spawn_proxy_with_keepalive(token, creds, dsh_home, bind, Keepalive::default()).await
+}
+
+/// 带保活参数的代理构造（生产经 spawn_proxy 取默认值；测试注入短间隔）
+pub async fn spawn_proxy_with_keepalive(
+    token: Arc<str>,
+    creds: watch::Receiver<Option<Arc<DshCreds>>>,
+    dsh_home: PathBuf,
+    bind: SocketAddr,
+    keepalive: Keepalive,
+) -> std::io::Result<ProxyHandle> {
     let listener = tokio::net::TcpListener::bind(bind).await?;
     let port = listener.local_addr()?.port();
     let token_cell: TokenCell = Arc::new(RwLock::new(token));
@@ -298,6 +390,7 @@ pub async fn spawn_proxy(
             .build()
             .expect("reqwest client"),
         dsh_home,
+        keepalive,
     };
     let app = Router::new()
         // 壳自有路由：手机端"项目"标签的单页与只读文件 API（project.rs）
@@ -548,19 +641,8 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
             Err(_) => (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
         };
     }
-    let mut builder = Response::builder().status(res.status());
-    for (name, value) in res.headers() {
-        if matches!(
-            name.as_str(),
-            "connection" | "transfer-encoding" | "keep-alive" | "upgrade"
-        ) {
-            continue;
-        }
-        builder = builder.header(name, value);
-    }
-    builder
-        .body(Body::from_stream(res.bytes_stream()))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    // 其余响应逐块透传（SSE 体套上游静默心跳，见 passthrough_response）
+    passthrough_response(res, st.keepalive.sse_idle_heartbeat)
 }
 
 /// 流式上传转发（dsh 0.1.5 起 `POST /api/session/uploadFileBinary` 走
@@ -597,23 +679,12 @@ async fn forward_streaming(st: ProxyState, req: Request, path_and_query: &str) -
         // 传输层失败（dsh 拒连/中途断链）：502，与 forward() 一致
         None => return (StatusCode::BAD_GATEWAY, "dsh 连接失败").into_response(),
     };
-    // 响应照 forward() 尾部逐块回传：复制状态+头、剥逐跳头、体走 bytes_stream。
-    // 响应体流若中途出错，hyper 会中止该响应——客户端得到断连而非貌似完整的
-    // 截断 200（状态行发出后无法再改 502，这是 HTTP 语义边界；本路由响应体是
-    // dsh 回的小 JSON，实际不会走到）。绝不记录 token/cookie 值。
-    let mut builder = Response::builder().status(res.status());
-    for (name, value) in res.headers() {
-        if matches!(
-            name.as_str(),
-            "connection" | "transfer-encoding" | "keep-alive" | "upgrade"
-        ) {
-            continue;
-        }
-        builder = builder.header(name, value);
-    }
-    builder
-        .body(Body::from_stream(res.bytes_stream()))
-        .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response())
+    // 响应照 forward() 尾部逐块回传（共享 passthrough_response：复制状态+头、
+    // 剥逐跳头、体走 bytes_stream、SSE 体套心跳）。响应体流若中途出错，hyper
+    // 会中止该响应——客户端得到断连而非貌似完整的截断 200（状态行发出后无法
+    // 再改 502，这是 HTTP 语义边界；本路由响应体是 dsh 回的小 JSON，实际不会
+    // 走到）。绝不记录 token/cookie 值。
+    passthrough_response(res, st.keepalive.sse_idle_heartbeat)
 }
 
 /// 按剥头规则构造并发出转发请求（cookie 由调用方注入；body 由调用方决定整读或
@@ -875,13 +946,22 @@ async fn bridge(client: WebSocket, st: ProxyState, path_and_query: String) {
             }
         }
     };
+    // 下行静默到点向浏览器发 Ping：sleep 每轮迭代重建，任何 dsh 帧都重置计时，
+    // 严格静默触发（频道活跃时一个保活帧都不发）。发送失败=客户端已死，照常收尾
+    let ka = st.keepalive.ws_idle_ping;
     let down = async {
-        while let Some(Ok(msg)) = dsh_rx.next().await {
-            let Some(msg) = to_client(msg) else {
-                continue;
-            };
-            if client_tx.send(msg).await.is_err() {
-                break;
+        loop {
+            tokio::select! {
+                msg = dsh_rx.next() => {
+                    let Some(Ok(msg)) = msg else { break };
+                    let Some(msg) = to_client(msg) else { continue };
+                    if client_tx.send(msg).await.is_err() { break; }
+                }
+                _ = tokio::time::sleep(ka) => {
+                    if client_tx.send(Message::Ping(Bytes::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     };

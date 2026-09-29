@@ -1,5 +1,5 @@
 use dshdesktop_lib::platform::Platform;
-use dshdesktop_lib::remote::tunnel::{TunnelEvent, TunnelProcess, TunnelState};
+use dshdesktop_lib::remote::tunnel::{RetryPolicy, TunnelEvent, TunnelProcess, TunnelState};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -76,6 +76,43 @@ fn spawn_fake(work: &Path) -> (TunnelProcess, Events) {
         move |e| ev.lock().unwrap().push(e),
     );
     (proc, events)
+}
+
+/// 用指定 fixture 与重试策略拉起监督进程（测试注入慢速重试降级路径）
+fn spawn_with_policy(
+    work: &Path,
+    fixture: &str,
+    policy: RetryPolicy,
+) -> (TunnelProcess, Events) {
+    let fixture = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join(fixture);
+    let events: Events = Arc::new(Mutex::new(Vec::new()));
+    let ev = events.clone();
+    let proc = TunnelProcess::spawn_supervised_with_policy(
+        Arc::new(TestPlatform),
+        system_node(),
+        vec![fixture.to_string_lossy().into_owned()],
+        "http://127.0.0.1:12345".into(),
+        work.to_path_buf(),
+        false,
+        policy,
+        move |e| ev.lock().unwrap().push(e),
+    );
+    (proc, events)
+}
+
+/// 统计事件流里 "starting cloudflared" 日志行数（每轮 spawn 唯一落一行）
+fn start_count(events: &Events) -> usize {
+    events
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|e| {
+            matches!(e, TunnelEvent::Log(l) if l.contains("[dshdesktop] starting cloudflared"))
+        })
+        .count()
 }
 
 fn wait_state(
@@ -270,6 +307,93 @@ async fn adopt_dead_pid_respawns() {
     tp.stop().await;
     wait_state(
         &tp,
+        |s| matches!(s, TunnelState::Stopped),
+        Duration::from_secs(15),
+    );
+}
+
+/// 连续失败不再终态放弃：Failed 可见后仍以 slow_retry 间隔无限重生（对 Cloudflare
+/// API 温和），且慢速等待中 stop() 立即生效。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn supervision_degrades_to_slow_retry_instead_of_giving_up() {
+    let work = tempfile::tempdir().unwrap();
+    let policy = RetryPolicy {
+        max_failures: 2,
+        initial_backoff: Duration::from_millis(20),
+        max_backoff: Duration::from_millis(40),
+        up_timeout: Duration::from_millis(200),
+        slow_retry: Duration::from_millis(150),
+    };
+    let (proc, events) = spawn_with_policy(work.path(), "fake-cloudflared-die.cjs", policy);
+    // 收集 1.2s：2 次快速（20/40ms 退避）后进入 150ms 慢速，足够跑出远多于 4 轮
+    tokio::time::sleep(Duration::from_millis(1200)).await;
+
+    let failed_seen = events.lock().unwrap().iter().any(|e| {
+        matches!(e, TunnelEvent::StateChanged(TunnelState::Failed(_)))
+    });
+    assert!(failed_seen, "连续失败必须出现过 Failed 状态（UI 可见）");
+    let starts = start_count(&events);
+    assert!(
+        starts >= 4,
+        "Failed 后必须继续重生（≥4 次 starting），实际 {starts}"
+    );
+
+    // 慢速等待中 stop 必须立即响应
+    proc.stop().await;
+    wait_state(
+        &proc,
+        |s| matches!(s, TunnelState::Stopped),
+        Duration::from_secs(15),
+    );
+}
+
+/// 降级后一次 Up 即恢复：Failed 之后出现 Up，且 Up 后不再有 Failed（failures 归零）。
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn supervision_recovers_from_slow_retry_on_up() {
+    let work = tempfile::tempdir().unwrap();
+    // 前 3 次 spawn 必死，第 4 次成功：2 次快速 + 2 次慢速后 Up
+    std::fs::write(work.path().join("fake-cloudflared.fail-times"), "3").unwrap();
+    let policy = RetryPolicy {
+        max_failures: 2,
+        initial_backoff: Duration::from_millis(20),
+        max_backoff: Duration::from_millis(40),
+        up_timeout: Duration::from_millis(200),
+        slow_retry: Duration::from_millis(150),
+    };
+    let (proc, events) = spawn_with_policy(work.path(), "fake-cloudflared-flaky.cjs", policy);
+
+    wait_state(
+        &proc,
+        |s| matches!(s, TunnelState::Up { .. }),
+        Duration::from_secs(20),
+    );
+
+    // Up 之后给足时间观察：进程存活，不得再冒 Failed
+    tokio::time::sleep(Duration::from_millis(400)).await;
+    let evs = events.lock().unwrap().clone();
+    let up_idx = evs
+        .iter()
+        .position(|e| matches!(e, TunnelEvent::StateChanged(TunnelState::Up { .. })))
+        .expect("必须出现过 Up");
+    let failed_before = evs[..up_idx]
+        .iter()
+        .any(|e| matches!(e, TunnelEvent::StateChanged(TunnelState::Failed(_))));
+    assert!(failed_before, "Up 之前必须出现过 Failed（确证经降级恢复）");
+    assert!(
+        !evs[up_idx..]
+            .iter()
+            .any(|e| matches!(e, TunnelEvent::StateChanged(TunnelState::Failed(_)))),
+        "Up 之后不得再出现 Failed（failures 已在 Up 时归零）"
+    );
+    assert!(
+        matches!(proc.state(), TunnelState::Up { .. }),
+        "恢复后应保持 Up，实际 {:?}",
+        proc.state()
+    );
+
+    proc.stop().await;
+    wait_state(
+        &proc,
         |s| matches!(s, TunnelState::Stopped),
         Duration::from_secs(15),
     );

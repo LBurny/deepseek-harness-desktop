@@ -167,7 +167,7 @@ pub fn run() {
             // 必须经 .window() 拿到 Window 才能把窗口本身显示出来
             if matches!(
                 webview.label(),
-                "settings" | "diagnostics" | "skills" | "plugins" | "mcp" | "remote"
+                "settings" | "diagnostics" | "skills" | "mcp" | "remote"
             ) {
                 // 新建窗口的 DWM 标题栏属性来自系统主题，与 dsh 解析主题可能相反
                 // （系统浅色+dsh 深色）；首个可见帧前落对，标题栏出生即正确
@@ -260,7 +260,7 @@ pub fn run() {
             let sink: NotifySink = Arc::new(move |n: Notification| {
                 // 前台 = 本应用任一窗口处于聚焦态（主窗口可见但失焦 = 用户已切走，算后台）；
                 // 各类型按自己的规则（开关 + 时机）决定是否打扰
-                let foreground = ["main", "settings", "diagnostics", "skills", "plugins", "mcp", "remote"]
+                let foreground = ["main", "settings", "diagnostics", "skills", "mcp", "remote"]
                     .iter()
                     .filter_map(|l| sink_handle.get_webview_window(l))
                     .any(|w| w.is_focused().unwrap_or(false));
