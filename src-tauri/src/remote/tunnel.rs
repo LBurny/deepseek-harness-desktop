@@ -75,6 +75,24 @@ pub(crate) fn parse_tunnel_url(line: &str) -> Option<String> {
     re.find(line).map(|m| m.as_str().to_string())
 }
 
+/// quick tunnel 启动参数（prefix_args 之后的全部）。抽出为函数供锚定测试。
+/// 传输层钉死 http2（TCP）而非默认 quic（UDP）：quick tunnel 只开 1 条边缘连接
+/// （`--ha-connections` 对 quick tunnel 无效，2026.9.3 实测被忽略），QUIC 在运营
+/// 商/校园网对空闲 UDP 流的回收与 QoS 下会整连接烂掉（41 天 events.log 实测 18 次
+/// `no recent network activity` 腐烂 + 12 次 dial 失败），在途 SSE/WS 流随之被边缘
+/// 取消——应用层保活（proxy.rs Keepalive）救不了传输层腐烂；http2 走 TCP 自带
+/// keepalive，也是官方对"空闲长连接掉线"的建议对策。
+fn tunnel_args(target: &str) -> Vec<String> {
+    vec![
+        "tunnel".into(),
+        "--url".into(),
+        target.into(),
+        "--no-autoupdate".into(),
+        "--protocol".into(),
+        "http2".into(),
+    ]
+}
+
 struct Inner {
     platform: Arc<dyn Platform>,
     exe: PathBuf,
@@ -285,10 +303,7 @@ impl TunnelProcess {
             ));
             let mut cmd = Command::new(&self.inner.exe);
             cmd.args(&self.inner.prefix_args)
-                .arg("tunnel")
-                .arg("--url")
-                .arg(&self.inner.target)
-                .arg("--no-autoupdate")
+                .args(tunnel_args(&self.inner.target))
                 .current_dir(&self.inner.work_dir)
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
@@ -479,7 +494,18 @@ impl TunnelProcess {
 
 #[cfg(test)]
 mod tests {
-    use super::parse_tunnel_url;
+    use super::{parse_tunnel_url, tunnel_args};
+
+    #[test]
+    fn tunnel_args_pin_http2_transport() {
+        let joined = tunnel_args("http://127.0.0.1:1").join(" ");
+        assert!(
+            joined.contains("--protocol http2"),
+            "传输层钉死 http2：QUIC/UDP 在运营商空闲回收下整连接腐烂（见 tunnel_args 注释），不得回退: {joined}"
+        );
+        assert!(joined.contains("--no-autoupdate"));
+        assert!(joined.contains("--url http://127.0.0.1:1"));
+    }
 
     #[test]
     fn parses_url_lines() {
