@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.24] - 2026-09-30
+
 ### Fixed
 
 - **远程隧道传输层从 QUIC 换成 HTTP/2，治"放着不动隧道连接自己烂掉"**（41 天 events.log 取证：18 次 `failed to accept QUIC stream / datagram handler: timeout: no recent network activity` 整连接腐烂 + 12 次 `Failed to dial a quic connection`）。根因：cloudflared 默认 `protocol:quic` 走 UDP，运营商/校园网对空闲 UDP 流的回收与 QoS 会把边缘连接打死，而 quick tunnel 锁死 `ha-connections:1`（`--ha-connections` 对 quick tunnel 无效，2026.9.3 实测被忽略）——唯一连接一死，在途 `/plugins/events` SSE 等长流全部被边缘取消（0.5.22 保活上线后仍见的零星断流即此残余；应用层保活救不了传输层腐烂）。对策：spawn 参数钉 `--protocol http2`——TCP 传输自带 keepalive、不受 UDP 空闲回收影响，也是 Cloudflare 官方对"空闲长连接掉线"的建议对策；本机实测 http2 注册正常（边缘分配 hkg09）。代价只是放弃 QUIC 的 0-RTT 握手，对长驻隧道无感。实现：启动参数提取为 `tunnel.rs::tunnel_args` 供锚定。回归：`tunnel.rs::tests::tunnel_args_pin_http2_transport`（协议不得回退 quic）；`tests/remote_tunnel.rs` 监督套件原样通过（fixture 不解析参数）
