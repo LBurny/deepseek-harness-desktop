@@ -5,6 +5,7 @@
 //!
 //! 启停语义：cordis-plugin-loader 原生支持 entry 级 disabled: true
 //! （disabled 的 entry 不启动 fiber），热重载后生效。
+//! 通用 patch 条目读写在 patchstore.rs（框架重组时拆出）。
 
 use serde::{Deserialize, Serialize};
 use serde_yaml::Value;
@@ -40,118 +41,6 @@ pub struct McpServerRow {
     pub summary: String,
     pub enabled: bool,
     pub config: McpServerConfig, // 编辑表单预填用完整配置
-}
-
-fn patch_path(home: &Path) -> PathBuf {
-    crate::upstream::join_segments(home, crate::upstream::MCP_PATCH_SEGMENTS)
-}
-
-/// （picker.rs 同文件复用）读 patch 顶层 op 序列；文件不存在/空 = 空序列，BOM 容忍
-pub(crate) fn read_patch(path: &Path) -> Result<Vec<Value>, String> {
-    let Ok(text) = fs::read_to_string(path) else {
-        return Ok(Vec::new()); // 文件不存在 = 空补丁
-    };
-    let text = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
-    if text.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    serde_yaml::from_str(text).map_err(|e| {
-        crate::i18n::pick(
-            format!("cordis.patch.yml 解析失败，请手工编辑该文件：{e}"),
-            format!("Failed to parse cordis.patch.yml, please edit the file manually: {e}"),
-        )
-    })
-}
-
-/// （picker.rs 同文件复用）tmp+rename 原子写；空序列落 `[]\n`
-pub(crate) fn write_patch(path: &Path, entries: &[Value]) -> Result<(), String> {
-    let text = if entries.is_empty() {
-        "[]\n".to_string()
-    } else {
-        serde_yaml::to_string(entries).map_err(|e| e.to_string())?
-    };
-    fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
-    let tmp = path.with_extension("yml.tmp");
-    fs::write(&tmp, text).map_err(|e| e.to_string())?;
-    fs::rename(&tmp, path).map_err(|e| e.to_string())
-}
-
-// ── profile patch 通用条目读写（0.2.0 设置迁移后 theme/i18n/welcome 复用）──
-// dsh 0.2.0 起 settings.yaml 是一次性遗留导入通道（dsh-settings 每次启动见它就
-// rename 成 .imported 并把各 section 导入 profile 同名条目），壳的偏好读取与
-// 播种一律走本文件。这里的"条目"是**顶层直排行** `- id: <id>` + `name` +
-// `config`（dsh config-editor 的 documentPath 写形），与上面 MCP 的
-// `- insert:` op 行同文件共存、层级不同：read_patch 的顶层序列两者都是成员，
-// 本节只认带 "id" 且不带 insert 键的直排行。
-
-/// 顶层直排条目 `- id: <id>` 的位置（排除 insert-op 行）。
-fn settings_entry_index(entries: &[Value], id: &str) -> Option<usize> {
-    entries.iter().position(|e| {
-        e.get("id").and_then(Value::as_str) == Some(id) && e.get("insert").is_none()
-    })
-}
-
-/// 顶层条目 config 里的字符串字段（壳读 ui-theme/locale/welcomeNoticeVersion 偏好）。
-/// 文件缺失/损坏/条目缺失/字段缺失一律 None（调用方按各自缺省语义兜底）。
-pub(crate) fn settings_entry_str(home: &Path, id: &str, field: &str) -> Option<String> {
-    let entries = read_patch(&patch_path(home)).ok()?;
-    let row = entries.get(settings_entry_index(&entries, id)?)?;
-    row.get("config")?
-        .get(field)?
-        .as_str()
-        .map(|s| s.trim().to_string())
-}
-
-/// 播种/合并顶层条目的 config 字段：Value 级 merge（保留条目内其它键与文件里
-/// 其它条目），条目不存在则按 dsh config-editor 的写形追加 `- id` + `name` +
-/// `config`。文件缺失则创建（含 profiles/web 目录）；损坏（解析失败）返回
-/// Err 不动盘——绝不拿整文件重写去覆盖手工/上游内容。
-pub(crate) fn upsert_settings_entry(
-    home: &Path,
-    id: &str,
-    pkg: &str,
-    values: &[(&str, Value)],
-) -> Result<(), String> {
-    let path = patch_path(home);
-    let mut entries = read_patch(&path)?;
-    let idx = settings_entry_index(&entries, id);
-    if let Some(i) = idx {
-        let row = entries.get_mut(i).expect("index 来自同一序列");
-        merge_entry_config(row, values)?;
-    } else {
-        let mut row = serde_yaml::Mapping::new();
-        row.insert(Value::String("id".into()), Value::String(id.into()));
-        row.insert(Value::String("name".into()), Value::String(pkg.into()));
-        row.insert(
-            Value::String("config".into()),
-            Value::Mapping(serde_yaml::Mapping::new()),
-        );
-        let mut row = Value::Mapping(row);
-        merge_entry_config(&mut row, values)?;
-        entries.push(row);
-    }
-    write_patch(&path, &entries)
-}
-
-/// 往单个条目行合并 config 键值（config 缺则建；config 非 mapping 视为形态异常）。
-fn merge_entry_config(row: &mut Value, values: &[(&str, Value)]) -> Result<(), String> {
-    let map = row
-        .as_mapping_mut()
-        .ok_or_else(|| "cordis.patch.yml 条目形态异常（非 mapping）".to_string())?;
-    if map.get(Value::String("config".into())).is_none() {
-        map.insert(
-            Value::String("config".into()),
-            Value::Mapping(serde_yaml::Mapping::new()),
-        );
-    }
-    let cfg = map
-        .get_mut(Value::String("config".into()))
-        .and_then(Value::as_mapping_mut)
-        .ok_or_else(|| "cordis.patch.yml 条目 config 形态异常（非 mapping）".to_string())?;
-    for (k, v) in values {
-        cfg.insert(Value::String((*k).into()), v.clone());
-    }
-    Ok(())
 }
 
 /// 所有 insert 列表里的 MCP 插件条目位置：(op 索引, insert 列表内索引)
@@ -225,7 +114,7 @@ fn to_row(e: &Value) -> McpServerRow {
 }
 
 fn list_servers(home: &Path) -> Result<Vec<McpServerRow>, String> {
-    let entries = read_patch(&patch_path(home))?;
+    let entries = crate::patchstore::read_patch(&crate::patchstore::patch_path(home))?;
     Ok(mcp_positions(&entries)
         .iter()
         .map(|&p| to_row(entry_at(&entries, p)))
@@ -252,8 +141,8 @@ fn find_server(entries: &[Value], server_name: &str) -> Option<(usize, usize)> {
 }
 
 fn set_server_enabled(home: &Path, server_name: &str, enabled: bool) -> Result<(), String> {
-    let path = patch_path(home);
-    let mut entries = read_patch(&path)?;
+    let path = crate::patchstore::patch_path(home);
+    let mut entries = crate::patchstore::read_patch(&path)?;
     let pos = find_server(&entries, server_name).ok_or_else(|| {
         crate::i18n::pick(
             format!("MCP server 不存在: {server_name}"),
@@ -273,12 +162,12 @@ fn set_server_enabled(home: &Path, server_name: &str, enabled: bool) -> Result<(
             Value::Bool(true),
         );
     }
-    write_patch(&path, &entries)
+    crate::patchstore::write_patch(&path, &entries)
 }
 
 fn delete_server(home: &Path, server_name: &str) -> Result<(), String> {
-    let path = patch_path(home);
-    let mut entries = read_patch(&path)?;
+    let path = crate::patchstore::patch_path(home);
+    let mut entries = crate::patchstore::read_patch(&path)?;
     let (oi, ii) = find_server(&entries, server_name).ok_or_else(|| {
         crate::i18n::pick(
             format!("MCP server 不存在: {server_name}"),
@@ -295,7 +184,7 @@ fn delete_server(home: &Path, server_name: &str) -> Result<(), String> {
     {
         entries.remove(oi); // 该 op 只插了这一个条目：连同 op 一起删
     }
-    write_patch(&path, &entries)
+    crate::patchstore::write_patch(&path, &entries)
 }
 
 fn upsert_server(home: &Path, original: Option<&str>, cfg: &McpServerConfig) -> Result<(), String> {
@@ -327,8 +216,8 @@ fn upsert_server(home: &Path, original: Option<&str>, cfg: &McpServerConfig) -> 
     if !stdio && cfg.url.as_deref().map(str::trim).unwrap_or("").is_empty() {
         return Err(crate::i18n::pick("streamable-http 需要 url", "streamable-http requires a url").into());
     }
-    let path = patch_path(home);
-    let mut entries = read_patch(&path)?;
+    let path = crate::patchstore::patch_path(home);
+    let mut entries = crate::patchstore::read_patch(&path)?;
     let edit_pos = original.and_then(|o| find_server(&entries, o));
     // 唯一性：除被编辑条目自身外，不得占用该 serverName
     if let Some(p) = find_server(&entries, &cfg.server_name) {
@@ -399,7 +288,7 @@ fn upsert_server(home: &Path, original: Option<&str>, cfg: &McpServerConfig) -> 
                 Value::String(format!("mcp-{}", cfg.server_name)),
             );
         }
-        return write_patch(&path, &entries);
+        return crate::patchstore::write_patch(&path, &entries);
     }
     let mut e = serde_yaml::Mapping::new();
     e.insert(
@@ -417,7 +306,7 @@ fn upsert_server(home: &Path, original: Option<&str>, cfg: &McpServerConfig) -> 
         Value::Sequence(vec![Value::Mapping(e)]),
     );
     entries.push(Value::Mapping(op));
-    write_patch(&path, &entries)
+    crate::patchstore::write_patch(&path, &entries)
 }
 
 /// 启动时把独立 dsh（~/.dsh）两个 patch 层里的 MCP server 同步进壳。
@@ -446,8 +335,8 @@ fn seed_auto_import(user_dsh_home: &Path, home: &Path) -> Result<(), String> {
                 .collect()
         })
         .unwrap_or_default();
-    let target_path = patch_path(home);
-    let mut target = read_patch(&target_path)?;
+    let target_path = crate::patchstore::patch_path(home);
+    let mut target = crate::patchstore::read_patch(&target_path)?;
     let mut changed = false;
     let layers = [
         crate::upstream::join_segments(user_dsh_home, crate::upstream::MCP_PATCH_SEGMENTS),
@@ -455,7 +344,7 @@ fn seed_auto_import(user_dsh_home: &Path, home: &Path) -> Result<(), String> {
     ];
     for path in layers {
         // 解析失败（如含无法处理的语法）的源文件跳过，不影响另一层
-        let Ok(entries) = read_patch(&path) else {
+        let Ok(entries) = crate::patchstore::read_patch(&path) else {
             continue;
         };
         for pos in mcp_positions(&entries) {
@@ -481,7 +370,7 @@ fn seed_auto_import(user_dsh_home: &Path, home: &Path) -> Result<(), String> {
         }
     }
     if changed {
-        write_patch(&target_path, &target)?;
+        crate::patchstore::write_patch(&target_path, &target)?;
     }
     let mut names: Vec<_> = seen.into_iter().collect();
     names.sort();
@@ -735,7 +624,7 @@ fn apply_imported(
                 Ok(c) => c,
                 Err(e) => return err(e.clone()),
             };
-            let Ok(entries) = read_patch(&patch_path(home)) else {
+            let Ok(entries) = crate::patchstore::read_patch(&crate::patchstore::patch_path(home)) else {
                 return err(crate::i18n::pick(
                     "cordis.patch.yml 解析失败，请手工编辑",
                     "Failed to parse cordis.patch.yml, please edit manually",
@@ -796,7 +685,7 @@ pub fn list_mcp_import_sources(state: State<McpHome>) -> Vec<McpSourceInfo> {
                 let parsed = fs::read_to_string(path)
                     .map(|t| parse_source(id, &t))
                     .unwrap_or_default();
-                let existing = read_patch(&patch_path(&state.0)).unwrap_or_default();
+                let existing = crate::patchstore::read_patch(&crate::patchstore::patch_path(&state.0)).unwrap_or_default();
                 parsed
                     .into_iter()
                     .map(|(name, cfg)| {
@@ -845,7 +734,7 @@ mod tests {
     use std::path::Path;
 
     fn write_patch_str(home: &Path, s: &str) {
-        let p = patch_path(home);
+        let p = crate::patchstore::patch_path(home);
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(p, s).unwrap();
     }
@@ -940,10 +829,10 @@ mod tests {
         let t = tempfile::tempdir().unwrap();
         write_patch_str(t.path(), TWO_SERVERS);
         delete_server(t.path(), "playwright").unwrap();
-        let text = fs::read_to_string(patch_path(t.path())).unwrap();
+        let text = fs::read_to_string(crate::patchstore::patch_path(t.path())).unwrap();
         assert!(!text.contains("playwright") && text.contains("docs"));
         delete_server(t.path(), "docs").unwrap();
-        assert_eq!(fs::read_to_string(patch_path(t.path())).unwrap(), "[]\n");
+        assert_eq!(fs::read_to_string(crate::patchstore::patch_path(t.path())).unwrap(), "[]\n");
         assert!(delete_server(t.path(), "ghost").is_err());
     }
 
@@ -987,7 +876,7 @@ mod tests {
         c.env = BTreeMap::new();
         c.url = Some("https://x/mcp".into());
         upsert_server(t.path(), Some("a"), &c).unwrap();
-        let entries = read_patch(&patch_path(t.path())).unwrap();
+        let entries = crate::patchstore::read_patch(&crate::patchstore::patch_path(t.path())).unwrap();
         let cfg = &entry_at(&entries, mcp_positions(&entries)[0])["config"];
         assert_eq!(cfg["toolCallTimeoutMs"].as_u64(), Some(90000)); // 高级键保留
         assert!(cfg.get("command").is_none()); // 另一传输的键被清掉
@@ -1154,7 +1043,7 @@ mod tests {
         // overwrite：pw 的 args 被新配置替换（不保留旧配置）
         let r = apply_imported(home, &parsed, &[McpImportItem { name: "pw".into(), overwrite: true }]);
         assert_eq!(r[0].status, "imported");
-        let entries = read_patch(&patch_path(home)).unwrap();
+        let entries = crate::patchstore::read_patch(&crate::patchstore::patch_path(home)).unwrap();
         let c = &entry_at(&entries, find_server(&entries, "pw").unwrap())["config"];
         assert_eq!(c["args"][0].as_str(), Some("-y"));
         assert_eq!(c["args"][1].as_str(), Some("new"));

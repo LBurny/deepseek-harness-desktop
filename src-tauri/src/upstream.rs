@@ -216,7 +216,7 @@ pub const SETTINGS_GENERAL_PKG: &str = "@deepseek-ai/dsh-client-ui-settings-gene
 /// 命名空间的 welcomeNoticeVersion ≠ 当前文案版本时每次启动弹窗
 ///（dsh-client-ui-settings-models/lib/client.js 的 WelcomeNoticeStore）。
 /// 壳面向最终用户，启动时把运行时里提取的文案版本经
-/// mcp::upsert_settings_entry 预写进 profile patch 的同名条目。
+/// patchstore::upsert_settings_entry 预写进 profile patch 的同名条目。
 /// 影响：welcome.rs。
 /// **0.2.0 改名**：命名空间从 ui-onboarding 迁到 ui-settings-general（上游常量
 /// WELCOME_NOTICE_SETTINGS_NAMESPACE = 条目 id；0.2.0 首个 rc 实测），字段名

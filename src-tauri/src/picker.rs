@@ -39,7 +39,7 @@ fn inserted_pos(entries: &[Value], row_id: &str) -> Option<(usize, usize)> {
 /// 用户手加的 disabled 摘掉即修复）。只在有变化时写盘（避免无谓触发 HMR）。
 pub fn ensure_browse_picker(home: &Path) -> Result<PickerOutcome, String> {
     let path = patch_path(home);
-    let mut entries = crate::mcp::read_patch(&path)?;
+    let mut entries = crate::patchstore::read_patch(&path)?;
     let mut changed = false;
 
     // 1) auto 行禁用：无 insert 键的 id 定向补丁（形态与上游 overlay 一致）
@@ -111,7 +111,7 @@ pub fn ensure_browse_picker(home: &Path) -> Result<PickerOutcome, String> {
     if !changed {
         return Ok(PickerOutcome::AlreadyPinned);
     }
-    crate::mcp::write_patch(&path, &entries)?;
+    crate::patchstore::write_patch(&path, &entries)?;
     Ok(PickerOutcome::Pinned)
 }
 

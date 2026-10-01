@@ -3,7 +3,7 @@
 //! upstream::WELCOME_NOTICE_NAMESPACE；0.2.0 起设置存 profile patch 条目，
 //! 旧平面 settings.yaml 是一次性遗留导入通道）≠ 当前文案版本时，每次启动都
 //! 弹窗。壳面向最终用户——启动时从运行时 client.js 提取当前文案版本，经
-//! mcp::upsert_settings_entry 预写进 profile patch（Value 级 merge，其余条目
+//! patchstore::upsert_settings_entry 预写进 profile patch（Value 级 merge，其余条目
 //! 与键不动），桌面用户永不见该对话框；上游 bump 文案版本时提取自动跟随、
 //! 仍豁免。needle 由契约测试守门（tests/upstream_contract.rs），提取/写盘
 //! 失败只记 events.log 不阻断启动。
@@ -57,10 +57,10 @@ fn extract_notice_version(dsh_bin: &Path) -> Result<String, String> {
 }
 
 /// 播种/更新 ui-settings-general 条目的 welcomeNoticeVersion（profile patch，
-/// 经 mcp::upsert_settings_entry Value 级 merge）。patch 损坏时显式报错不动盘。
+/// 经 patchstore::upsert_settings_entry Value 级 merge）。patch 损坏时显式报错不动盘。
 pub fn seed_welcome_notice(home: &Path, dsh_bin: &Path) -> Result<WelcomeOutcome, String> {
     let version = extract_notice_version(dsh_bin)?;
-    let stored = crate::mcp::settings_entry_str(
+    let stored = crate::patchstore::settings_entry_str(
         home,
         crate::upstream::WELCOME_NOTICE_NAMESPACE,
         crate::upstream::WELCOME_NOTICE_ACK_FIELD,
@@ -68,7 +68,7 @@ pub fn seed_welcome_notice(home: &Path, dsh_bin: &Path) -> Result<WelcomeOutcome
     if stored.as_deref() == Some(version.as_str()) {
         return Ok(WelcomeOutcome::AlreadySeeded);
     }
-    crate::mcp::upsert_settings_entry(
+    crate::patchstore::upsert_settings_entry(
         home,
         crate::upstream::WELCOME_NOTICE_NAMESPACE,
         crate::upstream::SETTINGS_GENERAL_PKG,

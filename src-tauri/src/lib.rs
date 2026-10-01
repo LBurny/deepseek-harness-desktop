@@ -14,6 +14,7 @@ pub mod logging;
 pub mod mcp;
 pub mod notify;
 pub mod pagebridge;
+pub mod patchstore;
 pub mod platform;
 pub mod plugins;
 pub mod port;

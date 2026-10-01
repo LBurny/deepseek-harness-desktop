@@ -138,7 +138,7 @@ fn home_preference(home: &Path) -> Option<String> {
 }
 
 fn home_str(home: &Path, entry_id: &str, field: &str) -> Option<String> {
-    crate::mcp::settings_entry_str(home, entry_id, field)
+    crate::patchstore::settings_entry_str(home, entry_id, field)
 }
 
 fn apply(app: &AppHandle, theme: Theme) {
