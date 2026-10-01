@@ -1,13 +1,6 @@
 use crate::diagnostics::{BootstrapInfo, SharedState, StatusDto};
-use crate::theme::ShellUiState;
 use tauri::{AppHandle, State};
 use tauri_plugin_autostart::ManagerExt;
-
-/// 本地页面的主题/语言快照：页面加载即取，之后靠 shell-ui-state 事件增量更新
-#[tauri::command]
-pub fn get_shell_ui_state(state: State<ShellUiState>) -> crate::theme::UiSnapshot {
-    state.get()
-}
 
 #[tauri::command]
 pub fn get_bootstrap_error(state: State<BootstrapInfo>) -> Option<String> {

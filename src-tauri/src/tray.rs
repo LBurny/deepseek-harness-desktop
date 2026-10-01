@@ -302,7 +302,7 @@ pub(crate) fn show_main(app: &AppHandle) {
 /// 与 color-scheme，压住 CSS 的浅色变量分支。
 fn theme_bootstrap(app: &AppHandle) -> (String, tauri::window::Color) {
     let dark = app
-        .try_state::<crate::theme::ShellUiState>()
+        .try_state::<crate::ui::state::ShellUiState>()
         .map(|s| s.get().theme == "dark")
         .unwrap_or(true);
     let name = if dark { "dark" } else { "light" };

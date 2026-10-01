@@ -9,6 +9,7 @@ use crate::upstream::{
 use mux::FollowTx;
 
 pub mod mux;
+pub mod sink;
 pub mod toast;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

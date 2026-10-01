@@ -345,7 +345,7 @@ pub fn preview_completion_sound(
         })
     };
     let toast_sound = if let Some(rel) = sound.custom_wav() {
-        match crate::resolve_custom_sound(&app, rel) {
+        match crate::notify::sink::resolve_custom_sound(&app, rel) {
             Some(p) => {
                 // 派发行；真实播放结果（成功耗时/失败重试）由 platform 后台线程经
                 // 同一 diag 落日志——试听与真实通知共用同一播放与上报路径
