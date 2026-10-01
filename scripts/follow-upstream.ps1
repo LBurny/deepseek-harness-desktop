@@ -1,6 +1,6 @@
 ﻿# 一键跟版：钉版 → 清旧 dsh/ → 重抓运行时 → bump 应用版本 → cargo test（契约套件）
 # → 文档基线同步 → CHANGELOG 骨架 → 打印剩余手动步骤。
-# 契约套件红了：按输出改 src-tauri/src/upstream.rs，修复后重跑同一条命令即可
+# 契约套件红了：按输出改 src-tauri/src/dsh/upstream.rs，修复后重跑同一条命令即可
 # （每步幂等，已完成的自动跳过）。
 # 用法：
 #   powershell -File scripts/follow-upstream.ps1 -DshVersion 0.1.2-rc.1 [-Bump patch|minor|major | -AppVersion X.Y.Z]
@@ -87,7 +87,7 @@ function Get-FetchPin {
 # 文档基线的"旧版本"以 upstream.rs 头注释为准——它是文档同步里最后被改的文件，
 # 重跑续跑时它若已是新版，说明其余文件也同步过了。
 function Get-DocBaseline {
-  $f = Read-FileText (Join-Path $root 'src-tauri\src\upstream.rs')
+  $f = Read-FileText (Join-Path $root 'src-tauri\src\dsh\upstream.rs')
   if ($f.Text -match '事实基线：@deepseek-ai/dsh\s+([0-9A-Za-z.\-]+)') { return $Matches[1] }
   $null
 }
@@ -99,7 +99,7 @@ function Get-DocBaseline {
 # 计数 3≠1），同步被静默 skip，头注烂在旧版本两个版本。
 function Get-DocSyncTargets {
   @(
-    @{ Path = 'src-tauri\src\upstream.rs'; Expected = 1 },
+    @{ Path = 'src-tauri\src\dsh\upstream.rs'; Expected = 1 },
     @{ Path = 'docs\design.zh-CN.md';      Expected = 3 },
     @{ Path = 'README.md';                 Expected = 1 },
     @{ Path = 'README.zh-CN.md';           Expected = 1 }
@@ -361,7 +361,7 @@ Stage '5/7 cargo test（契约套件守门）'
 Push-Location (Join-Path $root 'src-tauri')
 try { cargo test; $code = $LASTEXITCODE } finally { Pop-Location }
 if ($code -ne 0) {
-  Fail 'cargo test' '契约红了按失败输出改 src-tauri/src/upstream.rs；修复后重跑同一条命令（已完成步骤自动跳过）'
+  Fail 'cargo test' '契约红了按失败输出改 src-tauri/src/dsh/upstream.rs；修复后重跑同一条命令（已完成步骤自动跳过）'
 }
 Note 'cargo test 全绿'
 

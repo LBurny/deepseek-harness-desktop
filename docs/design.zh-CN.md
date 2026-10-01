@@ -35,27 +35,23 @@ dsh 本身提供 `dsh web` 命令：在本机 127.0.0.1 上启动一个 Web UI �
 └──────────────────────────────────┬───────────────────────────────────────┘
                                    │ Tauri IPC（invoke 命令 / emit 事件）
 ┌──────────────────────────────────┴───────────────────────────────────────┐
-│ Rust 核心（src-tauri/src/）                                               │
-│  lib.rs      组装：插件 → setup（代码创建主窗口）→ 事件桥（dsh 状态 → 前端事件/窗口导航）│
-│  download.rs 主窗口下载处理：on_download 落系统下载目录 + 去重 + toast  │
-│  presets.rs  minimal 预设签名只读探测（补丁器已退役，留作契约哨兵）       │
-│  runtime.rs  运行时定位：原地运行 / 只读回退部署 / 旧副本清理               │
-│  process.rs  DshProcess 监督循环：spawn、就绪探测、指数退避重启             │
-│  notify/     WS 订阅 dsh 事件(/api/remote.mux 单通道) → 分类/台账 → 原生通知 │
-│  theme.rs    轮询 dsh 主题设置 → DWM 标题栏着色                            │
-│  progress.rs 首启进度模型：阶段权重、百分比映射、结构化事件负载             │
-│  tray.rs     托盘菜单；diagnostics.rs 状态/日志；commands.rs 基础命令     │
-│  zoom.rs     UI 缩放：可配置步进（默认 2%）、快捷键钩子注入、持久化        │
-│  settings.rs 壳设置：settings.json 模型/校验/持久化 + get/set/试听命令      │
-│  skills.rs   技能管理：skills/ ↔ skills-disabled/ 移动开关 + 三源/ZIP 导入   │
-│  mcp.rs      MCP 管理：cordis.patch.yml 条目读写/启停 + 三源导入           │
-│  picker.rs   目录选择器钉 browse：幂等写 cordis.patch.yml（禁 auto 行       │
-│              + insert browse 对），手机远程端才能选文件夹                  │
-│  pickerpatch.rs browse 选择器包内文件原地补丁：host 加 "dsh:drives" 盘符    │
-│              哨兵层级，client 隐藏条目默认显示+哨兵面包屑本地化/禁用打开     │
-│  welcome.rs  内测声明豁免播种：预写 ui-onboarding.welcomeNoticeVersion      │
-│  remote/     远程访问：token 门岗反向代理 + cloudflared 隧道监督            │
-│  platform/   Platform trait（windows.rs 实现；macos/linux 为编译期占位）   │
+│ Rust 核心（src-tauri/src/）                                              │
+│  lib.rs      组装：single_instance → setup 建主窗口 → bootstrap 自愈/播种│
+│  logging.rs  events.log 统一追加（时间戳/截断）；redact.rs token 脱敏    │
+│  patchstore.rs cordis.patch.yml 通用条目读写（Value 级保留/tmp+rename）  │
+│  eventbridge.rs 进程事件桥：dsh 状态 → 进度事件/窗口导航/凭据下发        │
+│  i18n.rs     壳界面语言跟随 dsh locale.preference                        │
+│  dsh/        运行时与进程事实：process 监督循环/dsh_session 凭证/        │
+│              upstream 事实源/presets 哨兵/port 端口记忆/runtime 部署     │
+│  platform/   Platform trait（windows.rs 实现 + Job Object 防孤儿）       │
+│  bootstrap/  启动期自愈与播种：run_all（补丁→pnpm store→preseed）        │
+│              progress 进度模型/plugins 执行层/preseed 播种/patches 补丁  │
+│  ui/         窗口与 UI：state 状态快照/theme 标题栏/tray 托盘/zoom 缩放  │
+│              pagebridge 观测桥/download 下载处理                         │
+│  features/   本地页面后端：diagnostics/settings/skills/mcp/update        │
+│  notify/     单 WS /api/remote.mux 事件桥 → 分类/台账 → 原生通知         │
+│              （mux 传输/sink 门控/toast WinRT）                          │
+│  remote/     远程访问：token 门岗反向代理 + cloudflared 隧道监督         │
 └──────────────────────────────────┬───────────────────────────────────────┘
                                    │ spawn（CREATE_NO_WINDOW，DSH_HOME 隔离）
 ┌──────────────────────────────────┴───────────────────────────────────────┐
@@ -84,7 +80,7 @@ DSHDesktop\
 4. **ensure_runtime**（§5）：失败不退出，错误写入 `BootstrapInfo` 并 emit `dsh-progress`（stage=error），窗口停在启动画面显示错误（前端会主动 `get_bootstrap_error` 查询，因为错误事件可能早于前端 listen 注册而丢失）。
 5. **seed_theme_preference → spawn_theme_follower**：首启时 settings.yaml 不存在则按系统深浅色预写 `ui-theme.preference`（dsh 缺省渲染浅色，不播种会出现"深标题栏 + 浅 UI"）；然后立即按系统主题给标题栏着色一次，进入 2s 轮询。
 6. **spawn_supervised**：经 `tauri::async_runtime::block_on` 调用（setup 里没有 tokio 上下文，内部 `tokio::spawn` 依赖它）。状态机：`Starting → Ready{port}`。
-7. **事件桥 bridge_event**（lib.rs）：所有 `dsh-progress` 事件都是结构化负载 `{stage, message, percent}`（progress.rs），百分比由后端按阶段权重计算：
+7. **事件桥 bridge_event**（eventbridge.rs）：所有 `dsh-progress` 事件都是结构化负载 `{stage, message, percent}`（bootstrap/progress.rs），百分比由后端按阶段权重计算：
    - `runtime`：原地运行 → 0→15%；回退部署 → 按复制字节实时报 0→70%（节流：百分比变化才发）
    - `starting`：15% 或 70%（取决于是否部署过）
    - `ready` → 100% → 写入 port 的 watch 通道（通知 WS 订阅器换端口）→ emit `dsh-ready` → **主窗口 navigate 到 `http://127.0.0.1:<port>/`**
@@ -94,7 +90,7 @@ DSHDesktop\
 
 ## 5. 运行时管理
 
-**背景**：安装包把运行时原样放在 `<install>\runtime\windows-x64\`（tauri.conf `resources` 映射：`"runtime" -> "runtime"`、`"resources/sounds" -> "sounds"`；列表形式会把 `resources/sounds` 原样放到 `<install>/resources/sounds/`，而壳在 exe 旁找 `sounds/*.wav`（`resolve_custom_sound`），探测不到自定义提示音就静默降级系统默认——0.1.16 实踩，`settings.rs` 有锚定测试）。早期设计是首次启动时把整个运行时复制到 `%LOCALAPPDATA%`（防只读安装目录），代价是安装后体积翻倍（约 +230MB）。
+**背景**：安装包把运行时原样放在 `<install>\runtime\windows-x64\`（tauri.conf `resources` 映射：`"runtime" -> "runtime"`、`"resources/sounds" -> "sounds"`；列表形式会把 `resources/sounds` 原样放到 `<install>/resources/sounds/`，而壳在 exe 旁找 `sounds/*.wav`（`resolve_custom_sound`），探测不到自定义提示音就静默降级系统默认——0.1.16 实踩，`features/settings.rs` 有锚定测试）。早期设计是首次启动时把整个运行时复制到 `%LOCALAPPDATA%`（防只读安装目录），代价是安装后体积翻倍（约 +230MB）。
 
 **现状：两级策略**
 
@@ -194,18 +190,18 @@ dsh WS /api/events.host ─▶ WsSource(host) ─▶ handle_host_frame ─▶ Se
 - 托盘"退出"：先 `stop()` 远程访问（杀 cloudflared 进程树 + 关停鉴权代理，链接即刻失效），再 `stop()` dsh，等 1.5s 让监督循环杀完进程树，最后 `exit(0)`。
 - 导航到远程 URL 后窗口标题被 dsh 的 `document.title` 覆盖——**外部脚本不要按标题找窗口**（按 PID + 类名，见 `scripts/shot-window.ps1`）。
 - **首次启动居中**：主窗口（setup 里 builder `.center()`，tauri.conf `windows` 已空）与托盘按需创建的五个窗口都以屏幕居中为默认位置；window-state 插件的 restore 在 window_created 时排队、早于首个可见帧执行，有记忆几何时覆盖居中默认值——首次启动居中、之后按上次位置，居中默认不会闪一帧再跳变（verify-no-size-flash.ps1 探针断言首个可见帧即记忆几何）。
-- **下载处理（download.rs）**：WebView2 的下载不接管则静默消失——wry 默认 handler 放行但 `SetHandled(true)` 抑制了下载 UI，用户看不到文件去向（dsh "Session log" 导出即受此影响）。主窗口 builder 挂 `on_download`：Requested 时把目标改到系统下载目录（`dirs::download_dir`，已存在则追加 " (n)" 序号防覆盖），Finished 时按成败弹 toast 告知落盘路径；全程记 events.log（`Download: requested/finished`）。
+- **下载处理（ui/download.rs）**：WebView2 的下载不接管则静默消失——wry 默认 handler 放行但 `SetHandled(true)` 抑制了下载 UI，用户看不到文件去向（dsh "Session log" 导出即受此影响）。主窗口 builder 挂 `on_download`：Requested 时把目标改到系统下载目录（`dirs::download_dir`，已存在则追加 " (n)" 序号防覆盖），Finished 时按成败弹 toast 告知落盘路径；全程记 events.log（`Download: requested/finished`）。
 
-IPC 命令：commands.rs 9 个——`get_shell_ui_state` / `get_status` / `restart_dsh` / `get_recent_logs` / `get_last_boot_timing` / `get_autostart` / `set_autostart` / `get_bootstrap_error` / `is_first_launch`；另有 zoom.rs 的 `zoom_ui`、settings.rs 的 `get_shell_settings` / `set_shell_settings` / `preview_completion_sound`、skills.rs 的 `list_skills` / `list_import_sources` / `import_skills` / `set_skill_enabled` / `delete_skill` / `inspect_zip_skills` / `import_zip_skills`、mcp.rs 的 `list_mcp_servers` / `upsert_mcp_server` / `set_mcp_enabled` / `delete_mcp_server` / `list_mcp_import_sources` / `import_mcp_servers`、plugins.rs 的 `get_plugin_status` / `list_plugins` / `search_plugins` / `install_plugin` / `uninstall_plugin` / `update_plugins`、remote/mod.rs 的 `start_remote` / `stop_remote` / `get_remote_status` / `copy_remote_link` / `get_remote_qr` / `reset_remote_link`、update.rs 的 `check_update` / `download_update` / `install_update` / `open_update_page`（共 42 个，见 build.rs AppManifest；tests/command_registration.rs 锚定 build.rs / capabilities / invoke_handler 三处一致）。
+IPC 命令：`get_shell_ui_state`（ui/state.rs）；features/diagnostics.rs（原 commands.rs）8 个——`get_status` / `restart_dsh` / `get_recent_logs` / `get_last_boot_timing` / `get_autostart` / `set_autostart` / `get_bootstrap_error` / `is_first_launch`；另有 ui/zoom.rs 的 `zoom_ui`、features/settings.rs 的 `get_shell_settings` / `set_shell_settings` / `preview_completion_sound`、features/skills.rs 的 `list_skills` / `list_import_sources` / `import_skills` / `set_skill_enabled` / `delete_skill` / `inspect_zip_skills` / `import_zip_skills`、features/mcp.rs 的 `list_mcp_servers` / `upsert_mcp_server` / `set_mcp_enabled` / `delete_mcp_server` / `list_mcp_import_sources` / `import_mcp_servers`、bootstrap/plugins.rs 的 `get_plugin_status` / `list_plugins` / `search_plugins` / `install_plugin` / `uninstall_plugin` / `update_plugins`、remote/mod.rs 的 `start_remote` / `stop_remote` / `get_remote_status` / `copy_remote_link` / `get_remote_qr` / `reset_remote_link`、features/update.rs 的 `check_update` / `download_update` / `install_update` / `open_update_page`（共 42 个，见 build.rs AppManifest；tests/command_registration.rs 锚定 build.rs / capabilities / invoke_handler 三处一致）。
 
-壳设置（settings.rs）：
+壳设置（features/settings.rs）：
 
 - **模型**：`settings.json` 存 `zoom_step`（0.01–0.25，越界 clamp）、`zoom_in`/`zoom_out` 快捷键（`{ctrl, shift, alt, code, key}`）、`close_behavior`（`background`/`quit`）、`notify`（`{approval, question, turn_done, answer_done}` 四条 `{enabled, timing}` 规则，默认全开、仅后台时提醒（0.4.x 配置无 answer_done 键，serde default 补齐）；旧版 `notify_on_completion` 布尔读取时迁移进 `notify.turn_done.enabled`，保存时不再写出）、`completion_sound`（`silent`/`default` + 17 个内置音效 `bip-bop-01..10`/`staplebops-01..07`，默认 `staplebops-02`；旧具名音 im/mail/reminder/sms→`default`、chime/drop/mellow→`staplebops-02` 经 serde alias 迁移）。缺失/损坏 → 全默认；部分字段缺失 → 逐字段回退默认（serde default）；校验失败（无修饰键/in-out 冲突）→ 全默认，不带坏状态跑。
 - **SettingsState**：托管内存值 + 持久化目录；`set` 先 clamp/校验再落盘再替换内存，校验或落盘失败则内存磁盘都保持旧值（落盘失败显式报"设置写入失败： …"——静默吞掉会让用户看到保存成功/无关报错而重启后回退，无法定位环境阻断）。
-- **set_autostart 的幂等防御**：每次保存设置都会调 `set_autostart`，而 auto-launch 0.5 的 `disable()` 无条件 `RegDeleteValueW`——Run 值不存在时返回 `ERROR_FILE_NOT_FOUND`，从未开过自启动的用户每次保存都弹"系统找不到指定的文件。 (os error 2)"。命令先 `is_enabled()` 比对目标态，已达成即 Ok（顺带避免每次保存重写注册表）；commands.rs 有锚定测试钉住上游行为，上游改幂等后可简化。
+- **set_autostart 的幂等防御**：每次保存设置都会调 `set_autostart`，而 auto-launch 0.5 的 `disable()` 无条件 `RegDeleteValueW`——Run 值不存在时返回 `ERROR_FILE_NOT_FOUND`，从未开过自启动的用户每次保存都弹"系统找不到指定的文件。 (os error 2)"。命令先 `is_enabled()` 比对目标态，已达成即 Ok（顺带避免每次保存重写注册表）；features/diagnostics.rs 有锚定测试钉住上游行为，上游改幂等后可简化。
 - **保存即生效**：`set_shell_settings` 成功后对主窗口重注入缩放钩子（快捷键定义内嵌在脚本里必须重注入）；步进不写死在脚本里，`zoom_ui` 调用时从设置读，改步进本来就无需重注入。
 
-UI 缩放（zoom.rs）：
+UI 缩放（ui/zoom.rs）：
 
 - **快捷键**：默认 `Ctrl+Shift+=` 放大、`Ctrl+Shift+-` 缩小（可在设置窗口自定义），步进默认 ±2 个百分点（可配 1%–25%，clamp 到 25%–500%）。钩子脚本由 `hook_js(&ShellSettings)` 生成——快捷键定义内嵌为 JSON，匹配逻辑与 `Shortcut::matches` 对齐：`e.code` 物理键位为主，`e.key` 兜底（合成按键与 RDP 注入的 keydown `e.code` 为空，纯 code 匹配会整组失效），meta 永不命中。`on_page_load` 在每次整页加载完成后 eval 注入（**只注入 main 窗口**——设置窗口录制快捷键时不能被钩子抢先拦截；本地 splash 与远程 dsh UI 通用），capture 阶段拦截并 invoke `zoom_ui`（负载 `direction: "in"/"out"`），经 WebView2 原生 `SetZoomFactor` 生效——与浏览器 Ctrl++ 同一机制。监听器可热替换（`__dshZoomHookHandler` 存旧 handler，重注入先 `removeEventListener` 再挂新的，不叠加）。
 - **持久化**：每次变更即写 `%LOCALAPPDATA%\DSHDesktop\ui-zoom.txt`；缺失/损坏回退 100%；每次页面加载时 `on_page_load` 统一重应用当前缩放（兼作 WebView2 重建后的兜底）。
@@ -225,7 +221,7 @@ pub trait Platform: Send + Sync {
 }
 ```
 
-`mod.rs` 对 macOS/Linux 是 `compile_error!` 占位——新增平台时编译器会强制你实现 trait 并接线 `current()`。配套还要做：`scripts/fetch-runtime.ps1` 支持对应 triplet 的 Node 下载、tauri.conf `bundle.targets` 加 dmg/appimage、CI matrix 打开对应行（`.github/workflows/build.yml` 注释里有清单）。主题着色在 `theme.rs` 里按 `cfg(windows)` 分支，其他平台走 `set_theme` 即可。
+`mod.rs` 对 macOS/Linux 是 `compile_error!` 占位——新增平台时编译器会强制你实现 trait 并接线 `current()`。配套还要做：`scripts/fetch-runtime.ps1` 支持对应 triplet 的 Node 下载、tauri.conf `bundle.targets` 加 dmg/appimage、CI matrix 打开对应行（`.github/workflows/build.yml` 注释里有清单）。主题着色在 `ui/theme.rs` 里按 `cfg(windows)` 分支，其他平台走 `set_theme` 即可。
 
 ## 11. 打包与分发
 
@@ -291,18 +287,18 @@ scripts/fetch-runtime.ps1
 
 ## 14. 更新策略（跟随 dsh 上游）
 
-上游源仓库：[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（npm 包 `@deepseek-ai/dsh`）。壳不 fork、不打补丁、不改 dsh 源码（§1 非目标），只做跟版发版。**唯一例外**是 presets.rs 的极简模式 Windows 修复：上游 rc 的 minimal 预设无条件挂载 PTY 持久 bash，而终端检查器未实现 win32，且 composeProfile 会把 agent-presets 行的 roots 无条件重写为 shipped root、profile patch 层无法注入影子根——只能启动期原地改写 shipped 预设文件（配置组合而非代码）。该补丁签名门控（上游加了 win32 分支即自动停手）、幂等、随 dsh 自更新还原后重打；上游修复后应整体移除。dsh 的内部优化（启动速度、UI 迭代等）对壳透明，重打包即受益。
+上游源仓库：[deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（npm 包 `@deepseek-ai/dsh`）。壳不 fork、不打补丁、不改 dsh 源码（§1 非目标），只做跟版发版。**唯一例外**是 dsh/presets.rs 的极简模式 Windows 修复：上游 rc 的 minimal 预设无条件挂载 PTY 持久 bash，而终端检查器未实现 win32，且 composeProfile 会把 agent-presets 行的 roots 无条件重写为 shipped root、profile patch 层无法注入影子根——只能启动期原地改写 shipped 预设文件（配置组合而非代码）。该补丁签名门控（上游加了 win32 分支即自动停手）、幂等、随 dsh 自更新还原后重打；上游修复后应整体移除。dsh 的内部优化（启动速度、UI 迭代等）对壳透明，重打包即受益。
 
 **版本钉死**：dsh 随应用版本钉死在安装包里（`fetch-runtime.ps1` 的 `-DshVersion`），用户机器上的 dsh 不会自动更新——**dsh 升级 = 我们发一版新应用**。
 
 **跟版流程（常规升级为纯流程，零代码改动）**：
 
 1. 关注上游 release 与 npm 版本流，对照 §15 事实清单评估是否触及接口契约。
-2. `powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch|minor|major]`——一条命令完成：改钉版 → 清旧 dsh/（防 package-lock 锁旧 rc）→ 重抓（冒烟+prune）→ bump 三处版本号 → `cargo test`（契约套件守门）→ 文档基线同步（upstream.rs 头注释/README 双岸/§15 标题与 npm 行，每文件计数断言，不符跳过并警告）→ CHANGELOG 骨架。**契约核对表由 `tests/upstream_contract.rs` 自动执行**（真实运行时探测，无运行时自动 skip；CI 的 fetch-runtime 在 cargo test 之前，故 CI 一定真跑）：红了说明上游变了，按失败输出的指引改 `src-tauri/src/upstream.rs` 对应常量（全部上游事实的单一来源，每条注明出处与影响面），修复后**重跑同一条命令**即可续跑（每步幂等，已完成自动跳过）；必要时动对应消费模块。若上游新增依赖（尤其 native 模块、多平台 prebuilds），按需调整 `prune-runtime.ps1` 规则。
+2. `powershell -File scripts/follow-upstream.ps1 -DshVersion <新版> [-Bump patch|minor|major]`——一条命令完成：改钉版 → 清旧 dsh/（防 package-lock 锁旧 rc）→ 重抓（冒烟+prune）→ bump 三处版本号 → `cargo test`（契约套件守门）→ 文档基线同步（upstream.rs 头注释/README 双岸/§15 标题与 npm 行，每文件计数断言，不符跳过并警告）→ CHANGELOG 骨架。**契约核对表由 `tests/upstream_contract.rs` 自动执行**（真实运行时探测，无运行时自动 skip；CI 的 fetch-runtime 在 cargo test 之前，故 CI 一定真跑）：红了说明上游变了，按失败输出的指引改 `src-tauri/src/dsh/upstream.rs` 对应常量（全部上游事实的单一来源，每条注明出处与影响面），修复后**重跑同一条命令**即可续跑（每步幂等，已完成自动跳过）；必要时动对应消费模块。若上游新增依赖（尤其 native 模块、多平台 prebuilds），按需调整 `prune-runtime.ps1` 规则。
 3. 填 CHANGELOG 的 TODO 摘要、review diff、commit；`pnpm tauri build` → `scripts/acceptance.ps1` 全项验收。
 4. 打 tag `v*` 推送（不再触发 CI 发布），`powershell -File scripts/release-local.ps1` 用本地构建产物直接发布 GitHub Release。
 
-**接口契约核对表（上游变了才动代码；代码化身：`src-tauri/src/upstream.rs` 常量 + `tests/upstream_contract.rs` 探测）**：
+**接口契约核对表（上游变了才动代码；代码化身：`src-tauri/src/dsh/upstream.rs` 常量 + `tests/upstream_contract.rs` 探测）**：
 
 | 上游事实（当前值见 §15） | 变了要动哪里 |
 | --- | --- |
@@ -313,7 +309,7 @@ scripts/fetch-runtime.ps1
 | Node 版本要求 | `fetch-runtime.ps1` 的 `-NodeVersion` + `upstream.rs` 的 `DSH_NODE_MAJOR_FLOOR` |
 | WS 信任栅栏（loopback / 无 Origin） | 契约套件直接探测（错 Origin→403）；行为变了重估 `remote/proxy.rs` 剥头策略 |
 | 内测声明三元式 needle | `upstream.rs` 的 `WELCOME_NOTICE_NEEDLE`（`remote/proxy.rs` bundle 改写引用） |
-| WS 信任栅栏（loopback / 无 Origin） | `notify/ws.rs` 握手 |
+| WS 信任栅栏（loopback / 无 Origin） | `notify/mux.rs` 握手 |
 
 契约变化大多会在 `cargo test`（WS 通知集成、主题解析等单测）或 acceptance 全链路中暴露；现场问题先看 `events.log`。
 
@@ -321,7 +317,7 @@ scripts/fetch-runtime.ps1
 
 ## 15. 附录：dsh 上游事实清单（0.2.0-rc.1）
 
-> 本表是文档形态；代码化身在 `src-tauri/src/upstream.rs`（单一事实源），
+> 本表是文档形态；代码化身在 `src-tauri/src/dsh/upstream.rs`（单一事实源），
 > 自动核对由 `tests/upstream_contract.rs` 执行。跟版改了 upstream.rs 就同步本表。
 
 | 事实 | 值 |
@@ -338,15 +334,15 @@ scripts/fetch-runtime.ps1
 | RPC 信封 | POST `/api/<method>`，`{type:"client-request",rpcId,method,payload:{args}}` → 恒 200 `{type:"server-response",rpcId,result:{ok,value}}`；**参数按 typert 描述符 wire 名传**（session/list 形参 `_request`、session/follow 形参 `request`，裸对象被拒 arguments-invalid） |
 | 设置存储（0.2.0 迁移） | 平面 `settings.yaml` 被废除为一次性遗留导入通道：`dsh-settings` 每次启动把它改名 `.imported` 并把各 section 导入 profile 同名条目（`ui-onboarding`→`ui-settings-general`）。活配置 = `profiles/web/cordis.patch.yml` 顶层直排条目（`- id: ui-theme/locale/ui-settings-general` + `name` + `config.preference` 等；config-editor 的 documentPath，写入即热重载）。`ui-theme.preference` 缺省 **system**（0.1.x 缺省浅色的事实已过时）。`cordis.yml` 每次启动被重写为空序列，启动后的合成内容是 Loader write-back 瞬态产物，不可读。壳 0.5.19 因每次启动重建 settings.yaml 触发导入循环、覆盖用户主题（"深色模式启动后 UI 未跟着变深色"），0.5.20 改读写 patch 条目并退役首启主题播种 |
 | 信任栅栏 | Host fence（loopback/trustedHosts）+ sec-fetch-site cross-site → 403、Origin.host ≠ Host → 403（代理剥浏览器标记头的依据不变）；0.1.2 起鉴权 401 优先级在栅栏之前 |
-| Agent 预设 | **0.1.2 起独立成包** `@deepseek-ai/dsh-agent-presets/presets/{minimal,…}`（node_modules 下）；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵）。**0.1.5 起 minimal 只剩持久 shell**：整个 `filesystem` 组被删（`fs-local` 与 `str-replace-editor` 都不再挂），极简模式从「持久 shell + 文件编辑」降为单工具——签名哨兵仍绿（`dsh-tool-bash-persistent` + win32 门控都在），故另加一条「已无 str-replace-editor」探针守语义变更。**0.2.0 起 dsh-agent-presets 包消失**，预设改为 `@deepseek-ai/dsh-web-app/presets/` 下的 cordis patch 文件（minimal = `minimal.patch.yml`，内容为 `insert:` 一枚 agent-preset 声明行；win32 门控与单工具语义不变，`PRESET_DIR_SEGMENTS`/`PRESET_COMPOSITION_FILE` 已跟随） |
+| Agent 预设 | **0.1.2 起独立成包** `@deepseek-ai/dsh-agent-presets/presets/{minimal,…}`（node_modules 下）；rc.8 起全部自带 win32 平台分支（minimal 的 persistent-bash/persistent-pwsh 按 `process.platform` 互斥禁用，subprocess-local 新增 win32 终端检查器）→ 壳的原地改写补丁器已退役，dsh/presets.rs 仅存只读签名探测（契约套件断言 UpstreamHandled 当回归哨兵）。**0.1.5 起 minimal 只剩持久 shell**：整个 `filesystem` 组被删（`fs-local` 与 `str-replace-editor` 都不再挂），极简模式从「持久 shell + 文件编辑」降为单工具——签名哨兵仍绿（`dsh-tool-bash-persistent` + win32 门控都在），故另加一条「已无 str-replace-editor」探针守语义变更。**0.2.0 起 dsh-agent-presets 包消失**，预设改为 `@deepseek-ai/dsh-web-app/presets/` 下的 cordis patch 文件（minimal = `minimal.patch.yml`，内容为 `insert:` 一枚 agent-preset 声明行；win32 门控与单工具语义不变，`PRESET_DIR_SEGMENTS`/`PRESET_COMPOSITION_FILE` 已跟随） |
 | 目录选择器 browse | host `dsh-host-directory-picker-browse/lib/index.js`：`list()` 只认全限定路径、无盘符枚举入口；client `dsh-client-ui-directory-picker-browse/lib/client.js`：`showHidden` 默认 false 且开框重置、`displayCrumbs` 把 home 前缀折叠成"主页" → 壳 pickerpatch.rs 启动期原地补丁（`"dsh:drives"` 哨兵盘符层 + 默认显示隐藏 + 哨兵面包屑/禁用打开） |
 | 图片附件 | 0.1.2：输入仅拖拽/剪贴板两条入口；host `dsh-attachment` 只认 png/jpeg/webp/gif（sharp 校验，3.5MB/图、20 图/条）→ 壳 mobile.js 注入附件按钮走合成 paste 复用该管线（文档类型上游不支持）。**0.1.5 起上游自带通用文件上传**（任意类型、与图片同区混排、进度/取消/切会话续显，模型按已保存路径读）→ 壳停止注入、按钮退化为兜底。**0.2.0 起上游把附件入口并进 "+" 按钮**（aria-label「添加文件或调用指令」，不再含「附件」字样）→ 兜底自动恢复注入，0.2.0 跟版实测无双回形针、功能正常 |
 | 预设根 | 旧版（0.1.1 线）时代 composeProfile 强制重写 roots 的行为上游已删（prep §一）；`$DSH_HOME/.agent-presets` 用户根可正常生效——如需预设补丁理论上可走 patch 影子覆盖（当前无需求，签名哨兵继续盯 win32 修复不回退） |
-| WebView2 下载 | 宿主不处理 DownloadStarting 即静默取消；wry 默认放行且抑制下载 UI → 壳 download.rs 显式接管 |
+| WebView2 下载 | 宿主不处理 DownloadStarting 即静默取消；wry 默认放行且抑制下载 UI → 壳 ui/download.rs 显式接管 |
 | 会话格式（0.1.5） | `SESSION_FORMAT_VERSION` 0 → **3**：恢复旧会话时生成 V3 新日志、**保留原文件**，但升级后的会话不支持降级读取 → **用户数据单向**，发版后别回退 dsh 版本（壳不读写会话日志，只钉版本漂移） |
 | 会话格式（0.2.0） | `SESSION_FORMAT_VERSION` 3 → **4**（依赖树自带 session-format-v3-to-v4 迁移包）：单向语义不变，旧壳会话在升级后首启被迁移且**不可回退**——降级壳版本等于丢弃 V4 会话 |
 | 流式上传与新增路由（0.1.5） | `POST /api/session/uploadFileBinary`（`dsh-client-file-upload`，`requestBody:"streaming"`，dsh 侧不限体积；普通 buffered `/api` 路由上限 300MB）→ **代理必须开流式旁路**（`upstream::is_streaming_body_route` → `forward_streaming`：逐块直通、先换 cookie、不重放）。另新增**免鉴权**的 `/open-in-app/*`（`apps`/`icon`/`open`，`dsh-host-open-in-app`）——通用反代即透传，手机端「在应用中打开」入口无意义、评估隐藏 |
-| 面板槽位（0.1.5） | `conversation`/`details`（单值槽）→ keyed `main`（保留 key `conversation`）+ `rightbar`，sidebar 内新增 `sidebar.panellist`，**`details` 槽删除**（原 Detail 面板移除）。影响：picker.rs 钉的 browse 表面挂在 `ui-workspace` 的 `directory-flow` 槽位，槽位重排后须真机点一次目录选择器；手机端 `_rightbarCol` 无面板打开时 0 宽（不侵入布局），打开文档/文件面板后的 ≤700px 形态待真机 |
+| 面板槽位（0.1.5） | `conversation`/`details`（单值槽）→ keyed `main`（保留 key `conversation`）+ `rightbar`，sidebar 内新增 `sidebar.panellist`，**`details` 槽删除**（原 Detail 面板移除）。影响：bootstrap/patches/picker.rs 钉的 browse 表面挂在 `ui-workspace` 的 `directory-flow` 槽位，槽位重排后须真机点一次目录选择器；手机端 `_rightbarCol` 无面板打开时 0 宽（不侵入布局），打开文档/文件面板后的 ≤700px 形态待真机 |
 | 出站代理与 Windows 子进程（0.1.5） | 新增 `@deepseek-ai/dsh-http-proxy`：dsh 出站请求遵循 `HTTP_PROXY/HTTPS_PROXY/ALL_PROXY/NO_PROXY`，**回环永不走代理**（显式豁免 `localhost`/`127.0.0.1`/`::1` 与 `127.0.0.0/8`、IPv4-mapped）；`dsh-subprocess-local` 的 spawn/taskkill 新增 `windowsHide: platform === "win32"`（与壳的 CREATE_NO_WINDOW 并行，互不依赖） |
 | 许可证 | MIT（Copyright 2026 DeepSeek） |
 
@@ -378,7 +374,7 @@ scripts/fetch-runtime.ps1
 
 **测试**：`tests/remote_proxy.rs`（门岗 403/302/种长效 cookie/转发/WS 桥接/503/shutdown 释放端口/插件 bundle 三元式改写/HTML 文档移动端样式与信息标签页脚本注入、无 </head> 透传、壳自有路由无凭据 403 的门岗覆盖回归）、`tests/remote_project.rs`（"项目"标签全链路：页面标记、resolve 命中/未命中、list 排序/逃逸 403/缺失 404、file 的 MIME/no-store/413/中文名 download 头、token 播种 302 在壳路由生效；mobile.js/css 注入钩子锚定）、`tests/remote_tunnel.rs`（fake-cloudflared.cjs：URL 解析、崩溃重启、stop、**adopt 收养活隧道→死后衔接监督循环重生、adopt 死 PID 直接重生**；fake-cloudflared.url 覆写打印域名供回退断言）、`tests/remote_manager.rs`（缺 cloudflared 报 error、fixture dsh + 假隧道全链路 up→stop、reset 轮换 token 域名不变、**会话持久化三件套**：session_file_lifecycle（start 落盘内容=status/reset 改写 token/stop 删除）、resume_adopts_surviving_tunnel（链接逐字节相同 + 门岗 302 实测可用）、resume_falls_back_when_tunnel_dead（死 PID→域名换 token 沿用、resumed=false、文件重写）——复活两条须用真 platform 实现（TestPlatform 桩会恒走回退），手工造孤儿隧道+手写状态文件布景；session.rs 模块内单元：状态文件往返/损坏容错、副本刷新规则、路径比对容错）。真隧道链路不进自动化（需外网），手动验收：托盘开启 → 手机扫码完整操作 dsh。
 
-## 17. 应用更新检查（update.rs）
+## 17. 应用更新检查（features/update.rs）
 
 "其它设置 → 检查更新"卡片：手动更新 + "启动时自动检查更新"开关（settings.json `check_update_on_launch`，默认开——公开发布仓匿名可读后，老配置无此字段升级即获得；显式关过的不受影响）。
 
@@ -392,11 +388,11 @@ scripts/fetch-runtime.ps1
 - 4 个命令（check_update/download_update/install_update/open_update_page）走既有 ACL 三处同步（build.rs/capabilities/default.json；dsh-remote 不开）；未引入 opener 插件——`open_update_page` 用 rundll32 `FileProtocolHandler`（GUI 子系统不闪控制台），`install_update` 校验路径以 `_x64-setup.exe` 结尾后 spawn，随后走 `quit_app` 让本进程先行退出（安装器是本进程子进程，旧版钩子的 `taskkill /T` 会连它一起杀；本进程先死，钩子杀树即成空操作），用户在向导里完成覆盖安装
 - 启动时检查（开关开启时）在 setup 末尾 spawn：有新版弹 toast 指向其它设置页，失败只记 events.log
 - 单元测试只覆盖纯函数（版本解析/比较、资产选择、响应反序列化容错）；真实网络链路不进自动化，手动验收：其它设置 → 手动更新 → 进度条 → 立即安装
-## 18. 插件操作执行层（plugins.rs；面板已退役）
+## 18. 插件操作执行层（bootstrap/plugins.rs；面板已退役）
 
 dsh 的"插件"= 声明了 `dsh.bundle` 的 npm 包（cordis bundle，装进 profile 后作为层加载）。**壳的插件管理面板（Plugins.svelte + 6 个 Tauri 命令）已随 0.5.21 移除**——dsh 0.2.0 自带插件管理页（安装/配置/启停/运行时卸载，支持官方源/镜像/自定义源），壳面板成为重复维护面，按"上游接管即退役"惯例删除（三处命令同步、capabilities、托盘项、按需窗口、前端页面、i18n 串一并清理；用户装插件走 dsh 自己的插件页）。
 
-plugins.rs 保留的只剩 **preseed 播种的执行层**（`preseed.rs` 用它跑官方子命令，marker 语义见 preseed）：
+bootstrap/plugins.rs 保留的只剩 **preseed 播种的执行层**（`bootstrap/preseed.rs` 用它跑官方子命令，marker 语义见 preseed）：
 
 - `run_plugin_op`：`node bin.js plugin --profile web <args>`，DSH_HOME 注入、PATH 前置（dsh 内部 `spawnSync("pnpm")` 才能解析到壳内置 pnpm）、无 shell（参数直接走 argv，杜绝注入）、`configure_child_command`（CREATE_NO_WINDOW 防闪控制台）、spawn 后 `register_child` 挂全局 Job Object（壳被杀连带回收，防孤儿）；**stdout/stderr 必须显式 pipe**——tokio 的 spawn 默认继承父进程 stdio，`wait_with_output` 只读管道句柄，不接管道则 output 恒为空；输出合并截断 200KB。`validate_spec` 拦截空/超长/`-` 开头（防参数注入）。`busy` Mutex 串行锁防并发写 profile。
 - `install_plugin_impl` / `uninstall_plugin_impl` / `update_plugins_impl`：`add/remove/update` 动词封装（0.2.0 起 dsh 在 add 前自行跑 `pnpm view` 元数据探测、对 pnpm 参数逐个加引号，旧动词仍兼容——`tests/plugins_integration.rs` 的断言按引号剥离匹配）。
@@ -407,34 +403,34 @@ plugins.rs 保留的只剩 **preseed 播种的执行层**（`preseed.rs` 用它�
 
 **生效方式**：装/卸没有 HMR——新层经 profile manifest 在 web 启动时加载（preseed 播种发生在每次 dsh 启动前，天然生效；用户经 dsh 自己的插件页卸载 /init 后，marker 判定"用户已删"不复活）。契约测试 `probe_plugins_cli` 探测 bin.js 的 `command("plugin")` 与 `requiredOption("--profile <name>")`——上游改版即红。
 
-## 19. 目录选择器钉 browse（picker.rs）
+## 19. 目录选择器钉 browse（bootstrap/patches/picker.rs）
 
 dsh 新建工作区要选文件夹，选择器有两套交互，启动时由 `directory-picker-auto` 一次性决议：绑 127.0.0.1 + win32 ⇒ **native**（koffi 驱动 Win32 系统对话框，弹在电脑屏幕上）；非回环/SSH ⇒ **browse**（网页内嵌对话框）。壳的远程代理对 dsh 透明，dsh 永远决议 native——**手机远程端点"添加工作区"，系统对话框弹在电脑屏幕上，手机上什么都看不到，无法选择**。
 
-修复走上游官方 pin 方式（`apps/web/tests/pin-browse-picker.overlay.yml` 与 shipped bundle patch 行注释明示）：`picker::ensure_browse_picker` 在 spawn dsh 前往 `<dsh-home>/profiles/web/cordis.patch.yml` 幂等确保两条补丁——`{id: directory-picker, disabled: true}` 禁用 auto 行，insert `@deepseek-ai/dsh-host-directory-picker-browse`（host 列目录/建目录）+ `@deepseek-ai/dsh-client-ui-directory-picker-browse`（网页表面，占 ui-workspace 的 directory-flow 槽位）。与 mcp.rs 管理同一文件：mcp 只认 `name=='@deepseek-ai/dsh-mcp-client'` 的 insert 条目，picker 的三条互不命中，Value 级共存（read_patch/write_patch 复用 mcp.rs，BOM 容忍 + tmp+rename 原子写）；缺行补行、用户手加的 disabled 摘掉，只在有变化时写盘（无谓写会触发 HMR 重载）；失败只记 events.log 不阻断启动。
+修复走上游官方 pin 方式（`apps/web/tests/pin-browse-picker.overlay.yml` 与 shipped bundle patch 行注释明示）：`picker::ensure_browse_picker` 在 spawn dsh 前往 `<dsh-home>/profiles/web/cordis.patch.yml` 幂等确保两条补丁——`{id: directory-picker, disabled: true}` 禁用 auto 行，insert `@deepseek-ai/dsh-host-directory-picker-browse`（host 列目录/建目录）+ `@deepseek-ai/dsh-client-ui-directory-picker-browse`（网页表面，占 ui-workspace 的 directory-flow 槽位）。与 features/mcp.rs 管理同一文件：mcp 只认 `name=='@deepseek-ai/dsh-mcp-client'` 的 insert 条目，picker 的三条互不命中，Value 级共存（read_patch/write_patch 复用 patchstore.rs，BOM 容忍 + tmp+rename 原子写）；缺行补行、用户手加的 disabled 摘掉，只在有变化时写盘（无谓写会触发 HMR 重载）；失败只记 events.log 不阻断启动。
 
 **桌面端同步变为网页版对话框**（选择器是 dsh 启动期全局决议，无法桌面 native/手机 browse 并存）——功能不减：浏览全盘、面包屑、手输路径（前辍过滤）、新建文件夹。对话框本体是上游 figma 设计（680×500 viewport-clamped，Miller 双栏窄屏横滚 + JS 自动钉右），mobile.css 只补布局：≤700px 时高度放宽到 `calc(100dvh - 48px)`（500px 上限在手机上列表仅 ~9 行），footer 三控件一行均分且移除"显示隐藏文件"开关（隐藏条目已由 pickerpatch 改为默认显示，开关在手机一行布局里挤占"新建文件夹"），锚点 `_millerRow` 是该包独有 CSS Modules 本地名（`:has` 限定不误伤设置弹窗）。
 
-**pickerpatch.rs 运行时补丁**（presets.rs 同款签名门控 + marker 幂等原地改写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_pickerpatch` 守门）：
+**bootstrap/patches/pickerpatch.rs 运行时补丁**（presets.rs 同款签名门控 + marker 幂等原地改写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_pickerpatch` 守门）：
 - *盘符层级*：host `list()` 特判哨兵路径 `"dsh:drives"` 返回 A-Z 可用盘符根（不可读/未就绪的盘 stat 跳过），`ancestryCrumbs` 对盘符根路径前插"此电脑" crumb——没有这一层，面包屑在 home 子树内被客户端 `displayCrumbs` 折叠成单个"主页"，想到其它盘只能手输路径（手机端实踩痛点）。客户端配套：`displayCrumbs` 折叠时保留哨兵 crumb 居首（任意位置一键回盘符层）、哨兵 crumb 走 locale 文案（`browser.drives` 此电脑/This PC，host 不知道客户端语言）、哨兵层级禁用"打开/新建文件夹"（防把 `"dsh:drives"` 选成工作区/当父目录）。
 - *隐藏条目默认显示*：client 的 `showHidden` 初值与每次开框重置都改 `true`。
 - *耦合规则*：客户端是哨兵功能的安全前提（本地化 crumb + 禁用"打开"），其签名漂移/文件缺失时整组停手——只改 host 会放出能把哨兵选成工作区的半成品。
 
 **跟版门禁**：`probe_picker` 契约探测——shipped bundle patch 仍含 `id: directory-picker` 的 auto 行（disable 目标）、两个 browse 包仍在依赖闭包（insert 行能被 Loader 解析）；`probe_pickerpatch` 核对两包内文件的全部补丁 needle（host 2 处 + client 8 处），上游改版即红；上游若默认 browse 即可删 picker.rs。`remote_proxy.rs` 的注入测试断言 `_millerRow` 规则随 mobile.css 注入。
 
-## 20. MCP 就绪门禁补丁（mcpgate.rs）
+## 20. MCP 就绪门禁补丁（bootstrap/patches/mcpgate.rs）
 
 dsh 就绪行由 `dsh-web-app` 的 `announceReady()` 打印，它先 `loader.await()` 等**全部插件 settle** 才输出（launch token 唯一来源，见 §4）；而 `dsh-mcp-client` 的 `apply()` 无条件 `await connection.ready`（上游源码注释明示刻意）。两件设计叠加出启动拖尾：用户 MCP 常走 `cmd /c npx 裸名/@latest`，每次启动都做一次 npm registry 解析（网络好时 +1.5~3s/个），网络差时实测单次启动 **36.6s**——就绪行被 MCP 首次连接钉死，splash 一直转。读源码确认：`failOnStartupError=false`（默认）时该 await 的 outcome 只服务 throw 分支，纯粹拖延就绪行；连接与工具注册由 `startConnection` 内部 generation 链独立推进（连上自动注册），dispose 自行 await settling+syncChain（退出语义不依赖它）。
 
-**mcpgate.rs 运行时补丁**（pickerpatch.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_mcpgate` 守门）：`failOnStartupError=true` 保留上游语义（await + throw），false 改为后台观察（`.then` 里失败经 `ctx.logger.error` 落 dsh 日志，不阻断启动）。调用点在 lib.rs 的 spawn_supervised 之前，失败只记 events.log。
+**bootstrap/patches/mcpgate.rs 运行时补丁**（pickerpatch.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_mcpgate` 守门）：`failOnStartupError=true` 保留上游语义（await + throw），false 改为后台观察（`.then` 里失败经 `ctx.logger.error` 落 dsh 日志，不阻断启动）。调用点在 bootstrap::run_all 的 patches 步（spawn_supervised 之前），失败只记 events.log。
 
 **漂移停手**：apply() 尾部两行形态变了（needle 缺失或多次出现）即整组停手，回退上游行为（启动重新变慢）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_mcpgate` 对已打补丁的树认 marker、对未打补丁的树逐字核对两行锚点（已改写的树 needle 必然失配，属预期形态）；上游若自己改成不阻塞（如 lazy 配置项）即可删 mcpgate.rs 与本探测。
 
-## 21. open-in-app 可用性缓存补丁（oiacache.rs）
+## 21. open-in-app 可用性缓存补丁（bootstrap/patches/oiacache.rs）
 
 会话头部"打开方式"按钮渲染前组件 `return null`，直到两个异步门同时到位：会话 cwd + `GET /open-in-app/apps` 的可用性列表。后者是**每 dsh 进程一次的冷探测**（`resolutions ??=` 懒加载，Windows 全目录登记册 + 文件探针，实测冷 **2861ms**、热 0ms），应用每重启重付一次——用户感知为"按钮总比头部其它元素晚两三秒蹦出来"。壳 0.5.14 起端口跨启动稳定（localStorage 源站不再漂移，见 §19），客户端持久化才真正可用：`dsh-client-store` 的 persist 走 `JSON.stringify`/`JSON.parse`（数组透明持久化），同文件的 choice store（`dsh.open-in-app.choice`）已有 persist 先例。
 
-**oiacache.rs 运行时补丁**（pickerpatch.rs/mcpgate.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_oiacache` 守门）：给 apps store 的 `createSnapshotStore(null)` 加 `persist: { name: "dsh.open-in-app.apps" }`，第二次起启动首帧按上次缓存渲染，后台真实探测落地后静默校正。初值仍是 `null`——首次装机无缓存时行为与上游一致（按钮等首个探测）。代价：已卸载应用在探测落地前短暂残留（点一次报错后消失）。调用点在 lib.rs 的 spawn_supervised 之前，失败只记 events.log。
+**bootstrap/patches/oiacache.rs 运行时补丁**（pickerpatch.rs/mcpgate.rs 同款签名门控 + marker 幂等 + tmp+rename 原子写，dsh 自更新还原后下次启动重打；needle 收口 upstream.rs、`probe_oiacache` 守门）：给 apps store 的 `createSnapshotStore(null)` 加 `persist: { name: "dsh.open-in-app.apps" }`，第二次起启动首帧按上次缓存渲染，后台真实探测落地后静默校正。初值仍是 `null`——首次装机无缓存时行为与上游一致（按钮等首个探测）。代价：已卸载应用在探测落地前短暂残留（点一次报错后消失）。调用点在 bootstrap::run_all 的 patches 步（spawn_supervised 之前），失败只记 events.log。
 
 **漂移停手**：apps store 的 null 初值行形态变了（needle 缺失或多次出现）即停手，回退上游行为（按钮恢复晚出现）而不产出半补丁；补丁内容变更须换 marker 版本（v1→v2），且 from-needle 必须仍锚上游原文。`probe_oiacache` 对已打补丁的树认 marker、对未打补丁的树逐字核对 needle（已改写的树 needle 必然失配，属预期形态）；上游若自己 persist 了 apps 列表即可删 oiacache.rs 与本探测。补丁后 bundle 内容哈希变化使 rev 自动失效，浏览器自动重新拉取，无缓存陈旧问题。
 

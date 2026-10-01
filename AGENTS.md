@@ -12,64 +12,80 @@
 
 ```
 src-tauri/src/
+  main.rs           应用入口（薄）：windows_subsystem 声明 + 调 lib::run
   lib.rs            Builder 组装：single_instance 插件必须最先 → setup 代码创建主窗口
                     （visible(false)+center+min 900x600，window-state 排队恢复，flags 不含
-                    VISIBLE 防托盘隐藏态被记住；on_page_load(Finished) 再 show）→ 事件桥
-                    （dsh-ready→导航：清陈年 dsh-auth cookie、30s 心跳看门狗自愈一次）；
+                    VISIBLE 防托盘隐藏态被记住；on_page_load(Finished) 再 show）；
                     run() 最顶部 debug-cdp marker → WebView2 CDP :9222 诊断开关
-  download.rs       主窗口下载：系统下载目录+" (n)"去重+toast；缺它文件无声消失
-  presets.rs        minimal 预设签名只读探测（补丁器已退役，留作契约哨兵）
-  upstream.rs       dsh 上游内部事实单一来源（入口/命令形/WS 帧/needle/钩子，每条注明
-                    出处与影响面）；跟版红了只改这个文件；
-                    tests/upstream_contract.rs 对真实运行时逐项探测（无运行时自动 skip）
-  platform/         Platform trait（多平台预留）；windows.rs 实现（含全局 KILL_ON_JOB_CLOSE
-                    Job Object：register_child 挂每个子进程，父被强杀内核连带回收整树）
-  process.rs        DshProcess 监督循环：spawn `node --max-http-header-size=65536 bin.js
+  logging.rs        events.log 统一追加层：append_debug_line 自动补本地时间戳前缀、1MB 截断
+  redact.rs         token 脱敏：任何落日志/事件的文字先过 redact_token（链接即凭据）
+  patchstore.rs     cordis.patch.yml 通用条目读写（Value 级保留、tmp+rename 原子写）；
+                    兼做设置存储通用条目读写（0.2.0 起 theme/i18n/welcome 复用）
+  eventbridge.rs    进程事件桥：dsh-ready→导航（清陈年 dsh-auth cookie、30s 心跳看门狗自愈
+                    一次）+ 进度事件 + 凭据下发；与 pagebridge（页面→壳）成对
+  i18n.rs           壳界面语言跟随 dsh locale.preference；文案 pick(zh,en) 二选一
+  dsh/              mod.rs 分组出口
+    process.rs      DshProcess 监督循环：spawn `node --max-http-header-size=65536 bin.js
                     web --port N --no-open`（请求头上限 16KB→64KB 是 431 纵深防御）；stdout
                     就绪行是 launch token 唯一来源（pump 先捕获再脱敏转发）；wait_token 静默
                     超时 + npm 冷装警告切 10min 长预算；Ready 落耗时分解行；子进程 PATH 前置
                     内嵌 node 目录 + profile 的 node_modules/.bin；指数退避、stop/restart；
                     **端口优先复用记忆值**
-  dsh_session.rs    BrowserAuth 凭证：launch token 解析 + token 换 cookie（绑 127.0.0.1:<port>
+    dsh_session.rs  BrowserAuth 凭证：launch token 解析 + token 换 cookie（绑 127.0.0.1:<port>
                     authority，换端口即失效）；凭证只在内存、日志脱敏（token 经 redact_token）
-  runtime.rs        ensure_runtime：可写则原地运行内嵌运行时，只读则回退部署副本；
+    upstream.rs     dsh 上游内部事实单一来源（入口/命令形/WS 帧/needle/钩子，每条注明
+                    出处与影响面）；跟版红了只改这个文件；
+                    tests/upstream_contract.rs 对真实运行时逐项探测（无运行时自动 skip）
+    presets.rs      minimal 预设签名只读探测（补丁器已退役，留作契约哨兵）
+    runtime.rs      ensure_runtime：可写则原地运行内嵌运行时，只读则回退部署副本；
                     `\\?\` 扩展路径经 strip_verbatim（别绕过它自己拼）
-  port.rs           选端口：优先复用记忆端口（dsh-port.txt，Web 源站跨启动稳定）+
+    port.rs         选端口：优先复用记忆端口（dsh-port.txt，Web 源站跨启动稳定）+
                     free_port 兜底（有竞态窗口需重试）+ wait_ready
-  i18n.rs           壳界面语言跟随 dsh locale.preference；文案 pick(zh,en) 二选一
-  pagebridge.rs     主窗口观测桥：error/unhandledrejection/console.error → events.log
-                    （限流+截断+脱敏）；#root 心跳驱动 lib.rs 自愈看门狗
-  notify/           单 WS /api/remote.mux 事件桥（$events + 逐会话 follow；cookie 鉴权每次
-                    重连现换；Ping/Pong 看门狗防半开；approval/提问只弹通知**严禁回包
-                    $events/result**）；sink 在 lib.rs 按 notify 四类规则门控；
-                    toast.rs=WinRT 直连（点击走协议激活）
-  theme.rs          标题栏主题跟随 profile patch 的 ui-theme 条目（0.2.0 起
-                    settings.yaml 是遗留导入通道，壳不再读写）；变化时
-                    SWP_FRAMECHANGED 强制重绘
-  progress.rs       首启进度模型（阶段权重/百分比/结构化负载）
-  tray.rs           托盘菜单 + 五个按需窗口（theme_bootstrap 防白底闪）+ diagnostics + commands
-  zoom.rs           UI 缩放：hook_js 注入快捷键（只注入 main）、步进读设置、ui-zoom.txt 持久化
-  settings.rs       壳设置 settings.json（校验；落盘失败显式报错不静默吞）
-  skills.rs         skills/ ↔ skills-disabled/ 移动即开关；三源导入+ZIP 导入（防穿越+条目上限）
-  mcp.rs            cordis.patch.yml 的 dsh-mcp-client 条目读写（Value 级保留、tmp+rename 原子写）；
-                    兼做设置存储通用条目读写（0.2.0 起 theme/i18n/welcome 复用）
-  plugins.rs        插件操作执行层，只服务 preseed 播种：装/卸走官方 dsh plugin 子命令
+  platform/         Platform trait（多平台预留）；windows.rs 实现（含全局 KILL_ON_JOB_CLOSE
+                    Job Object：register_child 挂每个子进程，父被强杀内核连带回收整树）
+  bootstrap/        mod.rs=run_all（启动期自愈总入口：补丁 → pnpm store 自愈 → preseed 播种）
+    progress.rs     首启进度模型（阶段权重/百分比/结构化负载）
+    plugins.rs      插件操作执行层，只服务 preseed 播种：装/卸走官方 dsh plugin 子命令
                     （壳不自己写 profile）；pnpm 壳内置（pnpm.cmd 包装）；串行锁；
                     stdout/stderr 显式 pipe；**spawn 前 pnpm store 迁移自愈**
                     （heal_profile_store，见坑区）。壳的插件面板+Tauri 命令已随 0.5.21 移除
-  preseed.rs        预安装插件播种（bundle 形态、marker 语义同 skills；dev 下静默无操作）
-  picker.rs         目录选择器钉 browse：启动幂等写 cordis.patch.yml 官方 overlay
-  pickerpatch.rs    browse 选择器运行时补丁（签名门控+marker 幂等原地改写；客户端签名漂移
+    preseed.rs      预安装插件播种（bundle 形态、marker 语义同 skills；dev 下静默无操作）
+    patches/        mod.rs=run_all（顺序即契约，逐补丁签名门控+marker 幂等，失败只记日志）
+      welcome.rs    内测声明豁免播种（失败只记 events.log，回退 dsh 原生弹一次）
+      picker.rs     目录选择器钉 browse：启动幂等写 cordis.patch.yml 官方 overlay
+      pickerpatch.rs browse 选择器运行时补丁（签名门控+marker 幂等原地改写；客户端签名漂移
                     整组停手）
-  mcpgate.rs        dsh-mcp-client 就绪门禁补丁（failOnStartupError=false 时不 await
+      mcpgate.rs    dsh-mcp-client 就绪门禁补丁（failOnStartupError=false 时不 await
                     connection.ready——npx 型 MCP 的 registry 解析曾把就绪行拖 36s；
                     签名门控+marker 幂等，细节见 upstream.rs 段注）
-  oiacache.rs       open-in-app 可用性缓存补丁（apps store 加 persist——按钮原本等
+      oiacache.rs   open-in-app 可用性缓存补丁（apps store 加 persist——按钮原本等
                     每进程一次 ~2.9s 冷探测才渲染；第二次起首帧即渲染，细节见
                     upstream.rs 段注）
-  welcome.rs        内测声明豁免播种（失败只记 events.log，回退 dsh 原生弹一次）
-  update.rs         检查更新：发布仓 releases/latest + 下载 *_x64-setup.exe；install_update
+  ui/               mod.rs 分组出口
+    state.rs        壳界面状态：UiSnapshot/ShellUiState/resolve/resolve_locale +
+                    get_shell_ui_state 命令（本地页面与托盘读取）
+    theme.rs        标题栏主题跟随 profile patch 的 ui-theme 条目（0.2.0 起
+                    settings.yaml 是遗留导入通道，壳不再读写）；变化时
+                    SWP_FRAMECHANGED 强制重绘
+    tray.rs         托盘菜单 + 五个按需窗口（theme_bootstrap 防白底闪）；命令见
+                    features/diagnostics.rs
+    zoom.rs         UI 缩放：hook_js 注入快捷键（只注入 main）、步进读设置、ui-zoom.txt 持久化
+    pagebridge.rs   主窗口观测桥：error/unhandledrejection/console.error → events.log
+                    （限流+截断+脱敏）；#root 心跳驱动 lib.rs 自愈看门狗
+    download.rs     主窗口下载：系统下载目录+" (n)"去重+toast；缺它文件无声消失
+  features/         mod.rs 分组出口
+    diagnostics.rs  诊断命令（原 commands.rs）：get_status / restart_dsh / get_recent_logs /
+                    get_last_boot_timing / get_autostart / set_autostart / get_bootstrap_error /
+                    is_first_launch + events.log 尾部回填
+    settings.rs     壳设置 settings.json（校验；落盘失败显式报错不静默吞）
+    skills.rs       skills/ ↔ skills-disabled/ 移动即开关；三源导入+ZIP 导入（防穿越+条目上限）
+    mcp.rs          cordis.patch.yml 的 dsh-mcp-client 条目读写（Value 级保留、tmp+rename 原子写）
+    update.rs       检查更新：发布仓 releases/latest + 下载 *_x64-setup.exe；install_update
                     必传 /UPDATE /P /R（见坑区）
+  notify/           mod.rs=单 WS /api/remote.mux 事件桥（$events + 逐会话 follow；cookie 鉴权每次
+                    重连现换；Ping/Pong 看门狗防半开；approval/提问只弹通知**严禁回包
+                    $events/result**）；mux.rs=传输层（帧形收 upstream.rs）；sink.rs=通知门控
+                    （前台判定 + notify 四类规则 + 提示音）；toast.rs=WinRT 直连（点击走协议激活）
   remote/           mod.rs=RemoteManager（resume_or_start：收养存活隧道+同端口重起代理、
                     链接字节级不变；suspend_for_exit=退出只死代理隧道留活；reset_link 原地
                     轮换 token）；session.rs=remote-session.json（含 token，绝不落 events.log）；
@@ -122,7 +138,7 @@ pnpm release                # 一条命令发版（-DryRun 演练、-SelfTest �
 
 ## 关键约定与坑（细节与踩坑史见 docs/design.zh-CN.md 与 CHANGELOG.md）
 
-- **set_autostart 先查再关**：auto-launch 0.5 的 disable() 对不存在的 Run 值直接 RegDeleteValueW → "os error 2"，从未开过自启动的用户每次保存设置都弹——先 is_enabled() 比目标态（commands.rs 锚定测试）。
+- **set_autostart 先查再关**：auto-launch 0.5 的 disable() 对不存在的 Run 值直接 RegDeleteValueW → "os error 2"，从未开过自启动的用户每次保存设置都弹——先 is_enabled() 比目标态（features/diagnostics.rs 锚定测试）。
 - **dsh 事实基线（upstream.rs 为单一来源）**：Node `^22.19 || >=24`；入口 `lib/bin.js`；`dsh web` 只绑 127.0.0.1 且 spawn 必带 `--no-open`。BrowserAuth 无关闭开关：launch token 走 stdout 就绪行（**就绪行晚于 HTTP 绑定**，必须持续 pump），`/?token=` 303 换 `dsh-auth-<hash>` cookie（HttpOnly/Strict，**绑 authority，换端口即失效**）；静态资产无门、`/api/*` 与 WS 在门内。事件走单 WS `/api/remote.mux`（帧形收 upstream.rs），完成判定看 follow 流 `turn/end`（reason.kind=="completed"），子代理看 `api-session/added` 的 origin；**严禁回包 `$events/result`**。预设独立成包；主题/语言键在 profile patch 的 `ui-theme`/`locale` 条目 config.preference（0.2.0 起
 settings.yaml 被上游废除为一次性遗留导入通道，壳写它会每次启动触发导入、把旧值
 灌回覆盖用户现选——0.5.19"深色模式启动后 UI 未跟着变深色"根因；壳偏好读写统一走
@@ -181,7 +197,7 @@ settings.yaml 被上游废除为一次性遗留导入通道，壳写它会每次
 
 ## 测试基线
 
-`cargo test` 应全绿（当前 293 个，其中 3 条 ignored（补丁模块的 `apply_to_real_runtime` 开发辅助等），含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
+`cargo test` 应全绿（当前 293 个，其中 3 条 ignored（补丁模块的 `apply_to_real_runtime` 开发辅助等），含 `tests/upstream_contract.rs` 对真实运行时的上游契约探测——跟版门禁：fetch 新版 dsh 后它红了就按输出改 `src/dsh/upstream.rs`）。`tests/console_window.rs` 的对照组会短暂弹出真实控制台窗口，属正常。改主题/进程/通知逻辑后，跑 `cargo test` + 重装走一遍 `acceptance.ps1`。
 
 ## 多平台预留
 
