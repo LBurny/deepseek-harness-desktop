@@ -197,7 +197,7 @@ pub async fn download_update(
             "No Windows installer asset in this release",
         )
     })?;
-    crate::append_debug_line(
+    crate::logging::append_debug_line(
         &log,
         &format!("Update: downloading {} from {}", asset.name, asset.browser_download_url),
     );
@@ -226,7 +226,7 @@ pub async fn download_update(
         Ok(n) => n,
         Err(e) => {
             let _ = std::fs::remove_file(&part);
-            crate::append_debug_line(&log, &format!("Update: download failed: {e}"));
+            crate::logging::append_debug_line(&log, &format!("Update: download failed: {e}"));
             return Err(e);
         }
     };
@@ -247,7 +247,7 @@ pub async fn download_update(
         PROGRESS_EVENT,
         DownloadProgress { downloaded, total: downloaded.max(1) },
     );
-    crate::append_debug_line(
+    crate::logging::append_debug_line(
         &log,
         &format!("Update: downloaded {} bytes -> {}", downloaded, final_path.display()),
     );
@@ -340,7 +340,7 @@ pub async fn check_on_launch(app: AppHandle, log: PathBuf) {
     let client = match http_client() {
         Ok(c) => c,
         Err(e) => {
-            crate::append_debug_line(&log, &format!("Update: client init failed: {e}"));
+            crate::logging::append_debug_line(&log, &format!("Update: client init failed: {e}"));
             return;
         }
     };
@@ -349,7 +349,7 @@ pub async fn check_on_launch(app: AppHandle, log: PathBuf) {
             let current = env!("CARGO_PKG_VERSION");
             if is_newer(current, &rel.tag_name) {
                 let latest = display_version(&rel.tag_name);
-                crate::append_debug_line(
+                crate::logging::append_debug_line(
                     &log,
                     &format!("Update: new version {latest} available (current {current})"),
                 );
@@ -364,10 +364,10 @@ pub async fn check_on_launch(app: AppHandle, log: PathBuf) {
                     None,
                 );
             } else {
-                crate::append_debug_line(&log, &format!("Update: up to date ({current})"));
+                crate::logging::append_debug_line(&log, &format!("Update: up to date ({current})"));
             }
         }
-        Err(e) => crate::append_debug_line(&log, &format!("Update: check on launch failed: {e}")),
+        Err(e) => crate::logging::append_debug_line(&log, &format!("Update: check on launch failed: {e}")),
     }
 }
 

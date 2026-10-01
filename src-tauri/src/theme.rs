@@ -178,7 +178,7 @@ fn apply_windows(app: &AppHandle, theme: Theme) {
         set_menu_app_mode(dark);
         // 现场诊断：主题切换应用留痕，便于排查"属性已改但标题栏没换色"类问题
         if let Some(p) = app.try_state::<Arc<dyn Platform>>() {
-            crate::append_debug_line(
+            crate::logging::append_debug_line(
                 &p.runtime_base_dir().join("events.log"),
                 &format!(
                     "Theme: applied {} (force NC redraw)",

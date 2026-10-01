@@ -444,7 +444,7 @@ impl DshProcess {
                         });
                     }
                 }
-                emit(ProcessEvent::Log(crate::remote::redact_token(&line)));
+                emit(ProcessEvent::Log(crate::redact::redact_token(&line)));
             }
         });
     }

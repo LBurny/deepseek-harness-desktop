@@ -178,7 +178,7 @@ pub fn seed_from_default_dsh_home(home: &Path) {
     if let Err(e) = seed_auto_import(&user_home.join(".dsh/skills"), home) {
         // events.log 在 home 的父目录（runtime_base_dir）
         if let Some(base) = home.parent() {
-            crate::append_debug_line(&base.join("events.log"), &format!("skills seed failed: {e}"));
+            crate::logging::append_debug_line(&base.join("events.log"), &format!("skills seed failed: {e}"));
         }
     }
 }

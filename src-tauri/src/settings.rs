@@ -340,7 +340,7 @@ pub fn preview_completion_sound(
         let log = log.clone();
         let app = app.clone();
         Arc::new(move |line: String| {
-            crate::append_debug_line(&log, &line);
+            crate::logging::append_debug_line(&log, &line);
             let _ = app.emit("dsh-log", &line);
         })
     };
@@ -351,7 +351,7 @@ pub fn preview_completion_sound(
                 // 同一 diag 落日志——试听与真实通知共用同一播放与上报路径
                 diag(format!(
                     "[{}] preview: {}",
-                    crate::local_stamp(),
+                    crate::logging::local_stamp(),
                     p.display()
                 ));
                 platform.play_sound_file(&p, Some(diag.clone()))?;
@@ -360,7 +360,7 @@ pub fn preview_completion_sound(
             None => {
                 diag(format!(
                     "[{}] preview: {} not found -> toast Default",
-                    crate::local_stamp(),
+                    crate::logging::local_stamp(),
                     rel
                 ));
                 crate::notify::toast::ToastSound::Default

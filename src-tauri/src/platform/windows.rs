@@ -222,9 +222,9 @@ impl Platform for WindowsPlatform {
         // 全链路诊断落 events.log：前台锁/Shell 归还竞争在机器 B 上翻过车
         // （同步抖动、单段择时均实测无效），每步结果可回放，失败有因可查。
         let log = self.runtime_base_dir().join("events.log");
-        crate::append_debug_line(
+        crate::logging::append_debug_line(
             &log,
-            &format!("[{}] bring_to_front: begin hwnd={raw_hwnd:#x}", crate::local_stamp()),
+            &format!("[{}] bring_to_front: begin hwnd={raw_hwnd:#x}", crate::logging::local_stamp()),
         );
         // 后台线程执行：调用侧含托盘回调（主事件循环），不能被择时 sleep 卡住；
         // 期间窗口失效（极速关窗/退出）时下面各 Win32 调用只是返回失败，无害。
@@ -289,11 +289,11 @@ impl Platform for WindowsPlatform {
                         GetWindowThreadProcessId(fg, &mut fg_pid);
                     }
                     let ours = fg_pid == std::process::id();
-                    crate::append_debug_line(
+                    crate::logging::append_debug_line(
                         &log,
                         &format!(
                             "[{}] bring_to_front: attempt {} fore_pid={} attach={} sfg={} fg_pid={} ours={}",
-                            crate::local_stamp(),
+                            crate::logging::local_stamp(),
                             attempt + 1,
                             fore_pid,
                             attached as i32,
@@ -318,11 +318,11 @@ impl Platform for WindowsPlatform {
                 if !fg.is_null() {
                     GetWindowThreadProcessId(fg, &mut fg_pid);
                 }
-                crate::append_debug_line(
+                crate::logging::append_debug_line(
                     &log,
                     &format!(
                         "[{}] bring_to_front: settled fg_pid={} ours={}",
-                        crate::local_stamp(),
+                        crate::logging::local_stamp(),
                         fg_pid,
                         fg_pid == std::process::id()
                     ),
@@ -525,7 +525,7 @@ fn play_wave_with_retry(path: &Path) -> String {
                 let ms = t0.elapsed().as_secs_f64() * 1000.0;
                 return format!(
                     "[{}] play sound: {} ok ({ms:.0}ms, device={device})",
-                    crate::local_stamp(),
+                    crate::logging::local_stamp(),
                     path.display()
                 );
             }
@@ -535,7 +535,7 @@ fn play_wave_with_retry(path: &Path) -> String {
     let ms = t0.elapsed().as_secs_f64() * 1000.0;
     format!(
         "[{}] play sound: {} failed: {last_err} ({ms:.0}ms，重试 1 次仍失败)",
-        crate::local_stamp(),
+        crate::logging::local_stamp(),
         path.display()
     )
 }

@@ -148,11 +148,11 @@ pub fn report_page_error(
     let log = state.runtime_base_dir().join("events.log");
     match PAGE_ERR_BUCKET.lock().unwrap().allow(now_millis() / 60_000) {
         Allow::Drop => {}
-        Allow::CapNotice => crate::append_debug_line(
+        Allow::CapNotice => crate::logging::append_debug_line(
             &log,
             "[page] page error rate cap reached; suppressed until next minute",
         ),
-        Allow::Line => crate::append_debug_line(&log, &format_page_err_line(&kind, &message)),
+        Allow::Line => crate::logging::append_debug_line(&log, &format_page_err_line(&kind, &message)),
     }
 }
 
@@ -161,7 +161,7 @@ pub fn ui_boot_ok(state: State<'_, Arc<dyn crate::platform::Platform>>, elapsed_
     BOOT_MS.store(now_millis(), Ordering::SeqCst);
     // JS 侧数值不可信，钳到 10 分钟内
     let secs = elapsed_ms.min(600_000) as f64 / 1000.0;
-    crate::append_debug_line(
+    crate::logging::append_debug_line(
         &state.runtime_base_dir().join("events.log"),
         &format!("[dshdesktop] dsh UI booted ({secs:.1}s)"),
     );
@@ -171,7 +171,7 @@ pub fn ui_boot_ok(state: State<'_, Arc<dyn crate::platform::Platform>>, elapsed_
 fn format_page_err_line(kind: &str, message: &str) -> String {
     // 页面 URL 带 ?token=，e.filename / 资源 src 会原样把 token 带出——
     // 落盘前先脱敏（与 remote 透传日志同一脱敏器）
-    let msg = crate::remote::redact_token(message);
+    let msg = crate::redact::redact_token(message);
     // 压平换行防日志注入成多行（多出来的行绕过时间戳/脱敏管线）
     let flat = flatten_newlines(&msg);
     let message: String = flat.chars().take(PAGE_MSG_MAX_CHARS).collect();

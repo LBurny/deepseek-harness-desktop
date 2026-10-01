@@ -10,6 +10,7 @@ pub mod diagnostics;
 pub mod download;
 pub mod dsh_session;
 pub mod i18n;
+pub mod logging;
 pub mod mcp;
 pub mod notify;
 pub mod pagebridge;
@@ -24,6 +25,7 @@ pub mod oiacache;
 pub mod presets;
 pub mod process;
 pub mod progress;
+pub mod redact;
 pub mod remote;
 pub mod runtime;
 pub mod settings;
@@ -55,7 +57,7 @@ pub fn run() {
                 "--remote-debugging-port=9222",
             );
             let _ = std::fs::create_dir_all(&dir);
-            append_debug_line(
+            crate::logging::append_debug_line(
                 &dir.join("events.log"),
                 "[dshdesktop] debug-cdp marker found: WebView2 CDP listening on 9222",
             );
@@ -81,11 +83,11 @@ pub fn run() {
         .plugin(tauri_plugin_single_instance::init(|app, args, _cwd| {
             if args.iter().any(|a| a == notify::toast::PROTOCOL_ARG) {
                 if let Some(p) = app.try_state::<std::sync::Arc<dyn platform::Platform>>() {
-                    append_debug_line(
+                    crate::logging::append_debug_line(
                         &p.runtime_base_dir().join("events.log"),
                         &format!(
                             "[{}] toast activated (protocol) -> show main",
-                            local_stamp()
+                            crate::logging::local_stamp()
                         ),
                     );
                 }
@@ -232,12 +234,12 @@ pub fn run() {
                     if update::external_open_allowed(&url) {
                         let host = url.host_str().unwrap_or("?").to_owned();
                         match update::open_url(url.as_str()) {
-                            Ok(()) => append_debug_line(
+                            Ok(()) => crate::logging::append_debug_line(
                                 &extlink_log,
                                 &format!("[extlink] 系统浏览器打开 {host}"),
                             ),
                             Err(e) => {
-                                append_debug_line(&extlink_log, &format!("[extlink] 打开失败: {e}"))
+                                crate::logging::append_debug_line(&extlink_log, &format!("[extlink] 打开失败: {e}"))
                             }
                         }
                     }
@@ -294,7 +296,7 @@ pub fn run() {
                     let log = notify_log.clone();
                     let handle = sink_handle.clone();
                     Arc::new(move |line: String| {
-                        append_debug_line(&log, &line);
+                        crate::logging::append_debug_line(&log, &line);
                         let _ = handle.emit("dsh-log", &line);
                     })
                 };
@@ -332,7 +334,7 @@ pub fn run() {
                         None => {
                             diag(format!(
                                 "[{}] play sound: {} not found -> toast Default",
-                                local_stamp(),
+                                crate::logging::local_stamp(),
                                 rel
                             ));
                             notify::toast::ToastSound::Default
@@ -379,7 +381,7 @@ pub fn run() {
                     },
                     // 只记端口/事件名（token/cookie 不进日志）
                     on_log: Some(Arc::new(move |line| {
-                        append_debug_line(&mux_log, &line);
+                        crate::logging::append_debug_line(&mux_log, &line);
                         let _ = emit_handle_for_mux.emit("dsh-log", &line);
                     })),
                 })
@@ -476,9 +478,9 @@ pub fn run() {
             match welcome::seed_welcome_notice(&paths.home, &paths.dsh_bin) {
                 Ok(welcome::WelcomeOutcome::AlreadySeeded) => {}
                 Ok(welcome::WelcomeOutcome::Seeded) => {
-                    append_debug_line(&debug_log, "welcome: seeded notice ack")
+                    crate::logging::append_debug_line(&debug_log, "welcome: seeded notice ack")
                 }
-                Err(e) => append_debug_line(&debug_log, &format!("welcome: seed failed: {e}")),
+                Err(e) => crate::logging::append_debug_line(&debug_log, &format!("welcome: seed failed: {e}")),
             }
             // 目录选择器钉 browse：native 是弹在电脑屏幕上的系统对话框，手机远程端
             // 不可见不可用（新建项目选不了文件夹）。必须在 spawn_supervised 之前完成；
@@ -486,16 +488,16 @@ pub fn run() {
             match picker::ensure_browse_picker(&paths.home) {
                 Ok(picker::PickerOutcome::AlreadyPinned) => {}
                 Ok(picker::PickerOutcome::Pinned) => {
-                    append_debug_line(&debug_log, "picker: pinned browse interaction")
+                    crate::logging::append_debug_line(&debug_log, "picker: pinned browse interaction")
                 }
-                Err(e) => append_debug_line(&debug_log, &format!("picker: pin failed: {e}")),
+                Err(e) => crate::logging::append_debug_line(&debug_log, &format!("picker: pin failed: {e}")),
             }
             // browse 选择器运行时补丁：盘符哨兵层级 + 隐藏条目默认显示
             // （细节见 pickerpatch.rs 头注）。客户端/ host 签名门控、整组停手；
             // 必须在 spawn_supervised 之前完成，失败只记 events.log。
             let browse_outcome = pickerpatch::patch_browse_picker(&paths);
             if browse_outcome != pickerpatch::BrowsePatchOutcome::AlreadyPatched {
-                append_debug_line(
+                crate::logging::append_debug_line(
                     &debug_log,
                     &format!("pickerpatch: browse drives/hidden -> {browse_outcome:?}"),
                 );
@@ -505,7 +507,7 @@ pub fn run() {
             // 失败只记 events.log（回退上游行为）；必须在 spawn_supervised 之前。
             let mcpgate_outcome = mcpgate::patch_mcp_ready_gate(&paths);
             if mcpgate_outcome != mcpgate::McpGateOutcome::AlreadyPatched {
-                append_debug_line(
+                crate::logging::append_debug_line(
                     &debug_log,
                     &format!("mcpgate: nonblocking ready -> {mcpgate_outcome:?}"),
                 );
@@ -515,7 +517,7 @@ pub fn run() {
             // 失败只记 events.log；必须在 spawn_supervised 之前。
             let oiacache_outcome = oiacache::patch_oia_apps_cache(&paths);
             if oiacache_outcome != oiacache::OiaCacheOutcome::AlreadyPatched {
-                append_debug_line(
+                crate::logging::append_debug_line(
                     &debug_log,
                     &format!("oiacache: persist apps -> {oiacache_outcome:?}"),
                 );
@@ -536,7 +538,7 @@ pub fn run() {
                 store_heal,
                 plugins::StoreHealOutcome::Matched | plugins::StoreHealOutcome::NoProfile
             ) {
-                append_debug_line(&debug_log, &format!("pnpm store heal: {store_heal:?}"));
+                crate::logging::append_debug_line(&debug_log, &format!("pnpm store heal: {store_heal:?}"));
             }
             // 预安装插件播种（/init 命令等）：随包插件首启种入 profile 并经官方
             // `dsh plugin add` 挂层；用户在插件面板删除后不复活（preseed.rs 头注）。
@@ -549,12 +551,12 @@ pub fn run() {
                 .map(|d| runtime::strip_verbatim(&d).join("preseed-plugins"));
             if let Some(src) = preseed_src {
                 match preseed::seed_preinstalled_plugins(&plugins_home, &src) {
-                    Ok(report) if !report.is_quiet() => append_debug_line(
+                    Ok(report) if !report.is_quiet() => crate::logging::append_debug_line(
                         &debug_log,
                         &format!("preseed: plugins -> {report:?}"),
                     ),
                     Ok(_) => {}
-                    Err(e) => append_debug_line(&debug_log, &format!("preseed: {e}")),
+                    Err(e) => crate::logging::append_debug_line(&debug_log, &format!("preseed: {e}")),
                 }
             }
             // block_on 提供 tokio runtime 上下文，spawn_supervised 内部的 tokio::spawn 依赖它
@@ -564,7 +566,7 @@ pub fn run() {
                     paths.clone(),
                     token_tx,
                     move |event| {
-                        append_debug_log(&debug_log, &event);
+                        crate::logging::append_debug_log(&debug_log, &event);
                         bridge_event(&emit_handle, &nav_home, &creds_tx, &token_rx, deployed, &debug_log, event);
                     },
                 )
@@ -590,10 +592,10 @@ pub fn run() {
                 Box::new(move |ev| match ev {
                     // 链接即凭据：日志只记非敏感字段，隧道输出过 token 脱敏
                     remote::RemoteEvent::Log(l) => {
-                        append_debug_line(&remote_log, &remote::redact_token(&l))
+                        crate::logging::append_debug_line(&remote_log, &crate::redact::redact_token(&l))
                     }
                     remote::RemoteEvent::Status(st) => {
-                        append_debug_line(
+                        crate::logging::append_debug_line(
                             &remote_log,
                             &format!(
                                 "Remote: phase={} url={:?} error={:?} proxy_port={:?}",
@@ -609,7 +611,7 @@ pub fn run() {
                                     // 自动恢复（收养复活，链接未变）不打扰用户：
                                     // 不弹 toast，仅落日志（用户反馈 0.5.8：重启应用
                                     // 自动连回上次链接属后台行为，弹窗是噪音）
-                                    append_debug_line(
+                                    crate::logging::append_debug_line(
                                         &remote_log,
                                         "Remote: auto-resumed, toast skipped (log only)",
                                     );
@@ -691,103 +693,6 @@ pub fn run() {
         .expect("error while running DSHDesktop");
 }
 
-/// 该行是否已自带时间戳前缀。壳侧不少行自带 `[HH:MM:SS.mmm]`（bring_to_front /
-/// 播放诊断等），cloudflared 透传行自带 RFC3339 UTC 前缀——这些不再二次加盖；
-/// 其余行（Starting / [dshdesktop] … / dsh stdout 透传等）由 append_debug_line
-/// 统一补本地时间戳，启动时序排查全靠它。
-pub(crate) fn needs_local_stamp(line: &str) -> bool {
-    let b = line.as_bytes();
-    // [HH:MM:SS.mmm]
-    if b.len() >= 14 && b[0] == b'[' && b[13] == b']' {
-        let inner = &line[1..13];
-        let digit_at = |i: usize| inner.as_bytes()[i].is_ascii_digit();
-        if digit_at(0)
-            && digit_at(1)
-            && inner.as_bytes()[2] == b':'
-            && digit_at(3)
-            && digit_at(4)
-            && inner.as_bytes()[5] == b':'
-            && digit_at(6)
-            && digit_at(7)
-            && inner.as_bytes()[8] == b'.'
-            && digit_at(9)
-            && digit_at(10)
-            && digit_at(11)
-        {
-            return false;
-        }
-    }
-    // RFC3339：YYYY-MM-DDTHH:MM:SS（cloudflared UTC 行）
-    if b.len() >= 20
-        && b[0].is_ascii_digit()
-        && b[1].is_ascii_digit()
-        && b[2].is_ascii_digit()
-        && b[3].is_ascii_digit()
-        && b[4] == b'-'
-        && b[7] == b'-'
-        && b[10] == b'T'
-    {
-        return false;
-    }
-    true
-}
-
-/// 追加一行到调试日志；超过 1MB 时截断重来（只用于现场诊断，不求完备）。
-/// 无时间戳的行统一补 `[HH:MM:SS.mmm]` 本地时间前缀（needs_local_stamp 判定）。
-pub(crate) fn append_debug_line(path: &std::path::Path, line: &str) {
-    use std::io::Write;
-    if let Ok(meta) = std::fs::metadata(path) {
-        if meta.len() > 1024 * 1024 {
-            let _ = std::fs::remove_file(path);
-        }
-    }
-    let stamped;
-    let line = if needs_local_stamp(line) {
-        stamped = format!("[{}] {line}", local_stamp());
-        &stamped
-    } else {
-        line
-    };
-    if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(path) {
-        let _ = writeln!(f, "{line}");
-    }
-}
-
-
-/// 本地时间戳 HH:MM:SS.mmm：声音链路诊断用——用户在界面上"点第几下没声音"
-/// 需要与日志行逐条对齐，无时间戳无法对应（Windows GetLocalTime，其它平台退
-/// 化为 UNIX 秒）。
-pub(crate) fn local_stamp() -> String {
-    #[cfg(windows)]
-    {
-        use windows_sys::Win32::Foundation::SYSTEMTIME;
-        use windows_sys::Win32::System::SystemInformation::GetLocalTime;
-        let mut st = SYSTEMTIME {
-            wYear: 0,
-            wMonth: 0,
-            wDayOfWeek: 0,
-            wDay: 0,
-            wHour: 0,
-            wMinute: 0,
-            wSecond: 0,
-            wMilliseconds: 0,
-        };
-        unsafe { GetLocalTime(&mut st) };
-        format!(
-            "{:02}:{:02}:{:02}.{:03}",
-            st.wHour, st.wMinute, st.wSecond, st.wMilliseconds
-        )
-    }
-    #[cfg(not(windows))]
-    {
-        let s = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-        format!("unix:{s}")
-    }
-}
-
 /// 解析内置音效资源（如 sounds/bip-bop-01.wav）的实际路径：resource_dir（剥 \\?\）
 /// 或可执行文件旁；都不存在返回 None（调用侧降级）。
 pub(crate) fn resolve_custom_sound(handle: &tauri::AppHandle, rel: &str) -> Option<PathBuf> {
@@ -832,14 +737,6 @@ fn prune_stale_dsh_cookies(w: &tauri::WebviewWindow) -> usize {
 /// 一律不动——误删会踢掉已登录的远程页，只能靠完整链接重进。
 fn is_stale_dsh_cookie(name: &str) -> bool {
     name.starts_with("dsh-auth-")
-}
-
-fn append_debug_log(path: &PathBuf, event: &ProcessEvent) {
-    let line = match event {
-        ProcessEvent::StateChanged(s) => format!("{s:?}"),
-        ProcessEvent::Log(l) => l.clone(),
-    };
-    append_debug_line(path, &line);
 }
 
 fn bridge_event(
@@ -908,7 +805,7 @@ fn bridge_event(
                         // 导航会立即补发新 cookie，罐子此后恒 ≤1 个。
                         let pruned = prune_stale_dsh_cookies(&w);
                         if pruned > 0 {
-                            append_debug_line(
+                            crate::logging::append_debug_line(
                                 &debug_log,
                                 &format!("[dshdesktop] pruned {pruned} stale dsh-auth cookies (431 guard)"),
                             );
@@ -968,7 +865,7 @@ fn bridge_event(
                                 return;
                             }
                             let pruned = prune_stale_dsh_cookies(&heal_w);
-                            append_debug_line(
+                            crate::logging::append_debug_line(
                                 &heal_log,
                                 &format!("[dshdesktop] UI boot heartbeat missing 30s; self-heal: pruned {pruned} dsh-auth cookies, re-navigating (port={port})"),
                             );
@@ -1017,45 +914,5 @@ mod tests {
         assert!(crate::is_stale_dsh_cookie("dsh-auth-x3d1aKAzkPuvABx"));
         assert!(!crate::is_stale_dsh_cookie("__dsh_remote"));
         assert!(!crate::is_stale_dsh_cookie("session"));
-    }
-
-    #[test]
-    fn needs_local_stamp_detects_existing_stamps() {
-        // 壳侧自带本地时间戳的行（bring_to_front / 播放诊断）不重复盖
-        assert!(!crate::needs_local_stamp("[19:13:54.425] bring_to_front: begin hwnd=0x1"));
-        // cloudflared 透传行自带 RFC3339 UTC 前缀，不重复盖
-        assert!(!crate::needs_local_stamp("2026-09-04T11:13:44Z INF Thank you"));
-        assert!(!crate::needs_local_stamp("2026-09-04T11:13:44.123Z INF x"));
-    }
-
-    #[test]
-    fn needs_local_stamp_marks_bare_lines() {
-        // 方括号但内容不是时间戳
-        assert!(crate::needs_local_stamp("[dshdesktop] starting dsh web --port 31817"));
-        // 生命周期状态行 / dsh stdout 透传（无时间戳）
-        assert!(crate::needs_local_stamp("Starting"));
-        assert!(crate::needs_local_stamp("Ready { port: 31817 }"));
-        assert!(crate::needs_local_stamp("Context7 Documentation MCP Server v4.0.5 running on stdio"));
-        assert!(crate::needs_local_stamp("dsh web: http://127.0.0.1:31817/?token=<redacted>"));
-    }
-
-    #[test]
-    fn append_debug_line_stamps_unstamped_line() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.log");
-        crate::append_debug_line(&path, "hello world");
-        let s = std::fs::read_to_string(&path).unwrap();
-        assert!(s.starts_with('['), "无时间戳的行应补 [HH:MM:SS.mmm] 前缀，实际：{s}");
-        assert!(s.ends_with("] hello world\n"), "实际：{s}");
-    }
-
-    #[test]
-    fn append_debug_line_preserves_existing_stamp() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("events.log");
-        crate::append_debug_line(&path, "[19:13:54.425] begin");
-        crate::append_debug_line(&path, "2026-09-04T11:13:44Z INF cloudflared");
-        let s = std::fs::read_to_string(&path).unwrap();
-        assert_eq!(s, "[19:13:54.425] begin\n2026-09-04T11:13:44Z INF cloudflared\n", "自带时间戳的行不得二次加盖，实际：{s}");
     }
 }

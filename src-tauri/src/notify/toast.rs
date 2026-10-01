@@ -192,11 +192,11 @@ mod imp {
                 .try_state::<std::sync::Arc<dyn crate::platform::Platform>>()
                 .map(|p| p.runtime_base_dir().join("events.log"));
             if let Some(log) = log {
-                crate::append_debug_line(
+                crate::logging::append_debug_line(
                     &log,
                     &format!(
                         "[{}] toast: activation registration failed: {e}",
-                        crate::local_stamp()
+                        crate::logging::local_stamp()
                     ),
                 );
             }

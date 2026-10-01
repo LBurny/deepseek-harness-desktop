@@ -113,7 +113,7 @@ impl MuxSource {
                 Ok(k) => k,
                 Err(e) => {
                     // 纵深防御：exchange_cookie 已 without_url，这里再过一道脱敏
-                    log_fn(crate::remote::redact_token(&format!(
+                    log_fn(crate::redact::redact_token(&format!(
                         "[mux] cookie 交换失败（端口 {}）：{e}，{RECONNECT_DELAY:?} 后重试",
                         c.port
                     )));

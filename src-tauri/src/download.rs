@@ -6,7 +6,7 @@
 //! 落到 runtime 默认路径），用户完全无从得知去向。这里显式接管：目标统一改到
 //! 系统下载目录并去重防覆盖，完成/失败都弹 toast 并记 events.log。
 
-use crate::{append_debug_line, i18n};
+use crate::{i18n, logging::append_debug_line};
 use std::path::{Path, PathBuf};
 use tauri::webview::DownloadEvent;
 use tauri::{Manager, Webview};

@@ -76,7 +76,7 @@ pub struct BootTimingDto {
 /// 解析启动耗时分解行；格式锚定 process::format_boot_timing。非分解行/残缺行 → None。
 pub fn parse_boot_timing(line: &str) -> Option<BootTimingDto> {
     // 行首时间戳（events.log 里的形态）提取出来单独展示；实时事件流没有这层
-    let at = if !crate::needs_local_stamp(line) && line.starts_with('[') {
+    let at = if !crate::logging::needs_local_stamp(line) && line.starts_with('[') {
         line[1..].find(']').map(|i| line[1..1 + i].to_string())
     } else {
         None
@@ -212,7 +212,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("events.log");
         std::fs::write(&path, vec![b'x'; 1024 * 1024 + 4096]).unwrap();
-        crate::append_debug_line(&path, "fresh line");
+        crate::logging::append_debug_line(&path, "fresh line");
         let meta = std::fs::metadata(&path).unwrap();
         assert!(meta.len() < 1024 * 1024, "截断后应远小于 1MB，实际 {}", meta.len());
         let s = std::fs::read_to_string(&path).unwrap();
