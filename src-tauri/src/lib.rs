@@ -341,94 +341,12 @@ pub fn run() {
                 .parent()
                 .map(|p| p.join("events.log"))
                 .unwrap_or_else(|| PathBuf::from("events.log"));
-            // 内测声明豁免播种：预写 ui-onboarding.welcomeNoticeVersion（当前文案
-            // 版本提取自运行时 client.js），否则 dsh 在未确认时每次启动弹"内测声明"
-            // 对话框。须在主题播种（它只在文件缺失时写）之后、spawn_supervised 之前；
-            // 失败只记 events.log 不阻断启动（回退为 dsh 原生弹一次）。
-            match bootstrap::patches::welcome::seed_welcome_notice(&paths.home, &paths.dsh_bin) {
-                Ok(bootstrap::patches::welcome::WelcomeOutcome::AlreadySeeded) => {}
-                Ok(bootstrap::patches::welcome::WelcomeOutcome::Seeded) => {
-                    crate::logging::append_debug_line(&debug_log, "welcome: seeded notice ack")
-                }
-                Err(e) => crate::logging::append_debug_line(&debug_log, &format!("welcome: seed failed: {e}")),
-            }
-            // 目录选择器钉 browse：native 是弹在电脑屏幕上的系统对话框，手机远程端
-            // 不可见不可用（新建项目选不了文件夹）。必须在 spawn_supervised 之前完成；
-            // 失败只记 events.log 不阻断启动（回退现状）。
-            match bootstrap::patches::picker::ensure_browse_picker(&paths.home) {
-                Ok(bootstrap::patches::picker::PickerOutcome::AlreadyPinned) => {}
-                Ok(bootstrap::patches::picker::PickerOutcome::Pinned) => {
-                    crate::logging::append_debug_line(&debug_log, "picker: pinned browse interaction")
-                }
-                Err(e) => crate::logging::append_debug_line(&debug_log, &format!("picker: pin failed: {e}")),
-            }
-            // browse 选择器运行时补丁：盘符哨兵层级 + 隐藏条目默认显示
-            // （细节见 pickerpatch.rs 头注）。客户端/ host 签名门控、整组停手；
-            // 必须在 spawn_supervised 之前完成，失败只记 events.log。
-            let browse_outcome = bootstrap::patches::pickerpatch::patch_browse_picker(&paths);
-            if browse_outcome != bootstrap::patches::pickerpatch::BrowsePatchOutcome::AlreadyPatched {
-                crate::logging::append_debug_line(
-                    &debug_log,
-                    &format!("pickerpatch: browse drives/hidden -> {browse_outcome:?}"),
-                );
-            }
-            // MCP 就绪门禁补丁：dsh 就绪行刻意等全部插件 settle（含 MCP 首次
-            // 连接），npx 型 MCP 的 registry 解析把启动拖到数十秒。签名门控、
-            // 失败只记 events.log（回退上游行为）；必须在 spawn_supervised 之前。
-            let mcpgate_outcome = bootstrap::patches::mcpgate::patch_mcp_ready_gate(&paths);
-            if mcpgate_outcome != bootstrap::patches::mcpgate::McpGateOutcome::AlreadyPatched {
-                crate::logging::append_debug_line(
-                    &debug_log,
-                    &format!("mcpgate: nonblocking ready -> {mcpgate_outcome:?}"),
-                );
-            }
-            // open-in-app 可用性缓存补丁：按钮等每进程一次的 ~2.9s 冷探测，
-            // 持久化后第二次起首帧即渲染（细节见 upstream.rs 段注）。签名门控、
-            // 失败只记 events.log；必须在 spawn_supervised 之前。
-            let oiacache_outcome = bootstrap::patches::oiacache::patch_oia_apps_cache(&paths);
-            if oiacache_outcome != bootstrap::patches::oiacache::OiaCacheOutcome::AlreadyPatched {
-                crate::logging::append_debug_line(
-                    &debug_log,
-                    &format!("oiacache: persist apps -> {oiacache_outcome:?}"),
-                );
-            }
-            // pnpm store 迁移自愈：profile 的 node_modules 链接在创建时的 store，
-            // 用户全局 storeDir 变更后内置 pnpm 解析到新 store，任何装/卸/更新都被
-            // ERR_PNPM_UNEXPECTED_STORE 拒绝（0.5.21 用户实锤：store 迁 F: 后 dsh
-            // 插件页装包全挂）。自愈 = rename 备用 → 内置 pnpm install 按清单重链 →
-            // 成功删备份 / 失败回滚 rename。任何结果只落 events.log 不阻断启动；
-            // 必须在 preseed 之前（新插件的 add 同样会被旧 store 拒）。
-            let plugins_home = bootstrap::plugins::PluginsHome::new(
-                paths.node_exe.clone(),
-                paths.dsh_bin.clone(),
-                paths.home.clone(),
-            );
-            let store_heal = bootstrap::plugins::heal_profile_store(&plugins_home);
-            if !matches!(
-                store_heal,
-                bootstrap::plugins::StoreHealOutcome::Matched | bootstrap::plugins::StoreHealOutcome::NoProfile
-            ) {
-                crate::logging::append_debug_line(&debug_log, &format!("pnpm store heal: {store_heal:?}"));
-            }
-            // 预安装插件播种（/init 命令等）：随包插件首启种入 profile 并经官方
-            // `dsh plugin add` 挂层；用户在插件面板删除后不复活（preseed.rs 头注）。
-            // 必须在 spawn_supervised 之前，dsh 首次启动即挂载；失败只记 events.log。
-            // dev 模式 tauri 不拷贝 bundle.resources，源目录缺失时静默无操作。
             let preseed_src = handle
                 .path()
                 .resource_dir()
                 .ok()
                 .map(|d| dsh::runtime::strip_verbatim(&d).join("preseed-plugins"));
-            if let Some(src) = preseed_src {
-                match bootstrap::preseed::seed_preinstalled_plugins(&plugins_home, &src) {
-                    Ok(report) if !report.is_quiet() => crate::logging::append_debug_line(
-                        &debug_log,
-                        &format!("preseed: plugins -> {report:?}"),
-                    ),
-                    Ok(_) => {}
-                    Err(e) => crate::logging::append_debug_line(&debug_log, &format!("preseed: {e}")),
-                }
-            }
+            bootstrap::run_all(&paths, preseed_src, &debug_log);
             // block_on 提供 tokio runtime 上下文，spawn_supervised 内部的 tokio::spawn 依赖它
             let proc = tauri::async_runtime::block_on(async {
                 dsh::process::DshProcess::spawn_supervised(
