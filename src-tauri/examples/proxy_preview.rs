@@ -5,7 +5,7 @@
 //! （DSH_HOME 默认 %LOCALAPPDATA%\DSHDesktop\dsh-home，可用 DSH_HOME 环境变量覆盖；
 //! 0.1.2 起 dsh 带 BrowserAuth，代理需 launch token 代持 dsh-auth cookie）
 
-use dshdesktop_lib::dsh_session::DshCreds;
+use dshdesktop_lib::dsh::dsh_session::DshCreds;
 use dshdesktop_lib::remote::generate_token;
 use dshdesktop_lib::remote::proxy::spawn_proxy;
 use std::path::PathBuf;

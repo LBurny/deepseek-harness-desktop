@@ -62,7 +62,7 @@ struct FakeState {
 fn fake_cookie_name(port: u16) -> String {
     format!(
         "{}fake{:04x}",
-        dshdesktop_lib::upstream::DSH_AUTH_COOKIE_PREFIX,
+        dshdesktop_lib::dsh::upstream::DSH_AUTH_COOKIE_PREFIX,
         port
     )
 }
@@ -327,7 +327,7 @@ async fn upload_stream(
 ) -> Response {
     let has_cookie = has_auth_cookie(&headers, &st.cookie_name);
     st.api_hits.lock().unwrap().push((
-        dshdesktop_lib::upstream::UPLOAD_STREAM_PATH.to_string(),
+        dshdesktop_lib::dsh::upstream::UPLOAD_STREAM_PATH.to_string(),
         has_cookie,
     ));
     if !has_cookie {
@@ -387,7 +387,7 @@ async fn mux_socket(st: FakeState, socket: WebSocket) {
                             v.get("streamId").and_then(|s| s.as_str()).map(String::from),
                             v.get("endpoint").and_then(|e| e.as_str()).map(String::from),
                         ) else { continue };
-                        if endpoint == dshdesktop_lib::upstream::EVENT_STREAM_ENDPOINT {
+                        if endpoint == dshdesktop_lib::dsh::upstream::EVENT_STREAM_ENDPOINT {
                             // $events：连接即推 ready（真 dsh 契约，notify/mux.rs 靠它判连通）
                             let ready = json!({"type":"item","streamId":id,"value":{
                                 "type":"ready","clientId":"fake",
@@ -396,7 +396,7 @@ async fn mux_socket(st: FakeState, socket: WebSocket) {
                                 break;
                             }
                             st.opens.lock().unwrap().push(endpoint.clone());
-                        } else if endpoint == dshdesktop_lib::upstream::METHOD_SESSION_FOLLOW {
+                        } else if endpoint == dshdesktop_lib::dsh::upstream::METHOD_SESSION_FOLLOW {
                             let sid = v
                                 .pointer("/payload/args/request/address/sessionId")
                                 .and_then(|s| s.as_str())
@@ -476,12 +476,12 @@ pub async fn spawn_fake_dsh(port: u16, scripted: ScriptedFrames) -> FakeDsh {
         // 流式上传必须先注册在 /api/{*rest} catch-all 之前（catch-all 用 String
         // 提取器，二进制/大体会被拒）
         .route(
-            dshdesktop_lib::upstream::UPLOAD_STREAM_PATH,
+            dshdesktop_lib::dsh::upstream::UPLOAD_STREAM_PATH,
             axum::routing::post(upload_stream),
         )
         .route("/api/{*rest}", axum::routing::any(api))
         .route(
-            dshdesktop_lib::upstream::DSH_MUX_PATH,
+            dshdesktop_lib::dsh::upstream::DSH_MUX_PATH,
             axum::routing::get(ws_mux),
         )
         .with_state(state);
@@ -525,7 +525,7 @@ pub async fn connect_mux(port: u16, cookie_name: &str) -> Result<WsSplit, String
     let url = format!(
         "ws://127.0.0.1:{}{}",
         port,
-        dshdesktop_lib::upstream::DSH_MUX_PATH
+        dshdesktop_lib::dsh::upstream::DSH_MUX_PATH
     );
     let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
     loop {

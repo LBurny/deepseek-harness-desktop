@@ -9,7 +9,7 @@
 //! 漂移停手语义同 pickerpatch：needle 失配即停手（回退上游行为=按钮恢复
 //! 晚出现），不产出半补丁。补丁内容变更须换 marker 版本（v1→v2）。
 
-use crate::runtime::RuntimePaths;
+use crate::dsh::runtime::RuntimePaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -68,9 +68,9 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 fn oia_client_file(paths: &RuntimePaths) -> Option<PathBuf> {
     // dsh_bin = <nm>/@deepseek-ai/dsh/lib/bin.js → node_modules 目录 = 上四级
     let nm = paths.dsh_bin.parent()?.parent()?.parent()?.parent()?;
-    Some(crate::upstream::join_segments(
+    Some(crate::dsh::upstream::join_segments(
         nm,
-        crate::upstream::OIA_CLIENT_FILE_SEGMENTS,
+        crate::dsh::upstream::OIA_CLIENT_FILE_SEGMENTS,
     ))
 }
 
@@ -162,7 +162,7 @@ mod tests {
     fn apply_to_real_runtime() {
         let rt = std::env::var("DSHDESKTOP_RUNTIME_DIR").expect("set DSHDESKTOP_RUNTIME_DIR");
         let nm = Path::new(&rt).join("dsh").join("node_modules");
-        let file = crate::upstream::join_segments(&nm, crate::upstream::OIA_CLIENT_FILE_SEGMENTS);
+        let file = crate::dsh::upstream::join_segments(&nm, crate::dsh::upstream::OIA_CLIENT_FILE_SEGMENTS);
         let outcome = patch_file(&file);
         assert!(matches!(
             outcome,

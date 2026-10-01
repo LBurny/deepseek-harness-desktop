@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::process::ProcessEvent;
+use crate::dsh::process::ProcessEvent;
 
 /// 该行是否已自带时间戳前缀。壳侧不少行自带 `[HH:MM:SS.mmm]`（bring_to_front /
 /// 播放诊断等），cloudflared 透传行自带 RFC3339 UTC 前缀——这些不再二次加盖；

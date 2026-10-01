@@ -15,7 +15,7 @@ pub mod proxy;
 pub mod session;
 pub mod tunnel;
 
-use crate::dsh_session::DshCreds;
+use crate::dsh::dsh_session::DshCreds;
 use crate::platform::Platform;
 use proxy::{spawn_proxy, ProxyHandle};
 use rand::Rng;

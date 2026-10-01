@@ -18,7 +18,7 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::plugins::PluginsHome;
+use crate::bootstrap::plugins::PluginsHome;
 
 const MARKER_FILE: &str = ".plugins-preseeded";
 
@@ -42,7 +42,7 @@ impl SeedReport {
 pub fn seed_preinstalled_plugins(home: &PluginsHome, source_dir: &Path) -> Result<SeedReport, String> {
     let mut add = |name: &str, dest: &Path| -> Result<(), String> {
         let spec = dest.to_string_lossy().into_owned();
-        let out = crate::plugins::run_plugin_op(home, &["add", &spec])?;
+        let out = crate::bootstrap::plugins::run_plugin_op(home, &["add", &spec])?;
         if out.exit_code != 0 {
             return Err(format!(
                 "dsh plugin add {name} 失败（exit {}）：{}",
@@ -136,7 +136,7 @@ fn read_dependency_names(manifest_path: &Path) -> BTreeSet<String> {
     serde_json::from_slice::<serde_json::Value>(bytes)
         .ok()
         .and_then(|m| {
-            m.get(crate::upstream::MANIFEST_DEPENDENCIES_KEY)?
+            m.get(crate::dsh::upstream::MANIFEST_DEPENDENCIES_KEY)?
                 .as_object()
                 .map(|o| o.keys().cloned().collect())
         })

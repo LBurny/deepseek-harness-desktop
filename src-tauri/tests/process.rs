@@ -1,6 +1,6 @@
 use dshdesktop_lib::platform::Platform;
-use dshdesktop_lib::process::{DshProcess, DshState, ProcessEvent};
-use dshdesktop_lib::runtime::RuntimePaths;
+use dshdesktop_lib::dsh::process::{DshProcess, DshState, ProcessEvent};
+use dshdesktop_lib::dsh::runtime::RuntimePaths;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -149,7 +149,7 @@ async fn ready_logs_boot_timing_breakdown() {
         .iter()
         .find(|l| l.contains("[dshdesktop] ready: port="))
         .expect("ready 分解行必须存在");
-    let dto = dshdesktop_lib::diagnostics::parse_boot_timing(line)
+    let dto = dshdesktop_lib::features::diagnostics::parse_boot_timing(line)
         .unwrap_or_else(|| panic!("分解行必须可解析：{line}"));
     assert_eq!(dto.port, port, "分解行端口须与 Ready 端口一致：{line}");
     assert!(dto.total_s > 0.0, "total 必须为正：{line}");
@@ -174,7 +174,7 @@ async fn npm_cold_install_gets_extended_token_budget() {
         fixture_paths(work.path()),
         token_tx,
         emit,
-        dshdesktop_lib::process::BootTimeouts {
+        dshdesktop_lib::dsh::process::BootTimeouts {
             silence: Duration::from_millis(1500),
             install: Duration::from_secs(8),
             absolute: Duration::from_secs(30),
@@ -201,7 +201,7 @@ async fn silent_boot_still_killed_after_silence_budget() {
         fixture_paths(work.path()),
         token_tx,
         emit,
-        dshdesktop_lib::process::BootTimeouts {
+        dshdesktop_lib::dsh::process::BootTimeouts {
             silence: Duration::from_millis(1500),
             install: Duration::from_secs(8),
             absolute: Duration::from_secs(30),

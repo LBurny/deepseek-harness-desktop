@@ -4,43 +4,21 @@ use std::sync::Arc;
 use tauri::{Emitter, Manager, Url, WebviewUrl, WebviewWindowBuilder};
 use tokio::sync::watch;
 
-pub mod commands;
-pub mod diagnostics;
-pub mod download;
-pub mod dsh_session;
+pub mod bootstrap;
+pub mod dsh;
 pub mod eventbridge;
+pub mod features;
 pub mod i18n;
 pub mod logging;
-pub mod mcp;
 pub mod notify;
-pub mod pagebridge;
 pub mod patchstore;
 pub mod platform;
-pub mod plugins;
-pub mod port;
-pub mod preseed;
-pub mod picker;
-pub mod pickerpatch;
-pub mod mcpgate;
-pub mod oiacache;
-pub mod presets;
-pub mod process;
-pub mod progress;
 pub mod redact;
 pub mod remote;
-pub mod runtime;
-pub mod settings;
-pub mod skills;
-pub mod theme;
-pub mod tray;
 pub mod ui;
-pub mod upstream;
-pub mod update;
-pub mod welcome;
-pub mod zoom;
 
-use dsh_session::DshCreds;
-use progress::ProgressPayload;
+use dsh::dsh_session::DshCreds;
+use bootstrap::progress::ProgressPayload;
 
 pub fn run() {
     // 诊断 CDP 开关（0.5.11）：runtime_base_dir/debug-cdp 空文件存在 → WebView2
@@ -92,11 +70,11 @@ pub fn run() {
                     );
                 }
             }
-            // 必须走 tray::show_main——它内含 platform bring_to_front（两段择时 +
+            // 必须走 ui::tray::show_main——它内含 platform bring_to_front（两段择时 +
             // AttachThreadInput + TOPMOST 抖动）。裸 show+set_focus 在前台锁下
             // 无声失败：窗口可见时被浏览器等前台应用压在原地（机器 B 实测"在
             // 浏览器下面"——这里曾内联三件套，根本没调到 show_main，加固全落空）
-            tray::show_main(app);
+            ui::tray::show_main(app);
         }))
         .plugin(tauri_plugin_notification::init())
         // 窗口几何记忆：缩放/移动实时入缓存，退出时落盘，下次启动建窗时恢复。
@@ -118,44 +96,44 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .invoke_handler(tauri::generate_handler![
             ui::state::get_shell_ui_state,
-            commands::get_status,
-            commands::restart_dsh,
-            commands::get_recent_logs,
-            commands::get_last_boot_timing,
-            commands::open_log_file,
-            commands::get_autostart,
-            commands::set_autostart,
-            commands::get_bootstrap_error,
-            commands::is_first_launch,
-            zoom::zoom_ui,
-            pagebridge::report_page_error,
-            pagebridge::ui_boot_ok,
-            settings::get_shell_settings,
-            settings::set_shell_settings,
-            settings::preview_completion_sound,
-            skills::list_skills,
-            skills::list_import_sources,
-            skills::import_skills,
-            skills::set_skill_enabled,
-            skills::delete_skill,
-            skills::inspect_zip_skills,
-            skills::import_zip_skills,
-            mcp::list_mcp_servers,
-            mcp::upsert_mcp_server,
-            mcp::set_mcp_enabled,
-            mcp::delete_mcp_server,
-            mcp::list_mcp_import_sources,
-            mcp::import_mcp_servers,
+            features::diagnostics::get_status,
+            features::diagnostics::restart_dsh,
+            features::diagnostics::get_recent_logs,
+            features::diagnostics::get_last_boot_timing,
+            features::diagnostics::open_log_file,
+            features::diagnostics::get_autostart,
+            features::diagnostics::set_autostart,
+            features::diagnostics::get_bootstrap_error,
+            features::diagnostics::is_first_launch,
+            ui::zoom::zoom_ui,
+            ui::pagebridge::report_page_error,
+            ui::pagebridge::ui_boot_ok,
+            features::settings::get_shell_settings,
+            features::settings::set_shell_settings,
+            features::settings::preview_completion_sound,
+            features::skills::list_skills,
+            features::skills::list_import_sources,
+            features::skills::import_skills,
+            features::skills::set_skill_enabled,
+            features::skills::delete_skill,
+            features::skills::inspect_zip_skills,
+            features::skills::import_zip_skills,
+            features::mcp::list_mcp_servers,
+            features::mcp::upsert_mcp_server,
+            features::mcp::set_mcp_enabled,
+            features::mcp::delete_mcp_server,
+            features::mcp::list_mcp_import_sources,
+            features::mcp::import_mcp_servers,
             remote::start_remote,
             remote::stop_remote,
             remote::get_remote_status,
             remote::copy_remote_link,
             remote::get_remote_qr,
             remote::reset_remote_link,
-            update::check_update,
-            update::download_update,
-            update::install_update,
-            update::open_update_page,
+            features::update::check_update,
+            features::update::download_update,
+            features::update::install_update,
+            features::update::open_update_page,
         ])
         .on_page_load(|webview, payload| {
             if !matches!(
@@ -174,7 +152,7 @@ pub fn run() {
                 // 新建窗口的 DWM 标题栏属性来自系统主题，与 dsh 解析主题可能相反
                 // （系统浅色+dsh 深色）；首个可见帧前落对，标题栏出生即正确
                 if let Some(w) = webview.app_handle().get_webview_window(webview.label()) {
-                    theme::apply_before_show(webview.app_handle(), &w);
+                    ui::theme::apply_before_show(webview.app_handle(), &w);
                 }
                 let _ = webview.window().show();
                 let _ = webview.window().set_focus();
@@ -187,7 +165,7 @@ pub fn run() {
                 // 在 window_created 时排队执行，早于首个 Finished，此刻几何已是记忆值——
                 // 直接 show 就不会有"默认尺寸闪一帧再跳变"（探针实测默认尺寸会可见 ~370ms）
                 if let Some(w) = webview.app_handle().get_webview_window("main") {
-                    theme::apply_before_show(webview.app_handle(), &w);
+                    ui::theme::apply_before_show(webview.app_handle(), &w);
                 }
                 let _ = webview.window().show();
                 let _ = webview.window().set_focus();
@@ -195,12 +173,12 @@ pub fn run() {
                 // 钩子内嵌当前快捷键设置；manage 之前的首帧用默认设置兜底
                 let settings = webview
                     .app_handle()
-                    .try_state::<settings::SettingsState>()
+                    .try_state::<features::settings::SettingsState>()
                     .map(|s| s.get())
                     .unwrap_or_default();
-                let _ = webview.eval(zoom::hook_js(&settings));
+                let _ = webview.eval(ui::zoom::hook_js(&settings));
                 // 启动首帧补应用持久化缩放；也兜住 WebView2 重建后 zoom 丢失
-                if let Some(state) = webview.app_handle().try_state::<zoom::ZoomState>() {
+                if let Some(state) = webview.app_handle().try_state::<ui::zoom::ZoomState>() {
                     let _ = webview.set_zoom(state.get());
                 }
             }
@@ -228,12 +206,12 @@ pub fn run() {
                 // document-start 注入每次导航都跑、先于页面脚本、绕页面 CSP：
                 // 错误桥（dsh UI 报错落 events.log）+ #root 挂载心跳，细节见
                 // pagebridge.rs 头注
-                .initialization_script(pagebridge::INIT_SCRIPT)
-                .on_download(download::handler(download_log))
+                .initialization_script(ui::pagebridge::INIT_SCRIPT)
+                .on_download(ui::download::handler(download_log))
                 .on_new_window(move |url, _| {
-                    if update::external_open_allowed(&url) {
+                    if features::update::external_open_allowed(&url) {
                         let host = url.host_str().unwrap_or("?").to_owned();
-                        match update::open_url(url.as_str()) {
+                        match features::update::open_url(url.as_str()) {
                             Ok(()) => crate::logging::append_debug_line(
                                 &extlink_log,
                                 &format!("[extlink] 系统浏览器打开 {host}"),
@@ -246,20 +224,20 @@ pub fn run() {
                     tauri::webview::NewWindowResponse::Deny
                 })
                 .build()?;
-            tray::setup_tray(&handle)?;
-            handle.manage(diagnostics::BootstrapInfo::default());
+            ui::tray::setup_tray(&handle)?;
+            handle.manage(features::diagnostics::BootstrapInfo::default());
             handle.manage(platform.clone());
-            handle.manage(zoom::ZoomState::new(platform.runtime_base_dir()));
-            handle.manage(settings::SettingsState::new(platform.runtime_base_dir()));
+            handle.manage(ui::zoom::ZoomState::new(platform.runtime_base_dir()));
+            handle.manage(features::settings::SettingsState::new(platform.runtime_base_dir()));
             // 技能管理的根目录 = 壳注入给 dsh 的 DSH_HOME（与 runtime.rs 的 home 同源）
-            handle.manage(skills::SkillsHome(platform.runtime_base_dir().join("dsh-home")));
+            handle.manage(features::skills::SkillsHome(platform.runtime_base_dir().join("dsh-home")));
             // 自动导入独立 dsh 默认目录（~/.dsh/skills）的技能：每次启动只补新技能，
             // 已见过的记在 .skills-seeded，用户在壳里删掉的不会复活
-            skills::seed_from_default_dsh_home(&platform.runtime_base_dir().join("dsh-home"));
+            features::skills::seed_from_default_dsh_home(&platform.runtime_base_dir().join("dsh-home"));
             // MCP 同理：同步 ~/.dsh 两个 cordis.patch.yml 层里的 dsh-mcp-client 条目，
             // marker .mcp-seeded 防复活；壳侧管理状态与技能同根（McpHome）
-            handle.manage(mcp::McpHome(platform.runtime_base_dir().join("dsh-home")));
-            mcp::seed_from_default_dsh_home(&platform.runtime_base_dir().join("dsh-home"));
+            handle.manage(features::mcp::McpHome(platform.runtime_base_dir().join("dsh-home")));
+            features::mcp::seed_from_default_dsh_home(&platform.runtime_base_dir().join("dsh-home"));
             let version = app.package_info().version.to_string();
             let home_url = app
                 .get_webview_window("main")
@@ -303,7 +281,7 @@ pub fn run() {
             let copy_emit = handle.clone();
             let copy_cb = move |copied: u64, total: u64| {
                 dep.store(true, Ordering::SeqCst);
-                let pct = progress::copy_percent(copied, total);
+                let pct = bootstrap::progress::copy_percent(copied, total);
                 if pct != lp.swap(pct, Ordering::SeqCst) {
                     let _ = copy_emit.emit(
                         "dsh-progress",
@@ -318,7 +296,7 @@ pub fn run() {
                     );
                 }
             };
-            let paths = match runtime::ensure_runtime(
+            let paths = match dsh::runtime::ensure_runtime(
                 platform.as_ref(),
                 &source,
                 &version,
@@ -331,7 +309,7 @@ pub fn run() {
                         format!("运行时就绪失败：{e}"),
                         format!("Runtime setup failed: {e}"),
                     );
-                    handle.state::<diagnostics::BootstrapInfo>().set_error(msg.clone());
+                    handle.state::<features::diagnostics::BootstrapInfo>().set_error(msg.clone());
                     let _ = handle.emit(
                         "dsh-progress",
                         ProgressPayload::new("error", msg, None),
@@ -345,7 +323,7 @@ pub fn run() {
             // 主题/语言读 profile patch 条目（upstream.rs 设置存储段注）；首启主题
             // 播种已退役——0.2.0 起 dsh 缺省 preference=system，与壳缺省一致。
             handle.manage(ui::state::ShellUiState::new(platform.as_ref(), &paths.home));
-            theme::spawn_theme_follower(&handle, platform.clone(), paths.home.clone());
+            ui::theme::spawn_theme_follower(&handle, platform.clone(), paths.home.clone());
             let emit_handle = handle.clone();
             let nav_home = home_url.clone();
             // 远程访问用的运行时信息（paths 随后被 SharedState 取走，先克隆出来）
@@ -367,9 +345,9 @@ pub fn run() {
             // 版本提取自运行时 client.js），否则 dsh 在未确认时每次启动弹"内测声明"
             // 对话框。须在主题播种（它只在文件缺失时写）之后、spawn_supervised 之前；
             // 失败只记 events.log 不阻断启动（回退为 dsh 原生弹一次）。
-            match welcome::seed_welcome_notice(&paths.home, &paths.dsh_bin) {
-                Ok(welcome::WelcomeOutcome::AlreadySeeded) => {}
-                Ok(welcome::WelcomeOutcome::Seeded) => {
+            match bootstrap::patches::welcome::seed_welcome_notice(&paths.home, &paths.dsh_bin) {
+                Ok(bootstrap::patches::welcome::WelcomeOutcome::AlreadySeeded) => {}
+                Ok(bootstrap::patches::welcome::WelcomeOutcome::Seeded) => {
                     crate::logging::append_debug_line(&debug_log, "welcome: seeded notice ack")
                 }
                 Err(e) => crate::logging::append_debug_line(&debug_log, &format!("welcome: seed failed: {e}")),
@@ -377,9 +355,9 @@ pub fn run() {
             // 目录选择器钉 browse：native 是弹在电脑屏幕上的系统对话框，手机远程端
             // 不可见不可用（新建项目选不了文件夹）。必须在 spawn_supervised 之前完成；
             // 失败只记 events.log 不阻断启动（回退现状）。
-            match picker::ensure_browse_picker(&paths.home) {
-                Ok(picker::PickerOutcome::AlreadyPinned) => {}
-                Ok(picker::PickerOutcome::Pinned) => {
+            match bootstrap::patches::picker::ensure_browse_picker(&paths.home) {
+                Ok(bootstrap::patches::picker::PickerOutcome::AlreadyPinned) => {}
+                Ok(bootstrap::patches::picker::PickerOutcome::Pinned) => {
                     crate::logging::append_debug_line(&debug_log, "picker: pinned browse interaction")
                 }
                 Err(e) => crate::logging::append_debug_line(&debug_log, &format!("picker: pin failed: {e}")),
@@ -387,8 +365,8 @@ pub fn run() {
             // browse 选择器运行时补丁：盘符哨兵层级 + 隐藏条目默认显示
             // （细节见 pickerpatch.rs 头注）。客户端/ host 签名门控、整组停手；
             // 必须在 spawn_supervised 之前完成，失败只记 events.log。
-            let browse_outcome = pickerpatch::patch_browse_picker(&paths);
-            if browse_outcome != pickerpatch::BrowsePatchOutcome::AlreadyPatched {
+            let browse_outcome = bootstrap::patches::pickerpatch::patch_browse_picker(&paths);
+            if browse_outcome != bootstrap::patches::pickerpatch::BrowsePatchOutcome::AlreadyPatched {
                 crate::logging::append_debug_line(
                     &debug_log,
                     &format!("pickerpatch: browse drives/hidden -> {browse_outcome:?}"),
@@ -397,8 +375,8 @@ pub fn run() {
             // MCP 就绪门禁补丁：dsh 就绪行刻意等全部插件 settle（含 MCP 首次
             // 连接），npx 型 MCP 的 registry 解析把启动拖到数十秒。签名门控、
             // 失败只记 events.log（回退上游行为）；必须在 spawn_supervised 之前。
-            let mcpgate_outcome = mcpgate::patch_mcp_ready_gate(&paths);
-            if mcpgate_outcome != mcpgate::McpGateOutcome::AlreadyPatched {
+            let mcpgate_outcome = bootstrap::patches::mcpgate::patch_mcp_ready_gate(&paths);
+            if mcpgate_outcome != bootstrap::patches::mcpgate::McpGateOutcome::AlreadyPatched {
                 crate::logging::append_debug_line(
                     &debug_log,
                     &format!("mcpgate: nonblocking ready -> {mcpgate_outcome:?}"),
@@ -407,8 +385,8 @@ pub fn run() {
             // open-in-app 可用性缓存补丁：按钮等每进程一次的 ~2.9s 冷探测，
             // 持久化后第二次起首帧即渲染（细节见 upstream.rs 段注）。签名门控、
             // 失败只记 events.log；必须在 spawn_supervised 之前。
-            let oiacache_outcome = oiacache::patch_oia_apps_cache(&paths);
-            if oiacache_outcome != oiacache::OiaCacheOutcome::AlreadyPatched {
+            let oiacache_outcome = bootstrap::patches::oiacache::patch_oia_apps_cache(&paths);
+            if oiacache_outcome != bootstrap::patches::oiacache::OiaCacheOutcome::AlreadyPatched {
                 crate::logging::append_debug_line(
                     &debug_log,
                     &format!("oiacache: persist apps -> {oiacache_outcome:?}"),
@@ -420,15 +398,15 @@ pub fn run() {
             // 插件页装包全挂）。自愈 = rename 备用 → 内置 pnpm install 按清单重链 →
             // 成功删备份 / 失败回滚 rename。任何结果只落 events.log 不阻断启动；
             // 必须在 preseed 之前（新插件的 add 同样会被旧 store 拒）。
-            let plugins_home = plugins::PluginsHome::new(
+            let plugins_home = bootstrap::plugins::PluginsHome::new(
                 paths.node_exe.clone(),
                 paths.dsh_bin.clone(),
                 paths.home.clone(),
             );
-            let store_heal = plugins::heal_profile_store(&plugins_home);
+            let store_heal = bootstrap::plugins::heal_profile_store(&plugins_home);
             if !matches!(
                 store_heal,
-                plugins::StoreHealOutcome::Matched | plugins::StoreHealOutcome::NoProfile
+                bootstrap::plugins::StoreHealOutcome::Matched | bootstrap::plugins::StoreHealOutcome::NoProfile
             ) {
                 crate::logging::append_debug_line(&debug_log, &format!("pnpm store heal: {store_heal:?}"));
             }
@@ -440,9 +418,9 @@ pub fn run() {
                 .path()
                 .resource_dir()
                 .ok()
-                .map(|d| runtime::strip_verbatim(&d).join("preseed-plugins"));
+                .map(|d| dsh::runtime::strip_verbatim(&d).join("preseed-plugins"));
             if let Some(src) = preseed_src {
-                match preseed::seed_preinstalled_plugins(&plugins_home, &src) {
+                match bootstrap::preseed::seed_preinstalled_plugins(&plugins_home, &src) {
                     Ok(report) if !report.is_quiet() => crate::logging::append_debug_line(
                         &debug_log,
                         &format!("preseed: plugins -> {report:?}"),
@@ -453,7 +431,7 @@ pub fn run() {
             }
             // block_on 提供 tokio runtime 上下文，spawn_supervised 内部的 tokio::spawn 依赖它
             let proc = tauri::async_runtime::block_on(async {
-                process::DshProcess::spawn_supervised(
+                dsh::process::DshProcess::spawn_supervised(
                     platform.clone(),
                     paths.clone(),
                     token_tx,
@@ -466,7 +444,7 @@ pub fn run() {
             // dsh-home 先克隆出来：paths 随 SharedState move，远程代理的
             // "项目"标签端点（project.rs）要靠它解析 storages/workspace.json
             let dsh_home = paths.home.clone();
-            handle.manage(diagnostics::SharedState {
+            handle.manage(features::diagnostics::SharedState {
                 process: proc,
                 runtime: paths,
                 version,
@@ -494,7 +472,7 @@ pub fn run() {
                                 st.phase, st.url, st.error, st.proxy_port
                             ),
                         );
-                        tray::update_remote_items(&remote_handle, &st.phase);
+                        ui::tray::update_remote_items(&remote_handle, &st.phase);
                         // Up/Error 给 toast（其余状态变化是中间态，不打扰）；
                         // toast 会留在系统通知中心，正文不带链接，只提示去托盘复制
                         match st.phase.as_str() {
@@ -550,14 +528,14 @@ pub fn run() {
             // 启动时检查更新（设置默认开）：异步查 GitHub，有新版弹 toast 指向
             // 其它设置页；失败只记 events.log，不打断启动流程
             if handle
-                .state::<settings::SettingsState>()
+                .state::<features::settings::SettingsState>()
                 .get()
                 .check_update_on_launch
             {
                 let update_handle = handle.clone();
                 let update_log = platform.runtime_base_dir().join("events.log");
                 tauri::async_runtime::spawn(async move {
-                    update::check_on_launch(update_handle, update_log).await;
+                    features::update::check_on_launch(update_handle, update_log).await;
                 });
             }
             Ok(())
@@ -570,11 +548,11 @@ pub fn run() {
                     api.prevent_close();
                     let quit = window
                         .app_handle()
-                        .try_state::<settings::SettingsState>()
-                        .map(|s| matches!(s.get().close_behavior, settings::CloseBehavior::Quit))
+                        .try_state::<features::settings::SettingsState>()
+                        .map(|s| matches!(s.get().close_behavior, features::settings::CloseBehavior::Quit))
                         .unwrap_or(false);
                     if quit {
-                        tray::quit_app(window.app_handle());
+                        ui::tray::quit_app(window.app_handle());
                     } else {
                         let _ = window.hide();
                     }

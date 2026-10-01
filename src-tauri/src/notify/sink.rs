@@ -7,8 +7,8 @@ use tauri::{Emitter, Manager};
 use tokio::sync::watch;
 
 use super::{Notification, NotifySink};
-use crate::dsh_session::DshCreds;
-use crate::{notify, platform, runtime, settings};
+use crate::dsh::dsh_session::DshCreds;
+use crate::{dsh::runtime, features::settings, notify, platform};
 
 pub fn build_sink(
     handle: &tauri::AppHandle,

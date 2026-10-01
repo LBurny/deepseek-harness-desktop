@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 pub(crate) fn patch_path(home: &Path) -> PathBuf {
-    crate::upstream::join_segments(home, crate::upstream::MCP_PATCH_SEGMENTS)
+    crate::dsh::upstream::join_segments(home, crate::dsh::upstream::MCP_PATCH_SEGMENTS)
 }
 
 /// （picker.rs 同文件复用）读 patch 顶层 op 序列；文件不存在/空 = 空序列，BOM 容忍

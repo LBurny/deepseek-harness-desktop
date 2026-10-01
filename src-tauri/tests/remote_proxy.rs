@@ -2,8 +2,8 @@
 //! 假 dsh 用 support::spawn_fake_dsh（进程内 axum，0.1.2 鉴权/栅栏/mux 全仿真），
 //! 旧 fake-dsh.cjs 只剩 tests/process.rs 与 remote_manager.rs 在用。
 
-use dshdesktop_lib::dsh_session::DshCreds;
-use dshdesktop_lib::port::free_port;
+use dshdesktop_lib::dsh::dsh_session::DshCreds;
+use dshdesktop_lib::dsh::port::free_port;
 use dshdesktop_lib::remote::proxy::{
     spawn_proxy_with_keepalive, Keepalive, ProxyHandle, COOKIE_NAME,
 };
@@ -937,7 +937,7 @@ async fn upload_route_streams_without_buffering() {
         .unwrap();
     let head = format!(
         "POST {} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nCookie: {}={}\r\nContent-Type: application/octet-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
-        dshdesktop_lib::upstream::UPLOAD_STREAM_PATH,
+        dshdesktop_lib::dsh::upstream::UPLOAD_STREAM_PATH,
         proxy.port,
         COOKIE_NAME,
         token
@@ -1112,7 +1112,7 @@ async fn upload_route_requires_cookie() {
     let url = format!(
         "http://127.0.0.1:{}{}",
         proxy.port,
-        dshdesktop_lib::upstream::UPLOAD_STREAM_PATH
+        dshdesktop_lib::dsh::upstream::UPLOAD_STREAM_PATH
     );
 
     let r = client()
@@ -1134,7 +1134,7 @@ async fn upload_route_requires_cookie() {
     let hits = fake.api_hits.lock().unwrap().clone();
     assert!(
         hits.iter().any(|(path, authed)| {
-            path == dshdesktop_lib::upstream::UPLOAD_STREAM_PATH && !*authed
+            path == dshdesktop_lib::dsh::upstream::UPLOAD_STREAM_PATH && !*authed
         }),
         "假 dsh 应记录到一次未携带 cookie 的上传命中，实际 hits：{:?}",
         hits

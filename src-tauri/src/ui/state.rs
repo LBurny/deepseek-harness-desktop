@@ -74,7 +74,7 @@ pub(crate) fn resolve(platform: &dyn Platform, home: &Path) -> Theme {
 /// dsh 语言：locale.preference ∈ {zh,en}；缺省跟随系统 UI 语言
 /// （dsh 侧缺省是"跟随浏览器"，WebView2 的浏览器语言同样来自系统）。
 pub(crate) fn resolve_locale(platform: &dyn Platform, home: &Path) -> String {
-    match home_str(home, crate::upstream::KEY_LOCALE, crate::upstream::KEY_PREFERENCE).as_deref() {
+    match home_str(home, crate::dsh::upstream::KEY_LOCALE, crate::dsh::upstream::KEY_PREFERENCE).as_deref() {
         Some("en") => "en".to_string(),
         Some("zh") => "zh".to_string(),
         _ => {
@@ -90,7 +90,7 @@ pub(crate) fn resolve_locale(platform: &dyn Platform, home: &Path) -> String {
 /// profile patch 条目的 preference 字段（ui-theme/locale；详见 upstream.rs
 /// 设置存储段注）。读失败/缺条目一律 None → 调用方按缺省（system）兜底。
 fn home_preference(home: &Path) -> Option<String> {
-    home_str(home, crate::upstream::KEY_UI_THEME, crate::upstream::KEY_PREFERENCE)
+    home_str(home, crate::dsh::upstream::KEY_UI_THEME, crate::dsh::upstream::KEY_PREFERENCE)
 }
 
 fn home_str(home: &Path, entry_id: &str, field: &str) -> Option<String> {
@@ -169,7 +169,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let home = dir.path();
         assert_eq!(
-            home_str(home, crate::upstream::KEY_LOCALE, crate::upstream::KEY_PREFERENCE),
+            home_str(home, crate::dsh::upstream::KEY_LOCALE, crate::dsh::upstream::KEY_PREFERENCE),
             None
         );
         write_patch(
@@ -177,7 +177,7 @@ mod tests {
             "- id: locale\n  name: '@deepseek-ai/dsh-client-locale'\n  config:\n    preference: en\n",
         );
         assert_eq!(
-            home_str(home, crate::upstream::KEY_LOCALE, crate::upstream::KEY_PREFERENCE).as_deref(),
+            home_str(home, crate::dsh::upstream::KEY_LOCALE, crate::dsh::upstream::KEY_PREFERENCE).as_deref(),
             Some("en")
         );
     }

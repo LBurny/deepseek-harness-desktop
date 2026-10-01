@@ -1,6 +1,6 @@
 use crate::platform::Platform;
-use crate::port::wait_ready;
-use crate::runtime::RuntimePaths;
+use crate::dsh::port::wait_ready;
+use crate::dsh::runtime::RuntimePaths;
 use std::ffi::OsString;
 use std::path::Path;
 use std::process::Stdio;
@@ -201,8 +201,8 @@ impl DshProcess {
             // 故优先复用上次真正绑上的端口（port.rs 的 dsh-port.txt）。
             let state_dir = self.inner.paths.state_dir().to_path_buf();
             let remembered =
-                crate::port::load_remembered(&state_dir).filter(|p| Some(*p) != avoid);
-            let port = match crate::port::pick_port(remembered, crate::port::REUSE_GRACE).await {
+                crate::dsh::port::load_remembered(&state_dir).filter(|p| Some(*p) != avoid);
+            let port = match crate::dsh::port::pick_port(remembered, crate::dsh::port::REUSE_GRACE).await {
                 Ok(p) => p,
                 Err(e) => {
                     self.set_state(DshState::Failed(format!("no free port: {e}")));
@@ -234,12 +234,12 @@ impl DshProcess {
             // 场景。旗标必须在 bin 路径之前（node 旗标，非 dsh 参数）
             cmd.arg("--max-http-header-size=65536");
             cmd.arg(&self.inner.paths.dsh_bin)
-                .arg(crate::upstream::DSH_WEB_SUBCOMMAND)
-                .arg(crate::upstream::DSH_PORT_FLAG)
+                .arg(crate::dsh::upstream::DSH_WEB_SUBCOMMAND)
+                .arg(crate::dsh::upstream::DSH_PORT_FLAG)
                 .arg(port.to_string())
                 // dsh-web-app 默认把 Web UI 丢给系统默认浏览器；壳内嵌 WebView
                 // 就是浏览器，必须抑制（否则每次启动额外弹浏览器标签页）
-                .arg(crate::upstream::DSH_NO_OPEN_FLAG)
+                .arg(crate::dsh::upstream::DSH_NO_OPEN_FLAG)
                 .env("DSH_HOME", &self.inner.paths.home)
                 // 子进程 PATH 前置两层：内嵌 node 目录（npx/npm/node 绑定运行时
                 // 自带版本——dsh 派生的 MCP 命令常以 `npx` 配置，运行时若不带
@@ -315,7 +315,7 @@ impl DshProcess {
                 self.set_state(DshState::Ready { port });
                 // 记住本次真正绑上的端口：下次启动回同一 Web 源站，客户端偏好
                 // （localStorage）才读得回来。写失败只影响下次回到随机端口。
-                if let Err(e) = crate::port::remember(&state_dir, port) {
+                if let Err(e) = crate::dsh::port::remember(&state_dir, port) {
                     self.log(format!(
                         "[dshdesktop] 端口记忆写入失败（下次启动换随机端口）: {e}"
                     ));
@@ -430,7 +430,7 @@ impl DshProcess {
                 }
                 // 0.1.2 起 stdout 就绪行是 launch token 唯一来源：先捕获再脱敏。
                 // 链接即凭据，原始行不得进入任何日志面（dsh-log/events.log/诊断环）
-                if let Some((_, token)) = crate::dsh_session::parse_ready_line(&line) {
+                if let Some((_, token)) = crate::dsh::dsh_session::parse_ready_line(&line) {
                     let t: Arc<str> = token.into();
                     *this.inner.token.lock().unwrap() = Some(t.clone());
                     if let Some(tx) = &this.inner.token_tx {
@@ -474,8 +474,8 @@ fn format_boot_timing(port: u16, total: Duration, http: Duration, token: Duratio
 /// （node 目录在前——npx/node 必须赢过系统 PATH 上的旧版本），其余项原样保留。
 /// base 为父进程 PATH（None 表示未设置，结果只含前两项）。
 fn dsh_child_path(node_dir: &Path, home: &Path, base: Option<OsString>) -> OsString {
-    let profile = crate::upstream::join_segments(home, crate::upstream::PROFILE_DIR_SEGMENTS);
-    let bin = crate::upstream::join_segments(&profile, crate::upstream::PROFILE_BIN_DIR_SEGMENTS);
+    let profile = crate::dsh::upstream::join_segments(home, crate::dsh::upstream::PROFILE_DIR_SEGMENTS);
+    let bin = crate::dsh::upstream::join_segments(&profile, crate::dsh::upstream::PROFILE_BIN_DIR_SEGMENTS);
     let mut entries = vec![node_dir.to_path_buf(), bin];
     if let Some(ref b) = base {
         entries.extend(std::env::split_paths(b));

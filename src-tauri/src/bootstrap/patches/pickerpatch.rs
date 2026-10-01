@@ -16,7 +16,7 @@
 //! 所以客户端签名漂移/文件缺失时整组停手，只改 host 会产生能把哨兵选成
 //! 工作区的半成品。
 
-use crate::runtime::RuntimePaths;
+use crate::dsh::runtime::RuntimePaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -183,8 +183,8 @@ fn browse_files(paths: &RuntimePaths) -> Option<(PathBuf, PathBuf)> {
     // （子包由 npm 平铺在 @deepseek-ai/ 下，与 dsh 包是兄弟而非嵌套）
     let nm = paths.dsh_bin.parent()?.parent()?.parent()?.parent()?;
     Some((
-        crate::upstream::join_segments(nm, crate::upstream::PICKER_HOST_BROWSE_FILE_SEGMENTS),
-        crate::upstream::join_segments(nm, crate::upstream::PICKER_CLIENT_BROWSE_FILE_SEGMENTS),
+        crate::dsh::upstream::join_segments(nm, crate::dsh::upstream::PICKER_HOST_BROWSE_FILE_SEGMENTS),
+        crate::dsh::upstream::join_segments(nm, crate::dsh::upstream::PICKER_CLIENT_BROWSE_FILE_SEGMENTS),
     ))
 }
 
@@ -363,9 +363,9 @@ mod tests {
     fn apply_to_real_runtime() {
         let rt = std::env::var("DSHDESKTOP_RUNTIME_DIR").expect("set DSHDESKTOP_RUNTIME_DIR");
         let nm = Path::new(&rt).join("dsh").join("node_modules");
-        let host = crate::upstream::join_segments(&nm, crate::upstream::PICKER_HOST_BROWSE_FILE_SEGMENTS);
+        let host = crate::dsh::upstream::join_segments(&nm, crate::dsh::upstream::PICKER_HOST_BROWSE_FILE_SEGMENTS);
         let client =
-            crate::upstream::join_segments(&nm, crate::upstream::PICKER_CLIENT_BROWSE_FILE_SEGMENTS);
+            crate::dsh::upstream::join_segments(&nm, crate::dsh::upstream::PICKER_CLIENT_BROWSE_FILE_SEGMENTS);
         let outcome = patch_files(&host, &client);
         assert!(matches!(
             outcome,

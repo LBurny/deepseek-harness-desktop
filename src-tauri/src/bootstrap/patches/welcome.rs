@@ -24,9 +24,9 @@ const CLIENT_JS_CAP: u64 = 16 * 1024 * 1024;
 fn client_js_path(dsh_bin: &Path) -> Option<PathBuf> {
     // dsh_bin = <nm>/@deepseek-ai/dsh/lib/bin.js → 上溯四级到 node_modules
     let nm = dsh_bin.ancestors().nth(4)?;
-    Some(crate::upstream::join_segments(
+    Some(crate::dsh::upstream::join_segments(
         nm,
-        crate::upstream::WELCOME_NOTICE_CLIENT_SEGMENTS,
+        crate::dsh::upstream::WELCOME_NOTICE_CLIENT_SEGMENTS,
     ))
 }
 
@@ -38,7 +38,7 @@ fn extract_notice_version(dsh_bin: &Path) -> Result<String, String> {
         return Err(format!("client.js 超出 {CLIENT_JS_CAP} 字节上限"));
     }
     let text = fs::read_to_string(&path).map_err(|e| format!("client.js 读取失败: {e}"))?;
-    let needle = crate::upstream::WELCOME_NOTICE_VERSION_NEEDLE;
+    let needle = crate::dsh::upstream::WELCOME_NOTICE_VERSION_NEEDLE;
     let start = text
         .find(needle)
         .ok_or("client.js 未找到 WELCOME_NOTICE_VERSION needle（上游形态变了）")?;
@@ -62,18 +62,18 @@ pub fn seed_welcome_notice(home: &Path, dsh_bin: &Path) -> Result<WelcomeOutcome
     let version = extract_notice_version(dsh_bin)?;
     let stored = crate::patchstore::settings_entry_str(
         home,
-        crate::upstream::WELCOME_NOTICE_NAMESPACE,
-        crate::upstream::WELCOME_NOTICE_ACK_FIELD,
+        crate::dsh::upstream::WELCOME_NOTICE_NAMESPACE,
+        crate::dsh::upstream::WELCOME_NOTICE_ACK_FIELD,
     );
     if stored.as_deref() == Some(version.as_str()) {
         return Ok(WelcomeOutcome::AlreadySeeded);
     }
     crate::patchstore::upsert_settings_entry(
         home,
-        crate::upstream::WELCOME_NOTICE_NAMESPACE,
-        crate::upstream::SETTINGS_GENERAL_PKG,
+        crate::dsh::upstream::WELCOME_NOTICE_NAMESPACE,
+        crate::dsh::upstream::SETTINGS_GENERAL_PKG,
         &[(
-            crate::upstream::WELCOME_NOTICE_ACK_FIELD,
+            crate::dsh::upstream::WELCOME_NOTICE_ACK_FIELD,
             serde_yaml::Value::String(version),
         )],
     )?;

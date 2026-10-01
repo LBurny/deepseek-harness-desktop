@@ -39,15 +39,15 @@ pub enum SignatureState {
 }
 
 pub fn preset_signature_state(preset_dir: &Path) -> SignatureState {
-    let composition = preset_dir.join(crate::upstream::PRESET_COMPOSITION_FILE);
+    let composition = preset_dir.join(crate::dsh::upstream::PRESET_COMPOSITION_FILE);
     let Ok(content) = fs::read_to_string(&composition) else {
         return SignatureState::Missing;
     };
     if content.contains(MARKER) {
         return SignatureState::AlreadyPatched;
     }
-    if !content.contains(crate::upstream::PRESET_BROKEN_NEEDLE)
-        || content.contains(crate::upstream::PRESET_PLATFORM_NEEDLE)
+    if !content.contains(crate::dsh::upstream::PRESET_BROKEN_NEEDLE)
+        || content.contains(crate::dsh::upstream::PRESET_PLATFORM_NEEDLE)
     {
         return SignatureState::UpstreamHandled;
     }
@@ -71,7 +71,7 @@ mod tests {
     fn signature_state_classification() {
         // 组合文件名取 upstream 常量（0.1.2 前是 agent.cordis.yml，0.2.0 起是
         // minimal.patch.yml——测试跟随常量，落点再搬家不用改这里）。
-        let composition = crate::upstream::PRESET_COMPOSITION_FILE;
+        let composition = crate::dsh::upstream::PRESET_COMPOSITION_FILE;
         // rc.6 形态：破损签名 + 无平台分支 → NeedsPatch
         let dir = tempfile::tempdir().unwrap();
         fs::write(dir.path().join(composition), UPSTREAM_COMPOSITION_RC6).unwrap();

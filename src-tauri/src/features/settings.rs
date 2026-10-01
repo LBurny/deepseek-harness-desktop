@@ -319,7 +319,7 @@ pub fn set_shell_settings(
 ) -> Result<(), String> {
     state.set(next)?;
     if let Some(w) = app.get_webview_window("main") {
-        let _ = w.eval(crate::zoom::hook_js(&state.get()));
+        let _ = w.eval(crate::ui::zoom::hook_js(&state.get()));
     }
     Ok(())
 }

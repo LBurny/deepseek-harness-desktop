@@ -47,9 +47,9 @@ pub struct McpServerRow {
 fn mcp_positions(entries: &[Value]) -> Vec<(usize, usize)> {
     let mut out = Vec::new();
     for (oi, op) in entries.iter().enumerate() {
-        if let Some(list) = op.get(crate::upstream::CORDIS_OP_INSERT).and_then(Value::as_sequence) {
+        if let Some(list) = op.get(crate::dsh::upstream::CORDIS_OP_INSERT).and_then(Value::as_sequence) {
             for (ii, e) in list.iter().enumerate() {
-                if e.get("name").and_then(Value::as_str) == Some(crate::upstream::MCP_PLUGIN_NAME) {
+                if e.get("name").and_then(Value::as_str) == Some(crate::dsh::upstream::MCP_PLUGIN_NAME) {
                     out.push((oi, ii));
                 }
             }
@@ -59,7 +59,7 @@ fn mcp_positions(entries: &[Value]) -> Vec<(usize, usize)> {
 }
 
 fn entry_at<'a>(entries: &'a [Value], pos: (usize, usize)) -> &'a Value {
-    &entries[pos.0][crate::upstream::CORDIS_OP_INSERT][pos.1]
+    &entries[pos.0][crate::dsh::upstream::CORDIS_OP_INSERT][pos.1]
 }
 
 fn to_row(e: &Value) -> McpServerRow {
@@ -106,7 +106,7 @@ fn to_row(e: &Value) -> McpServerRow {
         transport,
         summary,
         enabled: !matches!(
-            e.get(crate::upstream::CORDIS_ENTRY_DISABLED),
+            e.get(crate::dsh::upstream::CORDIS_ENTRY_DISABLED),
             Some(Value::Bool(true))
         ),
         config,
@@ -149,16 +149,16 @@ fn set_server_enabled(home: &Path, server_name: &str, enabled: bool) -> Result<(
             format!("MCP server not found: {server_name}"),
         )
     })?;
-    let e = entries[pos.0][crate::upstream::CORDIS_OP_INSERT]
+    let e = entries[pos.0][crate::dsh::upstream::CORDIS_OP_INSERT]
         .as_sequence_mut()
         .and_then(|s| s.get_mut(pos.1))
         .unwrap();
     let map = e.as_mapping_mut().unwrap();
     if enabled {
-        map.remove(Value::String(crate::upstream::CORDIS_ENTRY_DISABLED.into()));
+        map.remove(Value::String(crate::dsh::upstream::CORDIS_ENTRY_DISABLED.into()));
     } else {
         map.insert(
-            Value::String(crate::upstream::CORDIS_ENTRY_DISABLED.into()),
+            Value::String(crate::dsh::upstream::CORDIS_ENTRY_DISABLED.into()),
             Value::Bool(true),
         );
     }
@@ -174,11 +174,11 @@ fn delete_server(home: &Path, server_name: &str) -> Result<(), String> {
             format!("MCP server not found: {server_name}"),
         )
     })?;
-    entries[oi][crate::upstream::CORDIS_OP_INSERT]
+    entries[oi][crate::dsh::upstream::CORDIS_OP_INSERT]
         .as_sequence_mut()
         .unwrap()
         .remove(ii);
-    if entries[oi][crate::upstream::CORDIS_OP_INSERT]
+    if entries[oi][crate::dsh::upstream::CORDIS_OP_INSERT]
         .as_sequence()
         .is_some_and(|s| s.is_empty())
     {
@@ -276,7 +276,7 @@ fn upsert_server(home: &Path, original: Option<&str>, cfg: &McpServerConfig) -> 
 
     if let Some(p) = edit_pos {
         // 原地改：保留旧 disabled 标志；重命名时更新 id
-        let e = entries[p.0][crate::upstream::CORDIS_OP_INSERT]
+        let e = entries[p.0][crate::dsh::upstream::CORDIS_OP_INSERT]
             .as_sequence_mut()
             .and_then(|s| s.get_mut(p.1))
             .unwrap();
@@ -297,12 +297,12 @@ fn upsert_server(home: &Path, original: Option<&str>, cfg: &McpServerConfig) -> 
     );
     e.insert(
         Value::String("name".into()),
-        Value::String(crate::upstream::MCP_PLUGIN_NAME.into()),
+        Value::String(crate::dsh::upstream::MCP_PLUGIN_NAME.into()),
     );
     e.insert(Value::String("config".into()), Value::Mapping(map));
     let mut op = serde_yaml::Mapping::new();
     op.insert(
-        Value::String(crate::upstream::CORDIS_OP_INSERT.into()),
+        Value::String(crate::dsh::upstream::CORDIS_OP_INSERT.into()),
         Value::Sequence(vec![Value::Mapping(e)]),
     );
     entries.push(Value::Mapping(op));
@@ -339,7 +339,7 @@ fn seed_auto_import(user_dsh_home: &Path, home: &Path) -> Result<(), String> {
     let mut target = crate::patchstore::read_patch(&target_path)?;
     let mut changed = false;
     let layers = [
-        crate::upstream::join_segments(user_dsh_home, crate::upstream::MCP_PATCH_SEGMENTS),
+        crate::dsh::upstream::join_segments(user_dsh_home, crate::dsh::upstream::MCP_PATCH_SEGMENTS),
         user_dsh_home.join("cordis.patch.yml"),
     ];
     for path in layers {
@@ -349,7 +349,7 @@ fn seed_auto_import(user_dsh_home: &Path, home: &Path) -> Result<(), String> {
         };
         for pos in mcp_positions(&entries) {
             let e = entry_at(&entries, pos);
-            if e.get(crate::upstream::CORDIS_ENTRY_DISABLED).is_some() {
+            if e.get(crate::dsh::upstream::CORDIS_ENTRY_DISABLED).is_some() {
                 continue; // 源里禁用（含 !!js 表达式）的不同步，也不记 marker
             }
             let Some(name) = e["config"]["serverName"].as_str().map(str::to_string) else {
@@ -361,7 +361,7 @@ fn seed_auto_import(user_dsh_home: &Path, home: &Path) -> Result<(), String> {
             if find_server(&target, &name).is_none() {
                 let mut op = serde_yaml::Mapping::new();
                 op.insert(
-                    Value::String(crate::upstream::CORDIS_OP_INSERT.into()),
+                    Value::String(crate::dsh::upstream::CORDIS_OP_INSERT.into()),
                     Value::Sequence(vec![e.clone()]),
                 );
                 target.push(Value::Mapping(op));

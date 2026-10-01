@@ -15,14 +15,14 @@ pub enum PickerOutcome {
 }
 
 fn patch_path(home: &Path) -> std::path::PathBuf {
-    crate::upstream::join_segments(home, crate::upstream::MCP_PATCH_SEGMENTS)
+    crate::dsh::upstream::join_segments(home, crate::dsh::upstream::MCP_PATCH_SEGMENTS)
 }
 
 /// 任意 insert 列表里 row id 命中的位置：(op 索引, 列表内索引)
 fn inserted_pos(entries: &[Value], row_id: &str) -> Option<(usize, usize)> {
     for (oi, op) in entries.iter().enumerate() {
         if let Some(list) = op
-            .get(crate::upstream::CORDIS_OP_INSERT)
+            .get(crate::dsh::upstream::CORDIS_OP_INSERT)
             .and_then(Value::as_sequence)
         {
             for (ii, e) in list.iter().enumerate() {
@@ -43,14 +43,14 @@ pub fn ensure_browse_picker(home: &Path) -> Result<PickerOutcome, String> {
     let mut changed = false;
 
     // 1) auto 行禁用：无 insert 键的 id 定向补丁（形态与上游 overlay 一致）
-    let auto = crate::upstream::PICKER_AUTO_ROW_ID;
+    let auto = crate::dsh::upstream::PICKER_AUTO_ROW_ID;
     match entries.iter().position(|op| {
-        op.get(crate::upstream::CORDIS_OP_INSERT).is_none()
+        op.get(crate::dsh::upstream::CORDIS_OP_INSERT).is_none()
             && op.get("id").and_then(Value::as_str) == Some(auto)
     }) {
         Some(i) => {
             let map = entries[i].as_mapping_mut().unwrap();
-            let key = Value::String(crate::upstream::CORDIS_ENTRY_DISABLED.into());
+            let key = Value::String(crate::dsh::upstream::CORDIS_ENTRY_DISABLED.into());
             if map.get(&key) != Some(&Value::Bool(true)) {
                 map.insert(key, Value::Bool(true));
                 changed = true;
@@ -60,7 +60,7 @@ pub fn ensure_browse_picker(home: &Path) -> Result<PickerOutcome, String> {
             let mut op = serde_yaml::Mapping::new();
             op.insert(Value::String("id".into()), Value::String(auto.into()));
             op.insert(
-                Value::String(crate::upstream::CORDIS_ENTRY_DISABLED.into()),
+                Value::String(crate::dsh::upstream::CORDIS_ENTRY_DISABLED.into()),
                 Value::Bool(true),
             );
             entries.push(Value::Mapping(op));
@@ -71,23 +71,23 @@ pub fn ensure_browse_picker(home: &Path) -> Result<PickerOutcome, String> {
     // 2) browse 对：缺谁补谁；已存在但带 disabled 的摘掉（用户误关即修复）
     for (row_id, pkg) in [
         (
-            crate::upstream::PICKER_BROWSE_HOST_ROW_ID,
-            crate::upstream::PICKER_BROWSE_HOST_PKG,
+            crate::dsh::upstream::PICKER_BROWSE_HOST_ROW_ID,
+            crate::dsh::upstream::PICKER_BROWSE_HOST_PKG,
         ),
         (
-            crate::upstream::PICKER_BROWSE_SURFACE_ROW_ID,
-            crate::upstream::PICKER_BROWSE_SURFACE_PKG,
+            crate::dsh::upstream::PICKER_BROWSE_SURFACE_ROW_ID,
+            crate::dsh::upstream::PICKER_BROWSE_SURFACE_PKG,
         ),
     ] {
         match inserted_pos(&entries, row_id) {
             Some((oi, ii)) => {
-                let e = entries[oi][crate::upstream::CORDIS_OP_INSERT]
+                let e = entries[oi][crate::dsh::upstream::CORDIS_OP_INSERT]
                     .as_sequence_mut()
                     .and_then(|s| s.get_mut(ii))
                     .unwrap();
                 let map = e.as_mapping_mut().unwrap();
                 if map
-                    .remove(Value::String(crate::upstream::CORDIS_ENTRY_DISABLED.into()))
+                    .remove(Value::String(crate::dsh::upstream::CORDIS_ENTRY_DISABLED.into()))
                     .is_some()
                 {
                     changed = true;
@@ -99,7 +99,7 @@ pub fn ensure_browse_picker(home: &Path) -> Result<PickerOutcome, String> {
                 e.insert(Value::String("name".into()), Value::String(pkg.into()));
                 let mut op = serde_yaml::Mapping::new();
                 op.insert(
-                    Value::String(crate::upstream::CORDIS_OP_INSERT.into()),
+                    Value::String(crate::dsh::upstream::CORDIS_OP_INSERT.into()),
                     Value::Sequence(vec![Value::Mapping(e)]),
                 );
                 entries.push(Value::Mapping(op));
@@ -134,29 +134,29 @@ mod tests {
         assert_eq!(ensure_browse_picker(t.path()).unwrap(), PickerOutcome::Pinned);
         let entries = patch_entries(t.path());
         // op0：禁用 auto 行（无 insert 键的 id 定向补丁，形态同上游 overlay）
-        let auto = crate::upstream::PICKER_AUTO_ROW_ID;
+        let auto = crate::dsh::upstream::PICKER_AUTO_ROW_ID;
         assert!(entries.iter().any(|op| {
-            op.get(crate::upstream::CORDIS_OP_INSERT).is_none()
+            op.get(crate::dsh::upstream::CORDIS_OP_INSERT).is_none()
                 && op.get("id").and_then(Value::as_str) == Some(auto)
-                && op.get(crate::upstream::CORDIS_ENTRY_DISABLED) == Some(&Value::Bool(true))
+                && op.get(crate::dsh::upstream::CORDIS_ENTRY_DISABLED) == Some(&Value::Bool(true))
         }));
         // browse 对都插进来了
         for row_id in [
-            crate::upstream::PICKER_BROWSE_HOST_ROW_ID,
-            crate::upstream::PICKER_BROWSE_SURFACE_ROW_ID,
+            crate::dsh::upstream::PICKER_BROWSE_HOST_ROW_ID,
+            crate::dsh::upstream::PICKER_BROWSE_SURFACE_ROW_ID,
         ] {
             assert!(inserted_pos(&entries, row_id).is_some(), "{row_id} 未插入");
         }
-        let (oi, ii) = inserted_pos(&entries, crate::upstream::PICKER_BROWSE_HOST_ROW_ID).unwrap();
+        let (oi, ii) = inserted_pos(&entries, crate::dsh::upstream::PICKER_BROWSE_HOST_ROW_ID).unwrap();
         assert_eq!(
-            entries[oi][crate::upstream::CORDIS_OP_INSERT][ii]["name"],
-            Value::String(crate::upstream::PICKER_BROWSE_HOST_PKG.into())
+            entries[oi][crate::dsh::upstream::CORDIS_OP_INSERT][ii]["name"],
+            Value::String(crate::dsh::upstream::PICKER_BROWSE_HOST_PKG.into())
         );
         let (oi, ii) =
-            inserted_pos(&entries, crate::upstream::PICKER_BROWSE_SURFACE_ROW_ID).unwrap();
+            inserted_pos(&entries, crate::dsh::upstream::PICKER_BROWSE_SURFACE_ROW_ID).unwrap();
         assert_eq!(
-            entries[oi][crate::upstream::CORDIS_OP_INSERT][ii]["name"],
-            Value::String(crate::upstream::PICKER_BROWSE_SURFACE_PKG.into())
+            entries[oi][crate::dsh::upstream::CORDIS_OP_INSERT][ii]["name"],
+            Value::String(crate::dsh::upstream::PICKER_BROWSE_SURFACE_PKG.into())
         );
     }
 
@@ -186,7 +186,7 @@ mod tests {
         let text = patch_text(t.path());
         assert!(text.contains("mcp-pw") && text.contains("serverName: pw"));
         // mcp.rs 视角不受影响：仍能列出 pw
-        assert_eq!(crate::mcp::list_servers_in(t.path()), vec!["pw"]);
+        assert_eq!(crate::features::mcp::list_servers_in(t.path()), vec!["pw"]);
     }
 
     #[test]
@@ -203,18 +203,18 @@ mod tests {
         assert_eq!(ensure_browse_picker(t.path()).unwrap(), PickerOutcome::Pinned);
         let entries = patch_entries(t.path());
         // host 行的 disabled 被摘掉
-        let (oi, ii) = inserted_pos(&entries, crate::upstream::PICKER_BROWSE_HOST_ROW_ID).unwrap();
-        assert!(entries[oi][crate::upstream::CORDIS_OP_INSERT][ii]
-            .get(crate::upstream::CORDIS_ENTRY_DISABLED)
+        let (oi, ii) = inserted_pos(&entries, crate::dsh::upstream::PICKER_BROWSE_HOST_ROW_ID).unwrap();
+        assert!(entries[oi][crate::dsh::upstream::CORDIS_OP_INSERT][ii]
+            .get(crate::dsh::upstream::CORDIS_ENTRY_DISABLED)
             .is_none());
         // surface 行补齐
-        assert!(inserted_pos(&entries, crate::upstream::PICKER_BROWSE_SURFACE_ROW_ID).is_some());
+        assert!(inserted_pos(&entries, crate::dsh::upstream::PICKER_BROWSE_SURFACE_ROW_ID).is_some());
         // auto 禁用补上
         assert!(entries.iter().any(|op| {
-            op.get(crate::upstream::CORDIS_OP_INSERT).is_none()
+            op.get(crate::dsh::upstream::CORDIS_OP_INSERT).is_none()
                 && op.get("id").and_then(Value::as_str)
-                    == Some(crate::upstream::PICKER_AUTO_ROW_ID)
-                && op.get(crate::upstream::CORDIS_ENTRY_DISABLED) == Some(&Value::Bool(true))
+                    == Some(crate::dsh::upstream::PICKER_AUTO_ROW_ID)
+                && op.get(crate::dsh::upstream::CORDIS_ENTRY_DISABLED) == Some(&Value::Bool(true))
         }));
     }
 
@@ -235,6 +235,6 @@ mod tests {
         fs::create_dir_all(p.parent().unwrap()).unwrap();
         fs::write(&p, "\u{feff}[]\n").unwrap();
         ensure_browse_picker(t.path()).unwrap();
-        assert!(patch_text(t.path()).contains(crate::upstream::PICKER_BROWSE_HOST_PKG));
+        assert!(patch_text(t.path()).contains(crate::dsh::upstream::PICKER_BROWSE_HOST_PKG));
     }
 }

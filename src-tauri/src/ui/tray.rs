@@ -1,4 +1,4 @@
-use crate::diagnostics::SharedState;
+use crate::features::diagnostics::SharedState;
 use crate::i18n;
 use crate::remote::RemoteManager;
 use std::sync::Mutex;

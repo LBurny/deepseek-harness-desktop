@@ -288,7 +288,7 @@ pub fn install_update(app: AppHandle, path: String) -> Result<(), String> {
                 format!("Failed to launch the installer: {e}"),
             )
         })?;
-    crate::tray::quit_app(&app);
+    crate::ui::tray::quit_app(&app);
     Ok(())
 }
 

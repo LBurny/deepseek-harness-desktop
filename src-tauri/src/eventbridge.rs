@@ -6,11 +6,11 @@ use std::time::Duration;
 use tauri::{Emitter, Manager, Url};
 use tokio::sync::watch;
 
-use crate::dsh_session::DshCreds;
+use crate::dsh::dsh_session::DshCreds;
 use crate::i18n;
-use crate::pagebridge;
-use crate::process::{DshState, ProcessEvent};
-use crate::progress::{self, ProgressPayload};
+use crate::ui::pagebridge;
+use crate::dsh::process::{DshState, ProcessEvent};
+use crate::bootstrap::progress::{self, ProgressPayload};
 
 /// 删 WebView2 cookie 罐里所有 dsh-auth-* cookie，返回删除个数。dsh 每个进程
 /// Set-Cookie 一个新名（dsh-auth-<hash>，30 天 Max-Age），cookie 不分端口、罐子
@@ -58,7 +58,7 @@ pub fn bridge_event(
             // npm 冷装（npx 解析未缓存包）会把 token 等待拉长到分钟级：splash 从
             // "正在启动 dsh 服务…"换成下载文案，用户不再以为卡死。与 process.rs
             // wait_token 的 install 长预算共用同一判定行。
-            if crate::process::is_mcp_install_line(&line) {
+            if crate::dsh::process::is_mcp_install_line(&line) {
                 let _ = handle.emit(
                     "dsh-progress",
                     ProgressPayload::new(

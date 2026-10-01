@@ -53,7 +53,7 @@ fn sync_ui_snapshot(app: &AppHandle, snap: UiSnapshot, force: bool) {
     crate::i18n::set_locale(&snap.locale);
     let _ = app.emit("shell-ui-state", &snap);
     if force || old.locale != snap.locale {
-        crate::tray::apply_locale(app, &snap.locale);
+        crate::ui::tray::apply_locale(app, &snap.locale);
     }
 }
 

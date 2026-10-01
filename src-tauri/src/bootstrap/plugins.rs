@@ -31,10 +31,10 @@ impl PluginsHome {
         Self { node_exe, dsh_bin, home, pnpm_dir, busy: Mutex::new(()) }
     }
     pub fn profile_dir(&self) -> PathBuf {
-        crate::upstream::join_segments(&self.home, crate::upstream::PROFILE_DIR_SEGMENTS)
+        crate::dsh::upstream::join_segments(&self.home, crate::dsh::upstream::PROFILE_DIR_SEGMENTS)
     }
     pub fn manifest_path(&self) -> PathBuf {
-        self.profile_dir().join(crate::upstream::PROFILE_MANIFEST_FILE)
+        self.profile_dir().join(crate::dsh::upstream::PROFILE_MANIFEST_FILE)
     }
     /// 内置 pnpm 入口脚本（fetch-runtime 产出：<pnpm_dir>/pnpm/bin/pnpm.cjs，
     /// 依赖同包 dist/，不能摊平到根目录）。
@@ -42,7 +42,7 @@ impl PluginsHome {
         self.pnpm_dir
             .join("pnpm")
             .join("bin")
-            .join(crate::upstream::PNPM_JS_FILE)
+            .join(crate::dsh::upstream::PNPM_JS_FILE)
     }
 }
 
@@ -81,7 +81,7 @@ pub fn run_plugin_op(home: &PluginsHome, args: &[&str]) -> Result<PluginOpResult
         return Err(format!("运行时缺失：{}", home.dsh_bin.display()));
     }
     let pnpm_js = home.pnpm_js();
-    let pnpm_cmd = home.pnpm_dir.join(crate::upstream::PNPM_CMD_FILE);
+    let pnpm_cmd = home.pnpm_dir.join(crate::dsh::upstream::PNPM_CMD_FILE);
     if !pnpm_js.is_file() || !pnpm_cmd.is_file() {
         return Err("内置 pnpm 缺失（pnpm.cmd / pnpm\\bin\\pnpm.cjs）——请重装 DSHDesktop 或重跑 fetch-runtime.ps1".into());
     }
@@ -90,9 +90,9 @@ pub fn run_plugin_op(home: &PluginsHome, args: &[&str]) -> Result<PluginOpResult
     full_path.push(std::env::var_os("PATH").unwrap_or_default());
     let mut cmd = tokio::process::Command::new(&home.node_exe);
     cmd.arg(&home.dsh_bin)
-        .arg(crate::upstream::DSH_PLUGIN_SUBCOMMAND)
-        .arg(crate::upstream::DSH_PLUGIN_PROFILE_FLAG)
-        .arg(crate::upstream::DSH_WEB_PROFILE_NAME)
+        .arg(crate::dsh::upstream::DSH_PLUGIN_SUBCOMMAND)
+        .arg(crate::dsh::upstream::DSH_PLUGIN_PROFILE_FLAG)
+        .arg(crate::dsh::upstream::DSH_WEB_PROFILE_NAME)
         .args(args)
         .env("DSH_HOME", &home.home)
         .env("PATH", &full_path);

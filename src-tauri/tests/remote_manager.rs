@@ -1,5 +1,5 @@
 use dshdesktop_lib::platform::Platform;
-use dshdesktop_lib::port::free_port;
+use dshdesktop_lib::dsh::port::free_port;
 use dshdesktop_lib::remote::{compose_link, RemoteEvent, RemoteManager, RemoteStatus};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -126,7 +126,7 @@ fn make_manager_with_platform(
     // 0.1.2 起 RemoteManager 拿的是 DshCreds（端口+token）：fixture dsh 无鉴权门，
     // token 随便给（cookie 交换失败只影响注入，不影响转发）
     let creds = dsh_port.map(|port| {
-        Arc::new(dshdesktop_lib::dsh_session::DshCreds {
+        Arc::new(dshdesktop_lib::dsh::dsh_session::DshCreds {
             port,
             token: support::FIXTURE_TOKEN.into(),
         })

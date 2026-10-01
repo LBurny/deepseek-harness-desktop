@@ -2,12 +2,12 @@
 //! 旧版（fake-dsh.cjs + 双 WsSource）随 0.1.1 传输退场；fake-dsh.cjs 仅剩
 //! tests/process.rs（进程监督）还在用。
 
-use dshdesktop_lib::dsh_session::DshCreds;
+use dshdesktop_lib::dsh::dsh_session::DshCreds;
 use dshdesktop_lib::notify::mux::{MuxEvents, MuxFrame, MuxSource};
 use dshdesktop_lib::notify::{
     handle_event_frame, handle_follow_frame, Notification, NotifyKind, NotifySink, SessionBook,
 };
-use dshdesktop_lib::port::free_port;
+use dshdesktop_lib::dsh::port::free_port;
 use serde_json::{json, Value};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};

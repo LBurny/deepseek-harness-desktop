@@ -122,7 +122,7 @@ fn project_page_anchors_and_constants() {
         );
     }
     assert!(
-        html.contains(dshdesktop_lib::upstream::LOCALSTORAGE_CURRENT_SESSION_KEY),
+        html.contains(dshdesktop_lib::dsh::upstream::LOCALSTORAGE_CURRENT_SESSION_KEY),
         "project.html 须用 upstream::LOCALSTORAGE_CURRENT_SESSION_KEY 取当前会话"
     );
     // 渲染器锚点：md 渲染排版 / md 相对路径图片拼 file 端点
@@ -147,7 +147,7 @@ fn session_log_pill_hidden_rule() {
     // 选择器锚 = "_" + 上游 CSS Modules 本地名（upstream.rs 常量，契约套件守门）
     let anchor = format!(
         "[class*=\"_{}\"]",
-        dshdesktop_lib::upstream::SESSION_HEADER_MORE_BUTTON_NEEDLE
+        dshdesktop_lib::dsh::upstream::SESSION_HEADER_MORE_BUTTON_NEEDLE
     );
     // 必须双写凑 0-2-0 优先级：上游样式由 JS 运行时注入、文档序在我们之后，
     // 单写平级必输（改断的表现是规则在页面里但按钮照显示）
@@ -181,11 +181,11 @@ fn model_trigger_iconified_rule() {
             .join("mobile.css"),
     )
     .unwrap();
-    let slot = format!("[data-slot=\"{}\"]", dshdesktop_lib::upstream::MODEL_SLOT_HOOK);
+    let slot = format!("[data-slot=\"{}\"]", dshdesktop_lib::dsh::upstream::MODEL_SLOT_HOOK);
     let media = css.find("@media (max-width: 700px)").unwrap();
     for needle in [
-        dshdesktop_lib::upstream::MODEL_TRIGGER_LABEL_NEEDLE,
-        dshdesktop_lib::upstream::MODEL_TRIGGER_EFFORT_NEEDLE,
+        dshdesktop_lib::dsh::upstream::MODEL_TRIGGER_LABEL_NEEDLE,
+        dshdesktop_lib::dsh::upstream::MODEL_TRIGGER_EFFORT_NEEDLE,
     ] {
         let sel = format!("{slot} [class*=\"_{needle}\"]");
         let pos = css
@@ -204,7 +204,7 @@ fn model_trigger_iconified_rule() {
     // 不点亮就一个图标都没有）
     let icon_sel = format!(
         "{slot} [class*=\"_{}\"]",
-        dshdesktop_lib::upstream::MODEL_TRIGGER_ICON_NEEDLE
+        dshdesktop_lib::dsh::upstream::MODEL_TRIGGER_ICON_NEEDLE
     );
     let icon_pos = css
         .find(&icon_sel)
@@ -249,7 +249,7 @@ fn composer_toolbar_even_spacing_rule() {
 
     let chev = format!(
         "{row_anchor} [class*=\"_{}\"]",
-        dshdesktop_lib::upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE
+        dshdesktop_lib::dsh::upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE
     );
     let pos = css
         .find(&chev)
@@ -293,7 +293,7 @@ fn composer_stats_row_anchors() {
     let js = std::fs::read_to_string(dir.join("mobile.js")).unwrap();
     let css = std::fs::read_to_string(dir.join("mobile.css")).unwrap();
     let media = css.find("@media (max-width: 700px)").unwrap();
-    let hook = dshdesktop_lib::upstream::COMPOSER_STATS_ROW_HOOK;
+    let hook = dshdesktop_lib::dsh::upstream::COMPOSER_STATS_ROW_HOOK;
 
     // mobile.js：找行走新钩子（找不到时回空态文案）
     assert!(

@@ -5,8 +5,8 @@
 //! 运行时定位：DSHDESKTOP_RUNTIME_DIR → <repo>/src-tauri/runtime/windows-x64。
 //! 都没有则整套件 skip。CI 的 fetch-runtime 在 cargo test 之前，故 CI 一定真跑。
 
-use dshdesktop_lib::presets::{self, SignatureState};
-use dshdesktop_lib::upstream;
+use dshdesktop_lib::dsh::presets::{self, SignatureState};
+use dshdesktop_lib::dsh::upstream;
 use std::fmt::Display;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -114,7 +114,7 @@ impl Drop for Dsh {
 
 async fn spawn_dsh(rt: &Path) -> Result<Dsh, String> {
     let home = tempfile::tempdir().map_err(|e| e.to_string())?;
-    let port = dshdesktop_lib::port::free_port().map_err(|e| e.to_string())?;
+    let port = dshdesktop_lib::dsh::port::free_port().map_err(|e| e.to_string())?;
     let mut child = Command::new(rt.join("node.exe"))
         .arg(upstream::dsh_bin(rt))
         .arg(upstream::DSH_WEB_SUBCOMMAND)
@@ -161,7 +161,7 @@ async fn spawn_dsh(rt: &Path) -> Result<Dsh, String> {
     while Instant::now() < deadline {
         while let Ok(l) = line_rx.try_recv() {
             if token.is_none() {
-                if let Some((p, t)) = dshdesktop_lib::dsh_session::parse_ready_line(&l) {
+                if let Some((p, t)) = dshdesktop_lib::dsh::dsh_session::parse_ready_line(&l) {
                     if p != port {
                         eprintln!("[note] 就绪行端口 {p} 与已选端口 {port} 不符，沿用已选");
                     }
@@ -174,7 +174,7 @@ async fn spawn_dsh(rt: &Path) -> Result<Dsh, String> {
             }
         }
         if let Some(t) = &token {
-            if let Ok(cookie) = dshdesktop_lib::dsh_session::exchange_cookie(port, t).await {
+            if let Ok(cookie) = dshdesktop_lib::dsh::dsh_session::exchange_cookie(port, t).await {
                 let authed = client
                     .get(format!("http://127.0.0.1:{port}/"))
                     .header(reqwest::header::COOKIE, &cookie)

@@ -1,7 +1,7 @@
 //! 远程"项目"标签的后端：会话→工作区解析、目录列举、文件读取（一律只读）。
 //! 路由挂在 proxy.rs（/__dsh-desktop/*），token 门岗中间件先行。
 //! 两个上游事实（localStorage 键名、workspace.json 路径与 schema）收口
-//! crate::upstream，契约套件守门。
+//! crate::dsh::upstream，契约套件守门。
 
 use axum::extract::{Query, State};
 use axum::http::{header, StatusCode};
@@ -54,7 +54,7 @@ struct Ws {
 /// 每调用现读现解析 workspace.json（文件极小，工作区增删即时生效）；
 /// 缺文件/坏 JSON/sid 未命中归一 None（与"无工作区"同语义，客户端空态）。
 pub(crate) fn resolve_workspace(dsh_home: &Path, sid: &str) -> Option<WorkspaceRef> {
-    let p = crate::upstream::join_segments(dsh_home, crate::upstream::WORKSPACE_STORE_SEGMENTS);
+    let p = crate::dsh::upstream::join_segments(dsh_home, crate::dsh::upstream::WORKSPACE_STORE_SEGMENTS);
     let text = std::fs::read_to_string(p).ok()?;
     let store: Store = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
     let workspaces = store.tables?.workspaces?;
@@ -105,7 +105,7 @@ fn contained(root: &Path, rel: &str) -> Result<PathBuf, FsError> {
 /// 等值或带分隔符边界的前缀（"0107-evil" 不能命中 "0107"）。
 fn is_within(root_c: &Path, cand_c: &Path) -> bool {
     let norm = |p: &Path| {
-        crate::runtime::strip_verbatim(p)
+        crate::dsh::runtime::strip_verbatim(p)
             .to_string_lossy()
             .to_lowercase()
     };

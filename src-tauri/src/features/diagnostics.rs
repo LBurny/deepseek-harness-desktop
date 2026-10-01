@@ -1,9 +1,10 @@
-use crate::process::DshProcess;
-use crate::runtime::RuntimePaths;
+use crate::dsh::process::DshProcess;
+use crate::dsh::runtime::RuntimePaths;
 use serde::Serialize;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use tauri::Url;
+use tauri::{AppHandle, State, Url};
+use tauri_plugin_autostart::ManagerExt;
 
 /// 诊断面板回填的行数
 pub(crate) const LOG_TAIL_LINES: usize = 500;
@@ -218,4 +219,106 @@ mod tests {
         let s = std::fs::read_to_string(&path).unwrap();
         assert!(s.ends_with("] fresh line\n"), "旧内容应被清空、只留新行（带统一时间戳），实际：{s}");
     }
+
+    /// 上游行为锚定：auto-launch 0.5 的 disable() 对不存在的 Run 值返回
+    /// os error 2（"系统找不到指定的文件"）——set_autostart 因此必须先比对
+    /// 目标态（已达成即 Ok），不能无条件透传 disable()。若上游改为幂等，
+    /// 此测试失败即提醒壳侧防御可以简化。
+    #[cfg(windows)]
+    #[test]
+    fn autolaunch_disable_on_missing_value_is_file_not_found() {
+        let al = auto_launch::AutoLaunch::new(
+            "dshdesktop-never-enabled-test",
+            "C:\\nonexistent\\dshdesktop.exe",
+            &[] as &[&str],
+        );
+        let err = al.disable().unwrap_err();
+        let auto_launch::Error::Io(e) = err else {
+            panic!("期望 Io 错误，实际: {err:?}")
+        };
+        assert_eq!(e.raw_os_error(), Some(2));
+    }
+}
+
+#[tauri::command]
+pub fn get_bootstrap_error(state: State<BootstrapInfo>) -> Option<String> {
+    state.error()
+}
+
+#[tauri::command]
+pub fn is_first_launch(state: State<SharedState>) -> bool {
+    state.first_launch
+}
+
+#[tauri::command]
+pub fn get_status(state: State<SharedState>) -> StatusDto {
+    StatusDto {
+        state: format!("{:?}", state.process.state()),
+        port: state.process.port(),
+        pid: state.process.pid(),
+        version: state.version.clone(),
+    }
+}
+
+#[tauri::command]
+pub async fn restart_dsh(state: State<'_, SharedState>) -> Result<(), String> {
+    state.process.restart().await;
+    Ok(())
+}
+
+/// events.log 固定落位：DSH home 上级（%LOCALAPPDATA%\DSHDesktop\events.log）
+fn events_log_path(state: &SharedState) -> std::path::PathBuf {
+    state.runtime.state_dir().join("events.log")
+}
+
+#[tauri::command]
+pub fn get_recent_logs(state: State<SharedState>) -> Vec<String> {
+    // events.log = 壳侧诊断 + dsh 进程输出的统一持久层（1MB 截断），
+    // 读尾部即得跨会话的近期历史；面板开着期间的增量走 dsh-log 实时事件
+    crate::features::diagnostics::read_log_tail(
+        &events_log_path(&state),
+        crate::features::diagnostics::LOG_TAIL_LINES,
+    )
+}
+
+/// 诊断面板"上次启动"行：最近一次 dsh 启动的耗时分解（spawn→HTTP 绑定→token 行）。
+/// 数据源是 events.log 尾部里 process.rs 落的 ready 分解行；找不到（旧日志/从未就绪）→ None
+#[tauri::command]
+pub fn get_last_boot_timing(state: State<SharedState>) -> Option<crate::features::diagnostics::BootTimingDto> {
+    let lines = crate::features::diagnostics::read_log_tail(
+        &events_log_path(&state),
+        crate::features::diagnostics::LOG_TAIL_LINES,
+    );
+    crate::features::diagnostics::last_boot_timing(&lines)
+}
+
+/// 用系统默认程序打开 events.log（记事本等），便于复制完整日志上报。
+/// 文件不存在（刚装好/从未写过日志）时创建空文件——"打开日志"永远可用
+/// （append_debug_line 首次写入也会自建，这里只是让按钮不依赖先发生点什么）
+#[tauri::command]
+pub fn open_log_file(state: State<SharedState>) -> Result<(), String> {
+    let log = events_log_path(&state);
+    if !log.exists() {
+        std::fs::File::create(&log).map_err(|e| e.to_string())?;
+    }
+    crate::features::update::open_url(&log.to_string_lossy())
+}
+
+#[tauri::command]
+pub fn get_autostart(app: AppHandle) -> bool {
+    app.autolaunch().is_enabled().unwrap_or(false)
+}
+
+#[tauri::command]
+pub fn set_autostart(app: AppHandle, enabled: bool) -> Result<(), String> {
+    let m = app.autolaunch();
+    // auto-launch 0.5 的 disable() 无条件 RegDeleteValueW：值不存在时返回
+    // ERROR_FILE_NOT_FOUND（用户看到"系统找不到指定的文件 (os error 2)"）。
+    // 从未开过自启动时每次保存设置都会踩到——目标态已达成即视为成功，
+    // 顺带避免每次保存都重写一遍注册表。
+    if m.is_enabled().unwrap_or(false) == enabled {
+        return Ok(());
+    }
+    let r = if enabled { m.enable() } else { m.disable() };
+    r.map_err(|e| e.to_string())
 }

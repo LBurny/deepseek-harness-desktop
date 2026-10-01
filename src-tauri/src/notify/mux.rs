@@ -10,7 +10,7 @@
 //! 连接层只管传输与信封：帧语义全在 handler（notify::handle_event_frame 等）。
 
 use super::NotifySink;
-use crate::dsh_session::{self, DshCreds};
+use crate::dsh::dsh_session::{self, DshCreds};
 use futures::future::BoxFuture;
 use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
@@ -141,7 +141,7 @@ impl MuxSource {
             let open = serde_json::json!({
                 "type": "open",
                 "streamId": events_stream_id,
-                "endpoint": crate::upstream::EVENT_STREAM_ENDPOINT,
+                "endpoint": crate::dsh::upstream::EVENT_STREAM_ENDPOINT,
                 "payload": { "args": {} }
             });
             if tx.send(Message::Text(open.to_string().into())).await.is_err() {
@@ -155,7 +155,7 @@ impl MuxSource {
                 let open = serde_json::json!({
                     "type": "open",
                     "streamId": id,
-                    "endpoint": crate::upstream::METHOD_SESSION_FOLLOW,
+                    "endpoint": crate::dsh::upstream::METHOD_SESSION_FOLLOW,
                     "payload": { "args": { "request": { "address": { "kind": "session", "sessionId": sid } } } }
                 });
                 if tx.send(Message::Text(open.to_string().into())).await.is_err() {
@@ -209,7 +209,7 @@ impl MuxSource {
                                 let open = serde_json::json!({
                                     "type": "open",
                                     "streamId": id,
-                                    "endpoint": crate::upstream::METHOD_SESSION_FOLLOW,
+                                    "endpoint": crate::dsh::upstream::METHOD_SESSION_FOLLOW,
                                     "payload": { "args": { "request": { "address": { "kind": "session", "sessionId": sid } } } }
                                 });
                                 if tx.send(Message::Text(open.to_string().into())).await.is_err() {
@@ -271,7 +271,7 @@ type WsHalf = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStre
 
 /// 连 remote.mux：带 cookie（BrowserAuth 门内；栅栏允许 loopback 无 Origin 的客户端）
 async fn connect_mux(port: u16, cookie: &str) -> Result<WsHalf, String> {
-    let url = format!("ws://127.0.0.1:{port}{}", crate::upstream::DSH_MUX_PATH);
+    let url = format!("ws://127.0.0.1:{port}{}", crate::dsh::upstream::DSH_MUX_PATH);
     let mut req = url
         .into_client_request()
         .map_err(|e| format!("ws request: {e}"))?;

@@ -2,11 +2,11 @@
 //! 断言：profile 初始化、pnpm 收到正确参数且 cwd=profile 目录、退出码透传、
 //! DSH_HOME/PATH 注入生效。无运行时（runtime/windows-x64 缺失）则 skip。
 
-use dshdesktop_lib::plugins::{
+use dshdesktop_lib::bootstrap::plugins::{
     heal_profile_store, install_plugin_impl, uninstall_plugin_impl, update_plugins_impl,
     PluginsHome, StoreHealOutcome,
 };
-use dshdesktop_lib::upstream::dsh_bin;
+use dshdesktop_lib::dsh::upstream::dsh_bin;
 use std::path::PathBuf;
 use std::sync::Mutex;
 

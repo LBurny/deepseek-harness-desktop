@@ -1,4 +1,4 @@
-use crate::settings::{SettingsState, ShellSettings};
+use crate::features::settings::{SettingsState, ShellSettings};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
@@ -141,7 +141,7 @@ const HOOK_TEMPLATE: &str = r#"(() => {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::Shortcut;
+    use crate::features::settings::Shortcut;
 
     #[test]
     fn clamp_bounds_and_nan() {

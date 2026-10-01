@@ -23,7 +23,7 @@ pub fn parse_ready_line(line: &str) -> Option<(u16, String)> {
     use std::sync::OnceLock;
     static RE_PORT: OnceLock<regex::Regex> = OnceLock::new();
     static RE_TOKEN: OnceLock<regex::Regex> = OnceLock::new();
-    let rest = line.trim().strip_prefix(crate::upstream::READY_URL_PREFIX)?;
+    let rest = line.trim().strip_prefix(crate::dsh::upstream::READY_URL_PREFIX)?;
     let port_re = RE_PORT.get_or_init(|| regex::Regex::new(r"http://127\.0\.0\.1:(\d+)").unwrap());
     let token_re =
         RE_TOKEN.get_or_init(|| regex::Regex::new(r"\?token=([A-Za-z0-9_-]+)").unwrap());
@@ -56,7 +56,7 @@ pub async fn exchange_cookie(port: u16, token: &str) -> Result<String, String> {
     }
     for v in resp.headers().get_all(reqwest::header::SET_COOKIE) {
         let Ok(s) = v.to_str() else { continue };
-        if s.starts_with(crate::upstream::DSH_AUTH_COOKIE_PREFIX) {
+        if s.starts_with(crate::dsh::upstream::DSH_AUTH_COOKIE_PREFIX) {
             if let Some(nv) = parse_set_cookie(s) {
                 return Ok(nv);
             }

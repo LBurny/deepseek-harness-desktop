@@ -16,7 +16,7 @@
 //!   - 大体积文本资产（≥4KB 的 js/css/json/svg/html）：代理侧缓冲 gzip——dsh
 //!     服务端不做任何压缩，隧道首连 ~5MB identity 是远程白屏几十秒的根因之一
 
-use crate::dsh_session::{self, DshCreds};
+use crate::dsh::dsh_session::{self, DshCreds};
 use super::token_eq;
 use axum::body::{Body, Bytes};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
@@ -76,7 +76,7 @@ const GATE_HTML: &str = "<!doctype html><html><head><meta charset=\"utf-8\"><tit
 若电脑端远程访问仍在开启，改点最初那条带 ?token= 的完整链接即可重新进入；<br>\
 若已在电脑上重开远程访问，旧链接整体作废，请在电脑托盘菜单复制新链接。</p></body></html>";
 
-/// 内测声明三元式 needle 已上移 crate::upstream::WELCOME_NOTICE_NEEDLE（单一事实源，
+/// 内测声明三元式 needle 已上移 crate::dsh::upstream::WELCOME_NOTICE_NEEDLE（单一事实源，
 /// 含为何须带 `connection.` 前缀的说明）。改写语义：隧道场景 dsh 选 "memory" 持久化，
 /// 确认记录不落 settings.yaml、每次连接都弹声明；改写为 "host" 后远程端与桌面端
 /// 共用同一份持久化确认（桌面是回环源本就已写 host）。
@@ -124,9 +124,9 @@ const SPLASH_HTML: &str = concat!(
 /// 解析到即执行——此时 #root 与 splash 都已存在，无需等 DOMContentLoaded
 fn splash_replacement() -> Vec<u8> {
     let mut v = Vec::with_capacity(
-        crate::upstream::SPA_ROOT_MOUNT_NEEDLE.len() + SPLASH_HTML.len() + SPLASH_JS.len() + 16,
+        crate::dsh::upstream::SPA_ROOT_MOUNT_NEEDLE.len() + SPLASH_HTML.len() + SPLASH_JS.len() + 16,
     );
-    v.extend_from_slice(crate::upstream::SPA_ROOT_MOUNT_NEEDLE);
+    v.extend_from_slice(crate::dsh::upstream::SPA_ROOT_MOUNT_NEEDLE);
     v.extend_from_slice(SPLASH_HTML.as_bytes());
     v.extend_from_slice(b"<script>");
     v.extend_from_slice(SPLASH_JS.as_bytes());
@@ -535,7 +535,7 @@ async fn forward(st: ProxyState, req: Request, path_and_query: &str) -> Response
     // 流式上传路由（dsh 0.1.5 的 /api/session/uploadFileBinary，requestBody:
     // "streaming"）走独立路径：请求体不可重放、可能远超 REPLAY_BODY_LIMIT，
     // 绝不能在这里整读缓冲（旧实现 64MiB 上限把手机大文件上传打成 502）
-    if crate::upstream::is_streaming_body_route(path_and_query) {
+    if crate::dsh::upstream::is_streaming_body_route(path_and_query) {
         return forward_streaming(st, req, path_and_query).await;
     }
     let Some(c) = st.creds.borrow().clone() else {
@@ -762,7 +762,7 @@ async fn rewrite_plugin_bundle(res: reqwest::Response, client_gzip: bool) -> Res
     let builder = buffered_builder(&res);
     match res.bytes().await {
         Ok(bytes) if bytes.len() as u64 <= REWRITE_BUFFER_LIMIT => {
-            let body = replace_all(&bytes, crate::upstream::WELCOME_NOTICE_NEEDLE, WELCOME_NOTICE_REPL)
+            let body = replace_all(&bytes, crate::dsh::upstream::WELCOME_NOTICE_NEEDLE, WELCOME_NOTICE_REPL)
                 .unwrap_or_else(|| bytes.to_vec());
             if client_gzip && body.len() as u64 >= GZIP_MIN_SIZE {
                 // 克隆一份进压缩线程：压缩失败时原件还要回退 identity 服务
@@ -824,13 +824,13 @@ async fn rewrite_html_document(res: reqwest::Response) -> Response {
         Ok(bytes) if bytes.len() as u64 <= REWRITE_BUFFER_LIMIT => {
             let doc = replace_all(
                 &bytes,
-                crate::upstream::VIEWPORT_META_NEEDLE,
-                crate::upstream::VIEWPORT_META_REPLACEMENT,
+                crate::dsh::upstream::VIEWPORT_META_NEEDLE,
+                crate::dsh::upstream::VIEWPORT_META_REPLACEMENT,
             )
             .unwrap_or_else(|| bytes.to_vec());
             let (doc, splash) = match replace_all(
                 &doc,
-                crate::upstream::SPA_ROOT_MOUNT_NEEDLE,
+                crate::dsh::upstream::SPA_ROOT_MOUNT_NEEDLE,
                 &splash_replacement(),
             ) {
                 Some(doc) => (doc, true),

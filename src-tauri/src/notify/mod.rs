@@ -1,8 +1,8 @@
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-use crate::upstream;
-use crate::upstream::{
+use crate::dsh::upstream;
+use crate::dsh::upstream::{
     EVENT_API_SESSION_ADDED, EVENT_API_SESSION_REMOVED, EVENT_APPROVAL_REQUEST,
     EVENT_USER_QUESTIONS_REQUEST,
 };

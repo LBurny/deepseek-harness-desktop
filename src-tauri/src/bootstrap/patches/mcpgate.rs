@@ -11,7 +11,7 @@
 //! （v1→v2），且 from-needle 必须仍锚上游原文（已被 v1 改写的文件会判
 //! UpstreamChanged 停手，须先人工还原——与 pickerpatch 同限制）。
 
-use crate::runtime::RuntimePaths;
+use crate::dsh::runtime::RuntimePaths;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -82,9 +82,9 @@ fn write_atomic(path: &Path, content: &str) -> std::io::Result<()> {
 fn mcp_client_file(paths: &RuntimePaths) -> Option<PathBuf> {
     // dsh_bin = <nm>/@deepseek-ai/dsh/lib/bin.js → node_modules 目录 = 上四级
     let nm = paths.dsh_bin.parent()?.parent()?.parent()?.parent()?;
-    Some(crate::upstream::join_segments(
+    Some(crate::dsh::upstream::join_segments(
         nm,
-        crate::upstream::MCP_CLIENT_FILE_SEGMENTS,
+        crate::dsh::upstream::MCP_CLIENT_FILE_SEGMENTS,
     ))
 }
 
@@ -185,7 +185,7 @@ mod tests {
     fn apply_to_real_runtime() {
         let rt = std::env::var("DSHDESKTOP_RUNTIME_DIR").expect("set DSHDESKTOP_RUNTIME_DIR");
         let nm = Path::new(&rt).join("dsh").join("node_modules");
-        let file = crate::upstream::join_segments(&nm, crate::upstream::MCP_CLIENT_FILE_SEGMENTS);
+        let file = crate::dsh::upstream::join_segments(&nm, crate::dsh::upstream::MCP_CLIENT_FILE_SEGMENTS);
         let outcome = patch_file(&file);
         assert!(matches!(
             outcome,
