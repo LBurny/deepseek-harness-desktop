@@ -355,19 +355,30 @@ mod tests {
         assert!(count > 0, "preseed-plugins 源目录不应为空");
     }
 
-    /// /init 插件注入的提示词必须走 plugin+notice 源：UI 把非 user 源渲染成
-    /// 一行折叠的「上下文注入」（可展开），kind:"user" 则是完整气泡（0.4.9
-    /// 用户实测长提示词气泡太丑）。上游渲染分支漂移由契约套件
-    /// probe_preseed_plugin_needles 守门（upstream::CONTEXT_INJECTION_*）。
+    /// /init 插件注入的提示词必须走生产者自有 kind+notice 源：UI 把非 user 源
+    /// （form:"notice" 在 KNOWN_FORMS 内）渲染成一行折叠的「上下文注入」（可
+    /// 展开），kind:"user" 则是完整气泡（0.4.9 用户实测长提示词气泡太丑）。
+    /// 通用 `kind:"plugin"` 包装源已被 dsh 会话格式 V4 退役——新写路径整轮失败
+    /// （"format v4 message requires a producer-owned source kind"），插件 0.1.4
+    /// 起改发 kind:"command-init"（上游 plan-mode/tool-goal 同款形态）。上游
+    /// 渲染分支漂移由契约套件 probe_preseed_plugin_needles 守门
+    /// （upstream::CONTEXT_INJECTION_* / CHAT_*）。
     #[test]
-    fn init_plugin_injects_collapsed_plugin_source() {
+    fn init_plugin_injects_collapsed_notice_source() {
         let index = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/resources/preseed-plugins/dsh-command-init/index.js"
         ))
         .unwrap();
-        assert!(index.contains(r#"kind: "plugin""#), "index.js 应以 plugin 源注入才折叠");
+        assert!(
+            index.contains(r#"kind: "command-init""#),
+            "index.js 应以生产者自有 kind 注入（V4 收编规则）"
+        );
         assert!(index.contains(r#"form: "notice""#), "index.js 应以 notice form 提供折叠行摘要");
         assert!(!index.contains(r#"kind: "user""#), "kind:user 会渲染成完整用户气泡");
+        assert!(
+            !index.contains(r#"kind: "plugin""#),
+            "kind:\"plugin\" 已被 V4 退役，发出去整轮失败"
+        );
     }
 }

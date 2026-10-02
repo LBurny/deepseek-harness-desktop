@@ -916,8 +916,9 @@ fn probe_remote_needles(rt: &Path, c: &mut Checker) {
     }
 }
 
-/// 预装 /init 插件的 UI 折叠锚点（preseed 插件靠 source.kind="plugin"+notice
-/// 把长提示词渲染成一行折叠的「上下文注入」；上游改了渲染分支即红）
+/// 预装 /init 插件的 UI 折叠锚点（preseed 插件用 V4 规范的生产者自有 kind
+/// "command-init"+form:"notice" 把长提示词渲染成一行折叠的「上下文注入」；
+/// 上游改了渲染分支或 form 收编面即红）
 fn probe_preseed_plugin_needles(rt: &Path, c: &mut Checker) {
     let nm = upstream::dsh_node_modules_dir(rt);
     for (needle, desc, advice) in [
@@ -925,6 +926,16 @@ fn probe_preseed_plugin_needles(rt: &Path, c: &mut Checker) {
             upstream::CONTEXT_INJECTION_BRANCH_NEEDLE,
             "会话 UI 仍有 source.kind!==\"user\" → 折叠上下文行分支",
             "上游改了消息渲染分支：/init 注入的提示词可能重新渲染成完整用户气泡，改 upstream::CONTEXT_INJECTION_BRANCH_NEEDLE（影响 preseed 插件 dsh-command-init 的 source 策略）",
+        ),
+        (
+            upstream::CHAT_KNOWN_FORMS_NEEDLE,
+            "会话 UI 仍有 KNOWN_FORMS form 收编面（notice 折叠行的结构门）",
+            "上游改版了 form 收编面（KNOWN_FORMS）：/init 折叠行可能渲染成 opaque 或整条改版，按新事实复核 preseed 插件的 form:\"notice\" 形态并改 upstream::CHAT_KNOWN_FORMS_NEEDLE",
+        ),
+        (
+            upstream::CHAT_NOTICE_FORM_NEEDLE,
+            "会话 UI 仍有 case \"notice\" 折叠渲染分支",
+            "上游改了 notice form 的渲染分支：/init 折叠行可能整条改版，改 upstream::CHAT_NOTICE_FORM_NEEDLE（影响 preseed 插件 dsh-command-init）",
         ),
         (
             upstream::CONTEXT_INJECTION_TITLE_NEEDLE,

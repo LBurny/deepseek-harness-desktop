@@ -580,9 +580,25 @@ pub const PLUGIN_PANEL_HOOK: &str = "data-plugin-panel";
 /// @deepseek-ai/dsh-client-ui-chat/lib/client.js（0.1.2 起聊天渲染从
 /// ui-conversation 拆入 ui-chat 包，2026-09-04 rc.1 实测命中；messageDefinition.start：
 /// `event.data.source.kind !== "user"` → context 节点 → ContextInjectionRow
-/// 折叠行；kind=="user" 才渲染完整气泡）。影响面：/init 注入的长提示词靠
-/// source.kind="plugin" 落进折叠的「上下文注入」行——分支改掉则提示词重新
-/// 渲染成完整气泡（功能不损、美观回退）；契约套件 tree_find 守门。
+/// 折叠行；kind=="user" 才渲染完整气泡）。影响面：/init 注入的长提示词落进
+/// 折叠的「上下文注入」行——分支改掉则提示词重新渲染成完整气泡（功能不损、
+/// 美观回退）；契约套件 tree_find 守门。
+///
+/// **会话格式 V4 消息源收编规则（V4 会话格式实测；/init 曾整轮炸出）**：
+/// dsh-session-format-v3-to-v4 的 source() 校验要求每条持久消息 source.kind 是
+/// 非空字符串且 **kind === "plugin" 已退役拒收**（注释原文 refuses retired
+/// plugin wrappers；持久化 worker 同款检查）——插件自写消息必须声明生产者
+/// 自有 kind + form: "notice"（上游自家 plan-mode 写 kind:"plan-mode"、
+/// tool-goal 写 kind:"tool-goal"，dsh-client-ui-chat 的 KNOWN_FORMS 含
+/// "notice"，折叠行渲染只认 form、kind 仅作署名）。历史 V3 消息由迁移器
+/// rewritePluginSource 平滑改写：不在改名表里的插件名兜底成
+/// `plugin:<旧 plugin 字段值>`，故旧会话升级无恙。预装插件 0.1.4 起
+/// 提交 kind:"command-init"（曾用 retired 的 kind:"plugin"，新写路径必炸
+/// "format v4 message requires a producer-owned source kind"——整个回合失败）。
+/// 折叠行渲染结构门（KNOWN_FORMS 数组，ui-chat 包）：数组改版即红，提醒复核
+/// preseed 插件的 source 形态。
+pub const CHAT_KNOWN_FORMS_NEEDLE: &str = "KNOWN_FORMS";
+pub const CHAT_NOTICE_FORM_NEEDLE: &str = r#"case "notice":"#;
 pub const CONTEXT_INJECTION_BRANCH_NEEDLE: &str = r#"source.kind !== "user""#;
 /// 折叠行标题的 locale 键（同文件 "message.contextInjection"，zh="上下文注入"）。
 /// 影响面：键消失意味着 ContextInjectionRow 整条渲染路径改版，同上。

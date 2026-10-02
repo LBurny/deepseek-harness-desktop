@@ -2,10 +2,15 @@ import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
 /**
 * Human-facing `/init` command: render the AGENTS.md authoring prompt for the
-* invocation's workspace and submit it as a plugin-sourced context injection,
+* invocation's workspace and submit it as a plugin context injection,
 * so the agent runs it as a normal turn while the transcript shows a single
 * collapsible row instead of a full user bubble (same mechanism as
 * dsh-plan-mode narrations; kind:"user" would always render as a bubble).
+* dsh 0.2.0 会话格式 V4 退役了通用 `kind:"plugin"` 包装源（写入即
+* "format v4 message requires a producer-owned source kind" 整轮失败）：
+* 消息源必须声明生产者自有 kind（此处 "command-init"，同 plan-mode 写
+* kind:"plan-mode" 的现行插件规范），`plugin:` 字段一并移除；折叠行渲染
+* 只认 form:"notice"（web-app 的 KNOWN_FORMS），kind 自由。
 * @module dsh-command-init
 */
 const name = "command-init";
@@ -60,11 +65,12 @@ After creating or editing AGENTS.md, summarize the main sections you wrote and m
 }
 
 /**
-* Submit the rendered prompt as a plugin-sourced message on the invocation's agent.
+* Submit the rendered prompt as a plugin message on the invocation's agent.
 * `followup` queues it for the next turn and wakes the driver, so an idle
-* agent starts a fresh turn with the prompt as its input. The `plugin` source
-* with `notice` form keeps the model receiving the full text while the UI
-* renders one collapsible "context injection" row showing just the summary.
+* agent starts a fresh turn with the prompt as its input. The producer-owned
+* `command-init` source with `notice` form keeps the model receiving the full
+* text while the UI renders one collapsible "context injection" row showing
+* just the summary.
 */
 function executeInit(invocation) {
 	const cwd = invocation.agent?.session?.header?.cwd;
@@ -76,8 +82,7 @@ function executeInit(invocation) {
 			text
 		}],
 		source: {
-			kind: "plugin",
-			plugin: "dsh-command-init",
+			kind: "command-init",
 			form: "notice",
 			summary: extra.length > 0 ? `${NOTICE_SUMMARY} (+ additional instructions)` : NOTICE_SUMMARY
 		}

@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **修复预装 /init 命令整轮失败**：会话格式 V4 退役了通用 `kind:"plugin"` 包装源——新写路径直接拒收（"format v4 message requires a producer-owned source kind"，整轮失败）。上游收编规则（dsh-session-format-v3-to-v4 的 source() 校验 + JSONL 持久化 worker 同款）：持久消息 `source.kind` 必须是非空字符串且不等于 `"plugin"`；旧会话里历史消息无恙——迁移器 `rewritePluginSource` 平滑改写，未登记名兜底 `plugin:<旧值>`。对策：预装插件 dsh-command-init 0.1.4 起改发生产者自有 kind `"command-init"` + `form:"notice"`（上游 plan-mode 写 `kind:"plan-mode"`、tool-goal 写 `kind:"tool-goal"` 的现行插件规范），`plugin:` 字段一并剥除；折叠行渲染不受影响——"用户气泡 vs 折叠上下文行"分支只认 `source.kind !== "user"`，form 折叠面收编在 ui-chat 包 KNOWN_FORMS（含 "notice"），kind 仅作生产者署名。临时实例端到端验证：/init 提交后回合正常启动、会话以 v4 落盘（临时环境报 MISSING_CREDENTIAL 属无凭据副本，非本故障）。回归：preseed::tests::init_plugin_injects_collapsed_notice_source（改钉新形态）+ 契约新探针 CHAT_KNOWN_FORMS_NEEDLE / CHAT_NOTICE_FORM_NEEDLE
+
+### Changed
+
+- **框架重组：26 个顶层文件按职责分入四组 + 四个独立设施，纯物理移动零行为变化**（六批次独立提交，每批 cargo test 全绿）。`dsh/`=进程监督/凭证/上游事实/预设/端口/运行时（upstream.rs 仍是跟版唯一改动点）；`bootstrap/`=启动期自愈总入口 `run_all`（补丁 `patches/` → pnpm store 自愈 → preseed 播种——补丁随跟版增删从此只动 patches/ 一个文件）；`ui/`=壳窗口设施（新增 `state.rs` 收 UiSnapshot/ShellUiState/解析函数，消除 theme↔tray 互引环；get_shell_ui_state 命令随迁）；`features/`=本地页面后端（commands.rs 并入 diagnostics.rs）。顶层新增 logging.rs（events.log 统一追加层，从 lib.rs 拆出）、redact.rs（token 脱敏单飞，process/pagebridge 不再反依赖 remote）、patchstore.rs（cordis.patch.yml 通用条目读写从 mcp.rs 拆出，mcp.rs 名实相符）、eventbridge.rs（进程事件桥：带 token 导航+431 cookie 防护+心跳看门狗）；lib.rs 1061→482 行只剩 Builder 组装。三处命令同步红线无感（命令名零变动，command_registration.rs 未改动即绿）；follow-upstream.ps1 路径与 AGENTS.md/design 文档同步
+- **AGENTS.md 精简**：目录注解与坑区叙述压缩（细节退回 design.zh-CN.md），新增「垃圾文件与清理」节（.trash 落点/target 清理规则/打包前备份原件/.playwright-mcp/探针现场即用即删）
+
 ## [0.5.24] - 2026-09-30
 
 ### Fixed
