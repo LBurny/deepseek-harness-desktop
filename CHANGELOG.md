@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.25] - 2026-10-02
+
 ### Fixed
 
 - **修复预装 /init 命令整轮失败**：会话格式 V4 退役了通用 `kind:"plugin"` 包装源——新写路径直接拒收（"format v4 message requires a producer-owned source kind"，整轮失败）。上游收编规则（dsh-session-format-v3-to-v4 的 source() 校验 + JSONL 持久化 worker 同款）：持久消息 `source.kind` 必须是非空字符串且不等于 `"plugin"`；旧会话里历史消息无恙——迁移器 `rewritePluginSource` 平滑改写，未登记名兜底 `plugin:<旧值>`。对策：预装插件 dsh-command-init 0.1.4 起改发生产者自有 kind `"command-init"` + `form:"notice"`（上游 plan-mode 写 `kind:"plan-mode"`、tool-goal 写 `kind:"tool-goal"` 的现行插件规范），`plugin:` 字段一并剥除；折叠行渲染不受影响——"用户气泡 vs 折叠上下文行"分支只认 `source.kind !== "user"`，form 折叠面收编在 ui-chat 包 KNOWN_FORMS（含 "notice"），kind 仅作生产者署名。临时实例端到端验证：/init 提交后回合正常启动、会话以 v4 落盘（临时环境报 MISSING_CREDENTIAL 属无凭据副本，非本故障）。回归：preseed::tests::init_plugin_injects_collapsed_notice_source（改钉新形态）+ 契约新探针 CHAT_KNOWN_FORMS_NEEDLE / CHAT_NOTICE_FORM_NEEDLE
