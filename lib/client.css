@@ -183,13 +183,14 @@
 	flex: 1;
 }
 
+/* One entry, one box: the same card the 功能管理 page draws for its own list. */
 .dshkit-row {
 	display: flex;
-	align-items: flex-start;
+	align-items: center;
 	gap: 10px;
-	padding: 8px;
+	padding: 12px 14px;
 	border: 1px solid var(--dshkit-border);
-	border-radius: 10px;
+	border-radius: 12px;
 	margin-bottom: 8px;
 }
 
@@ -207,6 +208,11 @@
 	color: var(--dshkit-muted);
 	font-size: 12px;
 	word-break: break-all;
+}
+
+/* A two-line slot so every box in a list is the same height whatever its text. */
+.dshkit-row .dshkit-row-sub {
+	min-height: 34px;
 }
 
 .dshkit-row-actions {
