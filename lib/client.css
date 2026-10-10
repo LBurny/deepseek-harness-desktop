@@ -4,6 +4,10 @@
  * Everything is scoped under `#dshkit` so the injected stylesheet cannot leak
  * into dsh's own UI. Colours come from CSS variables with a dark-mode override,
  * and the panel follows the host page's light/dark scheme rather than forcing one.
+ *
+ * The closing block is the one exception: page zoom is CSS `zoom` on `<html>`,
+ * which dsh's own portaled menus do not account for, and correcting them means a
+ * rule on dsh's menu surface. It sets nothing but `zoom` on those surfaces.
  */
 #dshkit-root,
 #dshkit-root * {
@@ -344,4 +348,38 @@
 	min-width: 90px;
 	text-align: center;
 	display: inline-block;
+}
+
+/*
+ * dsh's portaled menus under page zoom.
+ *
+ * `zoom` on <html> multiplies every coordinate dsh reads, and the Menu primitive
+ * reads them in viewport px: it writes `anchor.top - list.offsetHeight - 4` (or
+ * `anchor.bottom + 4`) into the portaled surface's inline `top`. That surface is
+ * a child of <body>, so the factor lands on the written value a second time.
+ * At 110% the account menu — 设置, 意见反馈, 退出登录 — lands about 80px below the
+ * avatar with its last row off the window; further in it leaves the window
+ * altogether. The clamp cannot catch it either, being that same viewport-space
+ * number against `window.innerHeight` minus a layout-px height.
+ *
+ * Cancelling the factor on the surface puts the inline coordinates back in
+ * viewport px, the space dsh's arithmetic is actually in (`rect`,
+ * `offsetHeight` and `innerHeight` then agree), so both the placement and the
+ * clamp come out right. The contents take the factor back, so a menu still reads
+ * at the page's scale.
+ *
+ * What stays unscaled is the card's own frame: the padding and the min/max width
+ * bounds from dsh's Menu.module.css are viewport px here, so a wide menu at a
+ * high zoom wraps a little tighter than a native page zoom would render it.
+ *
+ * `--dsh-zoom` is a convention shared with the standalone dsh-zoom package: both
+ * may be installed, and they have to agree, since two sheets declaring `zoom` on
+ * the same selector would otherwise answer with one another's unset variable.
+ */
+body > [data-menu-material] {
+	zoom: var(--dsh-zoom-inverse, 1);
+}
+
+body > [data-menu-material] > * {
+	zoom: var(--dsh-zoom, 1);
 }
