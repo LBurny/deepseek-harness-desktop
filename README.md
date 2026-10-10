@@ -25,6 +25,41 @@ monorepo [LBurny/dsh-plugin](https://github.com/LBurny/dsh-plugin) — a separat
 > This repo was cloned from the DSHDesktop shell repository; on 2026-10-10 the shell code was removed
 > and the workspace became plugin-only. Everything remains in git history and on `origin`.
 
+## Install into dsh
+
+The kit ships preinstalled with the DSHDesktop installer, and this repository is its source. To put it
+into a dsh of your own, the profile has to own the directory — a plugin under `$DSH_HOME/profiles/`
+resolves `@deepseek-ai/*` and `yaml` through the profile's `node_modules` fallback:
+
+```bash
+cp -r <repo root>/. "$DSH_HOME/profiles/plugins/dsh-desktop-kit/"
+"$NODE" "$DSH_BIN" plugin --profile web add "$DSH_HOME/profiles/plugins/dsh-desktop-kit"
+```
+
+Then restart dsh — plugins have no HMR. The full recipe (which runtime's `node.exe` and `bin.js`, the
+phone QR dependency, and the `os error 5` trap when adding dependencies to a profile) is in
+[docs/desktop-kit.md](docs/desktop-kit.md).
+
+**This package has no `github:` spec**: it is `"private": true`, published to no registry, and the shell
+repository it was cloned from no longer carries its layout. Install it from a directory, as above.
+
+The **GitHub remote route** belongs to the sibling split packages: plain public packages in the
+[dsh-plugin](https://github.com/LBurny/dsh-plugin) monorepo, each installable on its own straight from the
+repository.
+
+```bash
+dsh plugin --profile web add github:LBurny/dsh-plugin#path:/dsh-zoom        # DSHDesktop shell profile
+dsh plugin --profile desktop add github:LBurny/dsh-plugin#path:/dsh-skills  # official desktop app
+dsh plugin --profile web add github:LBurny/dsh-plugin#<sha>&path:/dsh-zoom  # pinned to a commit
+dsh plugin --profile web remove dsh-zoom
+```
+
+One spec at a time, and restart dsh afterwards. Two traps are spelled out in that repo's README: on
+Windows `dsh.cmd` eats the `&` of the pinned form (pin from the app's own plugin panel instead), and pnpm
+fetches with its own TLS stack, so a network that intercepts TLS needs a proxy line in
+`$DSH_HOME/profiles/<profile>/.npmrc` — or no network at all, by copying the package into
+`$DSH_HOME/profiles/plugins/<name>/` and adding that path.
+
 Working agreements, environment facts and the command list are in [AGENTS.md](AGENTS.md).
 
 ## License
