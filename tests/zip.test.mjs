@@ -131,6 +131,16 @@ check(discoverZipSkills(unnamed, "fallback-name.zip")[0].name === "fallback-name
 
 await expectZipError(() => discoverZipSkills(buildZip([{ name: "readme.txt", data: Buffer.from("x"), method: 0 }]), "x.zip"), "an archive without SKILL.md is rejected");
 
+// An invalid top-level directory name must not abort discovery of the others.
+const mixed = buildZip([
+	{ name: "bad name/SKILL.md", data: Buffer.from("---\nname: bad\n---\n", "utf8"), method: 0 },
+	{ name: "good/SKILL.md", data: Buffer.from("---\nname: good\n---\n", "utf8"), method: 0 }
+]);
+const mixedFound = discoverZipSkills(mixed, "mixed.zip");
+check(mixedFound.length === 2, "an invalid directory name does not abort discovery", JSON.stringify(mixedFound.map((s) => s.name)));
+check(mixedFound.find((s) => s.name === "bad name")?.error !== undefined, "the invalid directory name is flagged per entry");
+check(mixedFound.find((s) => s.name === "good")?.error === undefined, "the valid sibling carries no error");
+
 /* --------------------------------------------------------------- extraction */
 
 const dir = await mkdtemp(join(tmpdir(), "kit-zip-"));
@@ -167,6 +177,13 @@ check(!(await exists(join(skillsDir, "alpha", "extra.txt"))), "overwrite clears 
 
 const bogus = await importZipSkills(layout, archive, "pack.zip", ["gamma"], "skip");
 check(bogus.errors.length === 1, "a name missing from the archive reports an error");
+
+const mixedInspect = await inspectZipSkills(layout, mixed, "mixed.zip");
+check(mixedInspect.find((s) => s.name === "bad name")?.error !== undefined, "inspection forwards the per-entry error");
+const mixedImport = await importZipSkills(layout, mixed, "mixed.zip", ["bad name", "good"], "skip");
+check(mixedImport.imported.length === 1 && mixedImport.imported[0] === "good", "a valid sibling still imports", JSON.stringify(mixedImport));
+check(mixedImport.errors.length === 1 && mixedImport.errors[0].name === "bad name", "the invalid name lands in errors instead of aborting the batch");
+check((await exists(join(skillsDir, "good", "SKILL.md"))), "the valid sibling is written to the enabled root");
 
 /* -------------------------------------------------------------- reporting */
 

@@ -24,6 +24,9 @@
     "qrcode": "^1.5.4"
   },
   "peerDependencies": {
-    "@deepseek-ai/dsh-llm": "*"
+    "@deepseek-ai/dsh-app-boot": "*",
+    "@deepseek-ai/dsh-atomic-write": "*",
+    "@deepseek-ai/dsh-llm": "*",
+    "yaml": "*"
   }
 }

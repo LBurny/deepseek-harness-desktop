@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "桌面套件",
-    "description": "把 DSHDesktop 的便利功能移植进 dsh：技能与 MCP 管理（含 ZIP 导入）、故障诊断、页面缩放、任务提醒（弹窗+声音）、快捷键设置，以及带手机端界面与「项目」浏览的远程访问，并提供 /skills /mcp /doctor /kit 命令。"
+    "description": "把 DSHDesktop 的便利功能移植进 dsh：技能与 MCP 管理（含 ZIP 导入）、故障诊断、页面缩放、任务提醒（弹窗+声音）、快捷键设置，以及带手机端界面与项目浏览的远程访问，并提供 /skills /mcp /doctor /kit 命令。"
   }
 }

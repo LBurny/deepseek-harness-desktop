@@ -10,10 +10,10 @@
 | 3 | 手机远程控制 | 面板「远程」页：自建鉴权反向代理 + 令牌门岗 + 二维码；通道可选 **局域网** 或 **Cloudflare 隧道**（默认关）。代理与壳同款改写：**手机端界面**（mobile.css/js 注入、禁缩放 viewport、splash 加载过渡）、**「项目」标签页**（文件树浏览/预览/下载）、gzip 压缩、WS/SSE 静默保活 |
 | 3b | 故障诊断（状态 / 日志） | 面板 + `/doctor` 命令（状态、端口、PID、日志尾部，桌面壳下直接读它的 `events.log`）；面板脚本错误自动捕获上报 |
 | 4 | 页面放大缩小 | 面板（缩放条 + 步进）+ 可自定义快捷键 |
-| 5 | 任务提醒（弹窗 + 声音） | 面板（四类开关 / 时机 / 音效 / 音量）+ 浏览器通知（点击聚焦窗口）+ 页面内 toast |
+| 5 | 任务提醒 | 面板（四类开关 / 时机 / 音效 / 音量）+ 浏览器系统通知（标签页不可见时）+ 页面内 toast；两者点击都跳回触发提醒的会话 |
 | 6 | 快捷键设置 | 面板（快捷键录制器，用于缩放上下） |
 | 7 | `/init` 初始化 | **默认不注册**，让位给官方的 `dsh-command-init`；可用行配置开启兜底 |
-| 8 | 界面语言 / 主题跟随 | 面板读取 profile patch 的 `locale`/`ui-theme` 条目，跟随 dsh 的语言与深浅色选择 |
+| 8 | 界面语言 / 主题跟随 | 面板读取 profile patch 的 `locale`/`ui-theme` 条目，跟随 dsh 的语言与深浅色选择（`zh*` 中文，其余一律英文；页面活着时按轮询与焦点检查跟随切换） |
 
 ---
 
@@ -65,6 +65,7 @@ lib/                宿主半边：模块按角色扁平摆放，一个职责一
   mcp.js            cordis.patch.yml 的结构化编辑（保留注释与 !!js 标签）
   diagnostics.js    故障诊断：状态采集 + 日志尾部
   bus.js            宿主事件 → SSE 广播
+  notify.js         会话事件 → 带会话标识的提醒记录（四类分类规则）
   sounds.js         随包 17 个 WAV 的清单与读取
   remote.js         鉴权反向代理（HTTP + WebSocket 升级）+ cloudflared 隧道监督 + 令牌/端口持久化
   enhance.js        代理响应改写：HTML 注入/viewport/splash、gzip、SSE 保活
@@ -74,14 +75,14 @@ lib/                宿主半边：模块按角色扁平摆放，一个职责一
   http.js           guard/readJson/sendJson/sendBuffer/sendText
   config.js         $DSH_HOME/desktop-kit.json 读写（深合并 + 范围钳制）
   paths.js          解析 $DSH_HOME / profile / 技能目录布局
-  preference.js     读 profile patch 的 locale/ui-theme 条目（面板语言/主题跟随）
+  preference.js     读 profile patch 的 locale/ui-theme 条目 + isZhLocale 语言判定（面板语言跟随）
   client.js         浏览器半边 → 经 /dshdesk/* 注入页面：启动器 + 面板、CSS zoom、
                     快捷键匹配与录制、EventSource + Notification + Audio、错误上报
   client.css        面板与启动器样式
   sounds/*.wav      随包音效（资产簇，类比官方 lib/styles/）
   assets/           mobile.css/js、splash.css/js、project.html（自壳 vendored，路径改到 /dshdesk 前缀）
 tests/              同级测试套件：shared / bus / skills / zip / mcp / remote / proxy（+ remote-live 实时）
-locale/             面板文案（en/zh）
+locale/             插件管理页文案（en/zh；dsh 按界面语言选取，其他语言回退英文）
 ```
 
 `lib/` 扁平、模块按**角色**命名、测试放同级 `tests/` —— 这是 dsh 官方包的结构（上游
@@ -105,7 +106,48 @@ out-of-tree 构建文档**，还要绑定内部槽位名（`settings.section` �
 
 四类提醒与桌面壳一致：`approval`（等待批准）、`question`（等待回答）、`turn_done`（本轮调用过工具）、
 `answer_done`（纯文本回答）。子代理的回合被抑制；非 `completed` 的结束原因不提醒。
-「仅后台」= 页面在前台时不打扰。
+仅后台表示页面在前台时不打扰。
+
+### 提醒怎么送达，点击怎么跳回会话
+
+每条记录都由 `lib/notify.js` 组装，**必定带上 `sessionId`**（以及已知时的会话标题），这样点击才能回到
+提醒来源的那个会话。
+
+送达有两条路，都由 `document.hidden` 与各类型的时机规则门控：
+
+- **系统通知**（`new Notification`，走浏览器 Notification API）：只在**标签页不可见**时发，页面正看着
+  就不打扰。标题是提醒类型（任务完成 / 等待批准之类），正文是会话标题。桌面壳用的是 WinRT 原生 toast，
+  WebView2 里 `Notification` 未必可用，所以页面对能力做了探测：`Notification` 不存在或权限未授予时，
+  这一路自动失效，只剩 toast。
+- **页面内 toast**：跟随该类型的时机规则。默认只后台，前台聚焦时不弹；改成总是后即使前台也弹。
+
+两条路的点击走同一个处理：先 `window.focus()` 把标签页带到前台，再跳回会话。**dsh 前端没有会话 URL**
+（会话选择是客户端状态，不是路由），所以跳转是 DOM 级的：侧边栏会话行带
+`data-row-key="session:<id>"`，点它即等价于 dsh 自己的打开会话。侧边栏收成图标栏时会先点开侧边栏
+再重试一次；行找不到（已归档、或结构漂移）就退回打开面板的提醒页，绝不让点击变成空操作。
+这与缩放上限用 DOM 查询测侧边栏高度是同一种做法：只依赖 DOM，不动 dsh 内部 bundle 或槽位。
+
+系统通知权限必须由用户手势触发，面板提醒页的**启用浏览器通知**按钮调用
+`Notification.requestPermission()`，是唯一的授权入口。开关有 `notify.browser`（系统通知）与
+`notify.toast`（页面内提示条）两项，默认都开，与音效默认开是一个风格。
+
+### 界面语言跟随（中英）
+
+面板文案（`lib/client.js` 的 `STRINGS` 表、提醒正文、toast、系统通知标题）跟随 dsh 自己的语言设置：
+读 profile patch 的 `locale` 行，判定规则是 `zh*` 用中文，其余任何标签（含 `en`、`fr`、`ja`、空值）
+一律用英文；标签缺失或为空时退回 `navigator.language` 猜测。判定收口在纯函数 `isZhLocale`。权威可测
+副本在 `lib/preference.js`；浏览器半边因为是无模块加载器的经典脚本，无法 import 宿主模块，抄了同一行
+判定并在注释里标明同步关系。
+
+面板在 `boot()` 读一次初始语言后还会在页面活着时跟随切换：打开面板、窗口重获焦点、标签页重新可见，
+以及每 30 秒的慢轮询都会打一次 `GET /api/locale`（只读 patch，不做 `/api/state` 那套技能/MCP 扫描），
+语言变了就就地重刷面板标题、标签页与当前页，无需刷新页面。提醒记录本身是语言中立的（`lib/notify.js`
+只给 `kind`/`sessionId`/`title`），正文由浏览器半边按当前语言拼，所以切换语言后新提醒立即用新语言。
+
+插件管理页的语言**不归本插件管**。dsh 的 `readPluginMeta`（`@deepseek-ai/dsh-app-boot`）把每个
+`locale/*.json` 收进一张按语言 id 的映射，并始终补上英文兜底；客户端的 `resolveText`
+（`@deepseek-ai/dsh-client-locale`）沿当前语言的回退链取值，最终落到 `text.en`。dsh 内置只有 `zh`/`en`，
+其他语言包也必须回退到英文，所以 fr/ja 之类一律显示英文，插件侧无需额外别名文件。
 
 ---
 
@@ -205,6 +247,7 @@ token 与代理端口都会持久化，所以**局域网模式下同一台机器
 | GET | `/dshdesk/client.js` `/dshdesk/client.css` | 浏览器半边资产 |
 | GET | `/dshdesk/sounds/<id>.wav` | 随包音效 |
 | GET | `/dshdesk/api/state` | 配置 + 音效清单 + 计数 + dsh 语言/主题偏好 + 插件版本 |
+| GET | `/dshdesk/api/locale` | 仅读 patch 的当前语言标签（面板实时跟随用的轻量轮询端点） |
 | POST | `/dshdesk/api/config` | 深合并保存设置 |
 | GET | `/dshdesk/api/events` | SSE 通知流 |
 | GET | `/dshdesk/api/notifications` | 最近通知 |
@@ -244,7 +287,8 @@ MCP 编辑用 `yaml` 包的文档 API（与 `dsh-config-editor` 同款技术）�
 ```bash
 cd <本仓根>
 "$RUNTIME/node.exe" tests/shared.test.mjs   # 设置默认值/钳制/深合并/落盘（17 项）
-"$RUNTIME/node.exe" tests/bus.test.mjs      # SSE 总线：attach/publish/detach、recent 缓冲（12 项）
+"$RUNTIME/node.exe" tests/bus.test.mjs      # SSE 总线：attach/publish/detach、recent 缓冲、会话标识透传（15 项）
+"$RUNTIME/node.exe" tests/notify.test.mjs   # 提醒记录：四类分类、子代理/未完成抑制、会话标识必带（21 项）
 "$RUNTIME/node.exe" tests/skills.test.mjs   # 技能目录：列举/启停搬迁/删除/冲突/防穿越（11 项）
 "$RUNTIME/node.exe" tests/zip.test.mjs      # ZIP 解包/发现/解出、技能库导入（35 项）
 "$RUNTIME/node.exe" tests/mcp.test.mjs      # patch 文档编辑：注释/!!js 保留、高级键保留（20 项）
@@ -280,6 +324,10 @@ cd <本仓根>
   宽菜单会收得紧一点。
 - **声音是浏览器播的**（`HTMLAudioElement`），不是壳的 `waveOut` 线程；浏览器自动播放策略可能
   在用户首次交互前拦住音频（toast 与系统通知不受影响）。
+- **系统通知依赖浏览器的 `Notification` API**：在桌面壳的 WebView2 里未必可用（壳自己走 WinRT 原生
+  toast）。探测不到或未授权时自动退化为页面内 toast，功能不丢，只是少了系统级弹窗。
+- **会话跳转靠 DOM 查询**（侧边栏的 `data-row-key="session:<id>"`），因为 dsh 前端没有会话 URL。
+  dsh 改掉这个属性时跳转会退化为「聚焦标签页 + 打开提醒面板」，其余功能不受影响。
 - **重启 dsh 不是插件能做的**（插件跑在被重启的进程里）。诊断面板只报告状态；
   重启仍走壳的托盘菜单。
 - 命令名 `/skills` `/mcp` `/doctor` `/kit` 在 dsh 0.2.0-rc.1 里未被占用。若你另装了使用同名命令的

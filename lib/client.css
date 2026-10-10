@@ -327,6 +327,7 @@
 
 .dshkit-toast {
 	pointer-events: auto;
+	cursor: pointer;
 	background: var(--dshkit-bg);
 	border: 1px solid var(--dshkit-border);
 	border-left: 3px solid var(--dshkit-accent);

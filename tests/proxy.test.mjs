@@ -27,7 +27,7 @@ import {
 	wantsHtmlDocument
 } from "../lib/enhance.js";
 import { contained, contentDisposition, handleProjectRoute, listDir, mimeFor, readProjectFile, resolveWorkspace } from "../lib/project.js";
-import { readPreference, readUiPreferences } from "../lib/preference.js";
+import { isZhLocale, readPreference, readUiPreferences } from "../lib/preference.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });
@@ -244,6 +244,35 @@ check(!untouched.includes("dshdesk-mobile") && !untouched.includes("dsh-splash")
 	check((await res.collected()).equals(png) && res.headers["content-encoding"] === undefined, "binary assets pass through identity");
 }
 
+// Over the rewrite limit → everything streams through byte-for-byte (no truncation).
+{
+	const head = Buffer.alloc(8 * 1024 * 1024, 0x62);
+	const middle = Buffer.alloc(8 * 1024 * 1024, 0x63);
+	const over = Buffer.alloc(1 * 1024 * 1024, 0x64);
+	const tail = Buffer.from("<!-- TAILMARK -->", "utf8");
+	const res = fakeRes();
+	const upstream = Readable.from([head, middle, over, tail]);
+	upstream.headers = { "content-type": "text/html", "content-length": String(head.length + middle.length + over.length + tail.length) };
+	upstream.statusCode = 200;
+	await respond({ req: { method: "GET", headers: { accept: "text/html" } }, res, upstreamRes: upstream, assets });
+	const body = await res.collected();
+	check(body.equals(Buffer.concat([head, middle, over, tail])), "an over-limit body streams through byte-identical", `${body.length} vs ${head.length + middle.length + over.length + tail.length}`);
+	check(body.subarray(-tail.length).equals(tail), "the bytes after the overflow chunk are not dropped");
+	check(res.status === 200 && res.headers["set-cookie"] === undefined, "the overflow passthrough keeps status and strips cookies");
+}
+
+// A single chunk larger than the limit must not vanish.
+{
+	const body = Buffer.alloc(20 * 1024 * 1024, 0x61);
+	const res = fakeRes();
+	const upstream = Readable.from([body]);
+	upstream.headers = { "content-type": "text/html" };
+	upstream.statusCode = 200;
+	await respond({ req: { method: "GET", headers: { accept: "text/html" } }, res, upstreamRes: upstream, assets });
+	const got = await res.collected();
+	check(got.equals(body), "a single chunk over the limit passes through whole", `${got.length}/${body.length}`);
+}
+
 // SSE → keepalive injection on silence.
 {
 	const res = fakeRes();
@@ -372,6 +401,27 @@ check((await readPreference(patchLayout, "locale")) === undefined, "insert ops a
 await writeFile(patchPath, "{ not: yaml seq", "utf8");
 check((await readPreference(patchLayout, "locale")) === undefined, "a corrupt patch yields undefined");
 check((await readPreference({ patchPath: join(dir, "missing.yml") }, "locale")) === undefined, "a missing patch yields undefined");
+
+/* ------------------------------------------- language rule (isZhLocale) */
+
+// zh* is Chinese; every other tag, and anything that is not a usable tag, is
+// English. The panel falls back to navigator.language only when the tag is
+// absent or empty, which is why "" answers false here rather than throwing.
+check(isZhLocale("zh"), "zh is Chinese");
+check(isZhLocale("zh-CN"), "zh-CN is Chinese");
+check(isZhLocale("zh-TW"), "zh-TW is Chinese");
+check(isZhLocale("zh-Hans"), "zh-Hans is Chinese");
+check(isZhLocale("ZH-cn"), "the tag is matched case-insensitively");
+check(isZhLocale("  zh  "), "surrounding whitespace is ignored");
+check(isZhLocale("en") === false, "en is English");
+check(isZhLocale("en-US") === false, "en-US is English");
+check(isZhLocale("fr") === false, "fr falls back to English");
+check(isZhLocale("ja") === false, "ja falls back to English");
+check(isZhLocale("de") === false, "de falls back to English");
+check(isZhLocale("") === false, "an empty tag is not Chinese");
+check(isZhLocale(undefined) === false, "an absent tag is not Chinese");
+check(isZhLocale(null) === false, "a null tag is not Chinese");
+check(isZhLocale(42) === false, "a non-string tag is not Chinese");
 
 /* -------------------------------------------------------------- reporting */
 

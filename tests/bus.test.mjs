@@ -50,11 +50,18 @@ check(wire.includes(`"kind":"turn_done"`), "publish reaches the stream", wire.sl
 check(bus.recent().length === 1, "recent keeps published items");
 check(bus.recent()[0].at !== undefined, "recent items are timestamped");
 
+// A reminder record carries its session id end to end, which is what a
+// notification click needs to jump back to the conversation.
+const tagged = bus.publish({ kind: "turn_done", sessionId: "s-42", title: "t", text: "done" });
+check(tagged.sessionId === "s-42", "publish forwards the session id", String(tagged.sessionId));
+check(stream.chunks.join("").includes(`"sessionId":"s-42"`), "the session id reaches the stream");
+check(bus.recent().at(-1).sessionId === "s-42", "recent keeps the session id");
+
 detach();
 check(bus.size() === 0, "detach removes the stream");
 bus.publish({ kind: "question", text: "after detach" });
 check(!stream.chunks.join("").includes("after detach"), "detached stream receives nothing");
-check(bus.recent().length === 2, "recent still records after detach");
+check(bus.recent().length === 3, "recent still records after detach");
 
 /* -------------------------------------------------------------- reporting */
 

@@ -79,6 +79,21 @@ await setMcpEnabled(layout, "mcp-playwright", true);
 servers = await listMcpServers(layout);
 check(servers.find((server) => server.serverName === "playwright")?.enabled === true, "enable removes disabled");
 
+// --- rename moves the row id with the server name --------------------------
+// The bug this guards: renaming used to keep `mcp-<oldName>`, so adding the new
+// name later created a second row.
+await upsertMcpServer(layout, { serverName: "pw2", transport: "stdio", command: "npx", args: ["-y", "@playwright/mcp@latest"] }, "mcp-playwright");
+servers = await listMcpServers(layout);
+check(servers.filter((server) => server.serverName === "pw2").length === 1, "rename keeps a single row", JSON.stringify(servers.map((s) => s.serverName)));
+check(servers.find((server) => server.serverName === "pw2")?.id === "mcp-pw2", "rename writes the canonical row id", servers.find((server) => server.serverName === "pw2")?.id);
+check(servers.find((server) => server.serverName === "pw2")?.config?.toolCallTimeoutMs === 45000, "rename preserves keys the form does not own");
+await upsertMcpServer(layout, { serverName: "pw2", transport: "stdio", command: "npx" });
+servers = await listMcpServers(layout);
+check(servers.filter((server) => server.serverName === "pw2").length === 1, "adding the renamed server again updates in place", String(servers.length));
+const renamed = await readFile(layout.patchPath, "utf8");
+check(!/id:\s*mcp-playwright/u.test(renamed), "the stale row id is gone from the document");
+check(/id:\s*mcp-pw2/u.test(renamed), "the new row id is in the document");
+
 // --- delete ---------------------------------------------------------------
 await deleteMcpServer(layout, "mcp-fetch");
 servers = await listMcpServers(layout);

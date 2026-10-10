@@ -20,7 +20,7 @@ lib/                宿主半边：模块按角色扁平摆放，一个职责一
   client.css        它的样式
   sounds/*.wav      随包音效（资产簇，类比官方 lib/styles/）
   assets/           mobile.css/js、splash.css/js、project.html（远程页面资产，原样送出）
-tests/              同级测试套件（7 个）
+tests/              同级测试套件（8 个）
 locale/             面板文案（en/zh）
 docs/desktop-kit.md 插件自己的文档
 ```
@@ -74,12 +74,16 @@ RT=/f/DSHDesktop/runtime/windows-x64
 BIN="$RT/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 cd /h/My_Software/DSHPlugin                    # 仓库根 = 插件包
 "$RT/node.exe" tests/shared.test.mjs           # 设置默认值/钳制/深合并/落盘（17）
-"$RT/node.exe" tests/bus.test.mjs              # SSE 总线（12）
+"$RT/node.exe" tests/http.test.mjs             # 路由守卫：输入错误 400 / 内部错误 500（5）
+"$RT/node.exe" tests/bus.test.mjs              # SSE 总线（15）
+"$RT/node.exe" tests/notify.test.mjs           # 通知归类（21）
 "$RT/node.exe" tests/skills.test.mjs           # 技能目录：列举/启停/删除/冲突/防穿越（11）
-"$RT/node.exe" tests/zip.test.mjs              # ZIP 解包/发现/解出/导入（35）
-"$RT/node.exe" tests/mcp.test.mjs              # patch 文档编辑：注释与 !!js 标签必须保留（20）
+"$RT/node.exe" tests/zip.test.mjs              # ZIP 解包/发现/解出/导入（42）
+"$RT/node.exe" tests/mcp.test.mjs              # patch 文档编辑：注释与 !!js 标签必须保留（26）
 "$RT/node.exe" tests/remote.test.mjs           # 令牌/隧道 URL/局域网地址/cloudflared 定位（11）
-"$RT/node.exe" tests/proxy.test.mjs            # WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取（80）
+"$RT/node.exe" tests/remote-replay.test.mjs    # 代理 401 重认证重放（5）
+"$RT/node.exe" tests/proxy.test.mjs            # WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取（84）
+"$RT/node.exe" tests/init.test.mjs             # /init 兜底：默认不注册、V4 source 合法（22）
 "$RT/node.exe" .agents/skills/dsh-plugin-authoring/assets/plugin-selftest.mjs .
 "$RT/node.exe" "$BIN" --profile web --dump-config | grep -A3 desktop-kit   # 干跑：确认层与行挂上
 "$RT/node.exe" "$BIN" plugin --profile web add <部署目录绝对路径>            # 装/卸
