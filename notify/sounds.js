@@ -6,14 +6,14 @@
  * the browser half plays them with `HTMLAudioElement`. The file set and the
  * default (`staplebops-02`) are copied from the shell so behavior matches.
  *
- * @module dsh-desktop-kit/lib/sounds
+ * @module dsh-desktop-kit/notify/sounds
  */
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 /** Bundled sound directory, resolved relative to this module. */
-const SOUNDS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "sounds");
+const SOUNDS_DIR = join(dirname(fileURLToPath(import.meta.url)), "sounds");
 
 /** Names matching this pattern are the only ones the route will serve. */
 const SOUND_NAME_PATTERN = /^[a-z0-9][a-z0-9._-]*\.wav$/u;

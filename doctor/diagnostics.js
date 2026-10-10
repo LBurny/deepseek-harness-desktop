@@ -9,7 +9,7 @@
  *     observed (plugin lifecycle, notifications raised, management actions).
  * A bare `~/.dsh` setup therefore still gets a useful panel.
  *
- * @module dsh-desktop-kit/lib/diagnostics
+ * @module dsh-desktop-kit/doctor/diagnostics
  */
 import { open, stat } from "node:fs/promises";
 import { getDshRuntimeVersion } from "@deepseek-ai/dsh-app-boot";

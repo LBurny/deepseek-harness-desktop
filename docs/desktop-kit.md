@@ -23,8 +23,9 @@
 **DSHDesktop 用的 DSH_HOME 是 `%LOCALAPPDATA%\DSHDesktop\dsh-home`，不是 `~/.dsh`。**
 
 ```bash
-# 1) 把插件放到 profile 下
-cp -r plugins/dsh-desktop-kit "$LOCALAPPDATA/DSHDesktop/dsh-home/profiles/plugins/"
+# 1) 把插件放到 profile 下（仓库根就是插件包；装进 profile 的目录名必须等于包名）
+cp -r <本仓根>/. "$LOCALAPPDATA/DSHDesktop/dsh-home/profiles/plugins/dsh-desktop-kit/"
+#    不必拷 .git/、docs/、README*、LICENSE、.agents/
 
 # 2) 装进 web profile（用壳自带运行时里的 dsh）
 NODE="$LOCALAPPDATA/DSHDesktop/../DSHDesktop/runtime/windows-x64/node.exe"   # 见下方"路径"
@@ -52,28 +53,46 @@ cd "$DSH_HOME/profiles/plugins/dsh-desktop-kit" && <运行时>/npm.cmd install
 
 ---
 
-## 两个半边
+## 源码布局（仓库根即插件包）
 
 ```
-浏览器（dsh Web UI 页面）
-  assets/kit.js    启动器 + 面板；CSS zoom；快捷键匹配与录制；EventSource + Notification + Audio；错误上报
-        │  same-origin fetch / EventSource  →  /dshdesk/*
-宿主（dsh 进程内）
-  index.js         命令注册、HTTP 路由、index 注入、宿主事件桥接
-  lib/skills.js    $DSH_HOME/skills ⟷ skills-disabled 目录搬迁 + ZIP 导入
-  lib/zip.js       只读 ZIP 解包器（中央目录、stored/deflate、条目/体积上限、防穿越）
-  lib/mcp.js       cordis.patch.yml 的结构化编辑（保留注释与 !!js 标签）
-  lib/config.js    $DSH_HOME/desktop-kit.json 读写（深合并 + 范围钳制）
-  lib/preference.js 读 profile patch 的 locale/ui-theme 条目（面板语言/主题跟随）
-  lib/bus.js       宿主事件 → SSE 广播
-  lib/diagnostics.js  状态采集 + 日志尾部
-  lib/remote.js     鉴权反向代理（HTTP + WebSocket 升级）+ cloudflared 隧道监督 + 令牌/端口持久化
-  lib/enhance.js    代理响应改写：HTML 注入/viewport/splash、gzip、SSE 保活
-  lib/wsbridge.js   WS 帧桥：原始帧转发 + 静默触发 Ping（对抗 Cloudflare ~100s 空闲斩杀）
-  lib/project.js    手机端「项目」只读路由（会话→工作区解析、目录列举、预览/下载）
-  lib/qr.js          二维码（按需解析 qrcode 包，缺失时退化为只给链接）
-  lib/sounds.js    随包 17 个 WAV
-assets/            mobile.css/js、splash.css/js、project.html（自壳 vendored，路径改到 /dshdesk 前缀）
+index.js            组装根：命令注册、HTTP 路由、index 注入、宿主事件桥接
+cordis.patch.yml    把本插件的行插进 profile 根组（行 id desktop-kit）
+package.json        包名 dsh-desktop-kit（安装后 profile 下的目录名也是它）
+ui/                 浏览器半边 → 经 /dshdesk/* 注入页面
+  kit.js            启动器 + 面板；CSS zoom；快捷键匹配与录制；EventSource + Notification + Audio；错误上报
+  kit.css           面板与启动器样式
+skills/             技能管理
+  skills.js         $DSH_HOME/skills ⟷ skills-disabled 目录搬迁 + ZIP 导入
+  zip.js            只读 ZIP 解包器（中央目录、stored/deflate、条目/体积上限、防穿越）
+  skills.test.mjs   技能库文件操作
+  zip.test.mjs      ZIP 解包/发现/解出/导入
+mcp/                MCP 服务管理
+  mcp.js            cordis.patch.yml 的结构化编辑（保留注释与 !!js 标签）
+  mcp.test.mjs      patch 文档编辑
+doctor/             故障诊断
+  diagnostics.js    状态采集 + 日志尾部
+notify/             任务提醒（弹窗 + 声音）
+  bus.js            宿主事件 → SSE 广播
+  sounds.js         随包 17 个 WAV
+  sounds/*.wav
+  bus.test.mjs      SSE 总线
+remote/             手机远程访问
+  remote.js         鉴权反向代理（HTTP + WebSocket 升级）+ cloudflared 隧道监督 + 令牌/端口持久化
+  enhance.js        代理响应改写：HTML 注入/viewport/splash、gzip、SSE 保活
+  wsbridge.js       WS 帧桥：原始帧转发 + 静默触发 Ping（对抗 Cloudflare ~100s 空闲斩杀）
+  project.js        手机端「项目」只读路由（会话→工作区解析、目录列举、预览/下载）
+  qr.js             二维码（按需解析 qrcode 包，缺失时退化为只给链接）
+  assets/           mobile.css/js、splash.css/js、project.html（自壳 vendored，路径改到 /dshdesk 前缀）
+  proxy.test.mjs    WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取
+  remote-live.mjs   实时端到端（需一个开着远程访问的实例）
+shared/             跨功能的地基
+  http.js           guard/readJson/sendJson/sendBuffer/sendText
+  config.js         $DSH_HOME/desktop-kit.json 读写（深合并 + 范围钳制）
+  paths.js          解析 $DSH_HOME / profile / 技能目录布局
+  preference.js     读 profile patch 的 locale/ui-theme 条目（面板语言/主题跟随）
+  shared.test.mjs   设置默认值/钳制/深合并/落盘
+locale/             面板文案（en/zh）
 ```
 
 ### 为什么不用客户端 UI 插件（`dsh.client`）
@@ -140,7 +159,7 @@ launch token，再走和桌面壳完全一样的 token 兑换。
 
 ### 二维码
 
-面板用 `qrcode` 包生成 SVG 二维码。依赖装在**插件目录内**（`plugins/dsh-desktop-kit/node_modules/`），
+面板用 `qrcode` 包生成 SVG 二维码。依赖装在**插件目录内**（部署后的 `plugins/dsh-desktop-kit/node_modules/`），
 因为壳铺的 `profiles/web/node_modules` 由 pnpm 管理、外装会被拒（实测 `os error 5`）。源码里已随附；
 从零部署时执行：
 
@@ -225,23 +244,30 @@ MCP 编辑用 `yaml` 包的文档 API（与 `dsh-config-editor` 同款技术）�
 
 ## 测试
 
-三级验证都用壳自带运行时（`runtime/windows-x64/node.exe`）跑。**先按安装步骤把插件拷到
-`$DSH_HOME/profiles/plugins/dsh-desktop-kit`**（peer 依赖解析需要 profile 的 node_modules）。
+三级验证都用壳自带运行时（`runtime/windows-x64/node.exe`）跑。源码在仓库根，测试就在各功能目录里，
+**在仓库根跑**；也可以在已部署副本（`$DSH_HOME/profiles/plugins/dsh-desktop-kit`）里跑同样的相对路径。
 
 ```bash
-cd "$DSH_HOME/profiles/plugins/dsh-desktop-kit"
-"$RUNTIME/node.exe" test/unit.test.mjs    # 设置合并/钳制、SSE 总线、技能目录、远程纯函数（51 项）
-"$RUNTIME/node.exe" test/mcp.test.mjs     # patch 文档编辑：注释/!!js 保留、高级键保留（20 项）
-"$RUNTIME/node.exe" test/zip.test.mjs     # ZIP 解包/发现/解出、技能库导入（35 项）
-"$RUNTIME/node.exe" test/proxy.test.mjs   # WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取（80 项）
+cd <本仓根>
+"$RUNTIME/node.exe" shared/shared.test.mjs   # 设置默认值/钳制/深合并/落盘（17 项）
+"$RUNTIME/node.exe" notify/bus.test.mjs      # SSE 总线：attach/publish/detach、recent 缓冲（12 项）
+"$RUNTIME/node.exe" skills/skills.test.mjs   # 技能目录：列举/启停搬迁/删除/冲突/防穿越（11 项）
+"$RUNTIME/node.exe" skills/zip.test.mjs      # ZIP 解包/发现/解出、技能库导入（35 项）
+"$RUNTIME/node.exe" mcp/mcp.test.mjs         # patch 文档编辑：注释/!!js 保留、高级键保留（20 项）
+"$RUNTIME/node.exe" remote/remote.test.mjs   # 令牌、隧道 URL 解析、局域网地址过滤、cloudflared 定位（11 项）
+"$RUNTIME/node.exe" remote/proxy.test.mjs    # WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取（80 项）
 
 # 模块级自检（假 ctx 走一遍 apply 与 handler）
-"$RUNTIME/node.exe" <DSHPlugin>/.agents/skills/dsh-plugin-authoring/assets/plugin-selftest.mjs .
+"$RUNTIME/node.exe" .agents/skills/dsh-plugin-authoring/assets/plugin-selftest.mjs .
 
 # 远程功能的实时检查：需要一个已经装着本插件、且已开启远程访问的实例。
 # 覆盖门岗、HTML 注入、gzip、项目路由、ZIP 上传导入回路、WS 升级、二维码（25 项）
-"$RUNTIME/node.exe" test/remote-live.mjs http://127.0.0.1:<dsh端口>/dshdesk <代理端口> <token>
+"$RUNTIME/node.exe" remote/remote-live.mjs http://127.0.0.1:<dsh端口>/dshdesk <代理端口> <token>
 ```
+
+在仓库根跑需要 `./node_modules/` 里有两个指向运行时的 junction（`yaml` 与整个 `@deepseek-ai` 作用域），
+以及 `qrcode` 已装：三者都在安装步骤里随 `node_modules/` 一起带上；全新克隆后在该目录
+`npm install` 并补 junction 即可。
 
 沙箱端到端（不污染真实 DSH_HOME）见 `.agents/skills/dsh-plugin-authoring/references/repo-delivery.md` §4：
 临时 `DSH_HOME` → `plugin add` → `--dump-config` 看到本行 → `web --port N --no-open` 打印就绪行。

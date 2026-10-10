@@ -3,7 +3,7 @@
  * handlers full response ownership, so these keep the ownership rules in one
  * place: every helper ends the response exactly once.
  *
- * @module dsh-desktop-kit/lib/http
+ * @module dsh-desktop-kit/shared/http
  */
 
 /** Body cap for kit API requests; the payloads are small settings documents. */

@@ -15,7 +15,7 @@
  *    `dsh plugin --profile web add qrcode` produces, which Node's own lookup
  *    from the plugin directory can never reach.
  *
- * @module dsh-desktop-kit/lib/qr
+ * @module dsh-desktop-kit/remote/qr
  */
 import { createRequire } from "node:module";
 import { join } from "node:path";

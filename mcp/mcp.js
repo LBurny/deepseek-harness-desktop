@@ -13,7 +13,7 @@
  * Row ids follow the desktop shell's convention (`mcp-<serverName>`) so both
  * tools address the same rows.
  *
- * @module dsh-desktop-kit/lib/mcp
+ * @module dsh-desktop-kit/mcp/mcp
  */
 import { readFile, readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";

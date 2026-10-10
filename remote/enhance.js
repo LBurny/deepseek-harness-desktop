@@ -20,7 +20,7 @@
  *     comment line every 30 s of silence, inside the SSE spec (EventSource
  *     ignores comments), so the tunnel's ~100 s idle kill never trips.
  *
- * @module dsh-desktop-kit/lib/enhance
+ * @module dsh-desktop-kit/remote/enhance
  */
 import { gzipSync } from "node:zlib";
 

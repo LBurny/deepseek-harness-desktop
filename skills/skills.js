@@ -8,7 +8,7 @@
  * it, and dsh's chokidar watcher hot-refreshes the catalog either way, so no
  * restart is involved. This mirrors the desktop shell's behavior exactly.
  *
- * @module dsh-desktop-kit/lib/skills
+ * @module dsh-desktop-kit/skills/skills
  */
 import { cp, mkdir, readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import { homedir } from "node:os";

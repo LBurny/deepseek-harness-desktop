@@ -10,7 +10,7 @@
  * simply yields `undefined` and the caller falls back (navigator language /
  * system color scheme).
  *
- * @module dsh-desktop-kit/lib/preference
+ * @module dsh-desktop-kit/shared/preference
  */
 import { readFile } from "node:fs/promises";
 import { isMap, isSeq, parseDocument } from "yaml";

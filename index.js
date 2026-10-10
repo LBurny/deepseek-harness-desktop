@@ -12,10 +12,10 @@
  * icon, a native WebView2 zoom call, WinRT toasts and a reverse proxy. None of
  * that exists inside dsh, so the split is:
  *
- *   host half (this file + lib/)  — owns the filesystem and the harness:
+ *   host half (index.js + the feature folders)  — owns the filesystem and the harness:
  *     skills/MCP/zoom/notification settings persisted under `$DSH_HOME`,
  *     slash commands, and a small same-origin HTTP API.
- *   browser half (assets/kit.js)  — owns the page:
+ *   browser half (ui/kit.js)  — owns the page:
  *     a launcher + panel UI, CSS page zoom, a keydown recorder for the zoom
  *     shortcuts, and the Notification API + HTMLAudioElement for reminders.
  *
@@ -33,10 +33,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
 
-import { createNotifyBus } from "./lib/bus.js";
-import { loadConfig, mergeDeep, normalizeConfig, saveConfig } from "./lib/config.js";
-import { collectDiagnostics, createLogRing, readLogs } from "./lib/diagnostics.js";
-import { guard, readJson, readRaw, sendBuffer, sendJson, sendText } from "./lib/http.js";
+import { createNotifyBus } from "./notify/bus.js";
+import { loadConfig, mergeDeep, normalizeConfig, saveConfig } from "./shared/config.js";
+import { collectDiagnostics, createLogRing, readLogs } from "./doctor/diagnostics.js";
+import { guard, readJson, readRaw, sendBuffer, sendJson, sendText } from "./shared/http.js";
 import {
 	deleteMcpServer,
 	importMcpServers,
@@ -44,11 +44,11 @@ import {
 	listMcpServers,
 	setMcpEnabled,
 	upsertMcpServer
-} from "./lib/mcp.js";
-import { resolveLayout } from "./lib/paths.js";
-import { readUiPreferences } from "./lib/preference.js";
-import { createQrRenderer } from "./lib/qr.js";
-import { createRemoteManager } from "./lib/remote.js";
+} from "./mcp/mcp.js";
+import { resolveLayout } from "./shared/paths.js";
+import { readUiPreferences } from "./shared/preference.js";
+import { createQrRenderer } from "./remote/qr.js";
+import { createRemoteManager } from "./remote/remote.js";
 import {
 	deleteSkill,
 	importSkills,
@@ -58,9 +58,9 @@ import {
 	listSkills,
 	setSkillEnabled,
 	skillStats
-} from "./lib/skills.js";
-import { SILENT, SYSTEM_DEFAULT, listSounds, readSound } from "./lib/sounds.js";
-import { mcpStats } from "./lib/mcp.js";
+} from "./skills/skills.js";
+import { SILENT, SYSTEM_DEFAULT, listSounds, readSound } from "./notify/sounds.js";
+import { mcpStats } from "./mcp/mcp.js";
 
 const name = "desktop-kit";
 const inject = ["commands"];
@@ -75,7 +75,7 @@ const SOUND_PATH = `${ROUTE_PREFIX}/sounds/`;
 const QR_PATH = `${ROUTE_PREFIX}/remote/qr.svg`;
 
 /** Bundled assets served to the page. */
-const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "assets");
+const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "ui");
 
 /** Read one bundled asset as UTF-8. */
 async function readAsset(file) {

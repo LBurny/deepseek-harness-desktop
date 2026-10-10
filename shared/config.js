@@ -6,7 +6,7 @@
  * patch-entry config would need a dsh restart (or an HMR round trip) for every
  * zoom-step change. `writeFileAtomic` keeps concurrent saves from truncating.
  *
- * @module dsh-desktop-kit/lib/config
+ * @module dsh-desktop-kit/shared/config
  */
 import { readFile } from "node:fs/promises";
 import { writeFileAtomic } from "@deepseek-ai/dsh-atomic-write";

@@ -26,7 +26,7 @@
  * — a 256-bit random token, compared in constant time, exchanged on first use
  * for an HttpOnly cookie. The token is never logged, and disabling revokes it.
  *
- * @module dsh-desktop-kit/lib/remote
+ * @module dsh-desktop-kit/remote/remote
  */
 import { spawn } from "node:child_process";
 import { randomBytes, timingSafeEqual } from "node:crypto";
@@ -59,7 +59,7 @@ const HOP_BY_HOP = new Set(["connection", "keep-alive", "proxy-authenticate", "p
 /** Browser markers dsh's fence reads; from dsh's point of view the proxy is the origin. */
 const FENCE_MARKERS = ["origin", "referer", "sec-fetch-site", "sec-fetch-mode", "sec-fetch-dest", "sec-fetch-user"];
 /** Vendored mobile/splash/project assets served by the response-side transforms. */
-const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "assets");
+const ASSETS_DIR = join(dirname(fileURLToPath(import.meta.url)), "assets");
 
 /**
  * Load the vendored enhancement assets once. A packaging mistake (missing

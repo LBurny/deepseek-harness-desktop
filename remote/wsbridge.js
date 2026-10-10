@@ -21,7 +21,7 @@
  * and the browser answers the Ping at the protocol level, which keeps the
  * tunnel warm in both directions.
  *
- * @module dsh-desktop-kit/lib/wsbridge
+ * @module dsh-desktop-kit/remote/wsbridge
  */
 
 /** Downstream silence before the proxy emits a Ping of its own. */

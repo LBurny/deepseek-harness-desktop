@@ -13,7 +13,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteMcpServer, listMcpServers, setMcpEnabled, upsertMcpServer } from "../lib/mcp.js";
+import { deleteMcpServer, listMcpServers, setMcpEnabled, upsertMcpServer } from "./mcp.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

@@ -12,9 +12,14 @@
   },
   "files": [
     "index.js",
-    "lib",
-    "assets",
-    "sounds",
+    "skills",
+    "mcp",
+    "doctor",
+    "notify",
+    "remote",
+    "shared",
+    "ui",
+    "locale",
     "cordis.patch.yml"
   ],
   "dsh": {

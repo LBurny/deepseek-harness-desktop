@@ -13,7 +13,7 @@
  * SSE (rather than a websocket) also needs no upgrade route, no extra protocol,
  * and reconnects on its own via `EventSource`.
  *
- * @module dsh-desktop-kit/lib/bus
+ * @module dsh-desktop-kit/notify/bus
  */
 
 /** Keep-alive comment interval; beats intermediate proxy idle timeouts. */

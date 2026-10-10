@@ -16,7 +16,7 @@
  * path must still sit inside the canonical workspace root after `realpath` —
  * junction/symlink escapes are caught by the resolved-prefix check.
  *
- * @module dsh-desktop-kit/lib/project
+ * @module dsh-desktop-kit/remote/project
  */
 import { readdir, readFile, realpath, stat } from "node:fs/promises";
 import { join } from "node:path";

@@ -16,7 +16,7 @@
  *    skipped, so an archive cannot write outside the target directory;
  *  - entry count and total extracted bytes are capped against zip bombs.
  *
- * @module dsh-desktop-kit/lib/zip
+ * @module dsh-desktop-kit/skills/zip
  */
 import { inflateRawSync } from "node:zlib";
 import { mkdir, writeFile } from "node:fs/promises";

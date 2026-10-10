@@ -6,7 +6,7 @@
  * so two `dirname` calls give the active DSH home. That keeps the kit correct
  * whether it runs under the desktop shell (DSH_HOME injected) or a bare CLI.
  *
- * @module dsh-desktop-kit/lib/paths
+ * @module dsh-desktop-kit/shared/paths
  */
 import { dirname, join } from "node:path";
 
