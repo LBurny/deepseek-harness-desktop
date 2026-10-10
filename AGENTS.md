@@ -1,22 +1,36 @@
 # DSHPlugin
 
 给 [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)（dsh，DeepSeek agent harness CLI）
-写插件的工作区。**仓库根就是插件包**（包名 `dsh-desktop-kit`），源码按功能分文件夹：
+写插件的工作区。**仓库根就是插件包**（包名 `dsh-desktop-kit`），结构照 dsh 官方包的样子来：
 
 ```
-index.js            组装根：命令注册、HTTP 路由、index 注入、宿主事件桥接
+package.json        包名 dsh-desktop-kit（部署进 profile 的目录名也是它）；main: lib/index.js
 cordis.patch.yml    把本插件的行插进 profile 根组（行 id desktop-kit）
-package.json        包名 dsh-desktop-kit（部署进 profile 的目录名也是它）
-ui/                 浏览器半边（kit.js/kit.css），经 /dshdesk/* 注入页面
-skills/             技能管理（skills.js + zip.js + 两个测试）
-mcp/                MCP 服务管理（mcp.js + 测试）
-doctor/             故障诊断（diagnostics.js）
-notify/             任务提醒（bus.js + sounds.js + sounds/*.wav + 测试）
-remote/             手机远程访问（remote.js/enhance.js/wsbridge.js/project.js/qr.js
-                    + assets/（mobile/splash/project）+ proxy/remote/remote-live 测试）
-shared/             跨功能地基（http.js/config.js/paths.js/preference.js + 测试）
-locale/             面板文案（en/zh）；docs/desktop-kit.md 是插件自己的文档
+lib/                宿主半边：模块按角色扁平摆放，一个职责一个文件
+  index.js          组装根：命令注册、HTTP 路由、index 注入、宿主事件桥接
+  skills.js zip.js  技能管理（含 ZIP 导入）
+  mcp.js            MCP 服务管理（cordis.patch.yml 结构化编辑）
+  diagnostics.js    故障诊断
+  bus.js sounds.js  通知总线 + 音效
+  remote.js enhance.js wsbridge.js project.js qr.js
+                    手机远程访问：代理/改写/WS 帧桥/项目路由/二维码
+  http.js config.js paths.js preference.js
+                    跨功能地基
+  client.js         浏览器半边（经 /dshdesk/* 注入页面）
+  client.css        它的样式
+  sounds/*.wav      随包音效（资产簇，类比官方 lib/styles/）
+  assets/           mobile.css/js、splash.css/js、project.html（远程页面资产，原样送出）
+tests/              同级测试套件（7 个）
+locale/             面板文案（en/zh）
+docs/desktop-kit.md 插件自己的文档
 ```
+
+`lib/` 扁平、模块按**角色**命名、测试放同级 `tests/`，这是 dsh 官方包的结构：上游
+`packages/core/tools/src/` 是 `index / code-mode / json-schema / presentation / py-types /
+schema / testing / types` 全平铺，`packages/client/ui-plan/src/` 只有 `client/` 一个子目录；
+扫运行时 286 个官方包，`lib/` 下只出现过 `lib/types/`（TS 产物）、`lib/markdown/`、
+`lib/settings-form/`、`lib/styles/`（资产簇）与 `lib/worker/`（独立执行入口），没有按功能分的。
+本插件是手写 JS、无构建步骤，所以 `lib/` 既是源码也是发布产物。
 
 > **前身说明**：本仓克隆自 DSHDesktop（dsh 的 Windows 桌面壳）仓；2026-10-10 清理为纯插件工作区，
 > 壳代码（`src-tauri/`、`src/`、`docs/`、`scripts/` 等）已从工作区删除，git 历史与 origin
@@ -59,13 +73,13 @@ export DSH_HOME='C:/Users/intel/AppData/Local/DSHDesktop/dsh-home'
 RT=/f/DSHDesktop/runtime/windows-x64
 BIN="$RT/dsh/node_modules/@deepseek-ai/dsh/lib/bin.js"
 cd /h/My_Software/DSHPlugin                    # 仓库根 = 插件包
-"$RT/node.exe" shared/shared.test.mjs          # 设置默认值/钳制/深合并/落盘（17）
-"$RT/node.exe" notify/bus.test.mjs             # SSE 总线（12）
-"$RT/node.exe" skills/skills.test.mjs          # 技能目录：列举/启停/删除/冲突/防穿越（11）
-"$RT/node.exe" skills/zip.test.mjs             # ZIP 解包/发现/解出/导入（35）
-"$RT/node.exe" mcp/mcp.test.mjs                # patch 文档编辑：注释与 !!js 标签必须保留（20）
-"$RT/node.exe" remote/remote.test.mjs          # 令牌/隧道 URL/局域网地址/cloudflared 定位（11）
-"$RT/node.exe" remote/proxy.test.mjs           # WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取（80）
+"$RT/node.exe" tests/shared.test.mjs           # 设置默认值/钳制/深合并/落盘（17）
+"$RT/node.exe" tests/bus.test.mjs              # SSE 总线（12）
+"$RT/node.exe" tests/skills.test.mjs           # 技能目录：列举/启停/删除/冲突/防穿越（11）
+"$RT/node.exe" tests/zip.test.mjs              # ZIP 解包/发现/解出/导入（35）
+"$RT/node.exe" tests/mcp.test.mjs              # patch 文档编辑：注释与 !!js 标签必须保留（20）
+"$RT/node.exe" tests/remote.test.mjs           # 令牌/隧道 URL/局域网地址/cloudflared 定位（11）
+"$RT/node.exe" tests/proxy.test.mjs            # WS 帧桥、HTML/gzip/SSE 改写、项目路由、偏好读取（80）
 "$RT/node.exe" .agents/skills/dsh-plugin-authoring/assets/plugin-selftest.mjs .
 "$RT/node.exe" "$BIN" --profile web --dump-config | grep -A3 desktop-kit   # 干跑：确认层与行挂上
 "$RT/node.exe" "$BIN" plugin --profile web add <部署目录绝对路径>            # 装/卸
@@ -78,11 +92,11 @@ cd /h/My_Software/DSHPlugin                    # 仓库根 = 插件包
 - **命令名先到先得**：抢注会把官方插件顶掉（实测启动日志 `1 entry did not activate`）。`/init` 归
   `dsh-command-init`，所以本插件的 `/init` 默认不注册，只在行配置 `provideInit: true` 时兜底。
 - **不要 `dsh plugin --profile web add qrcode`**：壳铺的 `profiles/web/node_modules` 由 pnpm 管理，外装以
-  `os error 5` 失败。依赖装在插件自己目录里，用 `createRequire` 解析（`remote/qr.js`）。
+  `os error 5` 失败。依赖装在插件自己目录里，用 `createRequire` 解析（`lib/qr.js`）。
 - **不要替用户开远程隧道、也不要在没确认时动那份安装版应用**：隧道模式会把 harness 发布到公网
   （链接即凭证），开启与否是用户的选择；装插件前先确认 `dshdesktop.exe` 没在跑。
 - 手机远程访问的可行性依据与代理/升级细节见 `docs/desktop-kit.md` 的「远程访问」一节
-  与 `remote/remote.js` 的模块注释（含"为什么必须自建代理"）。
+  与 `lib/remote.js` 的模块注释（含"为什么必须自建代理"）。
 
 ## 垃圾文件与清理
 

@@ -4,14 +4,14 @@
  * directory. No running harness needed.
  *
  * Run from the repository root:
- *   "$RUNTIME/node.exe" skills/skills.test.mjs
+ *   "$RUNTIME/node.exe" tests/skills.test.mjs
  *
  * zip.test.mjs in the same folder covers the ZIP import machinery separately.
  */
 import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteSkill, listSkills, setSkillEnabled } from "./skills.js";
+import { deleteSkill, listSkills, setSkillEnabled } from "../lib/skills.js";
 
 /** Whether a path exists. */
 async function exists(path) {

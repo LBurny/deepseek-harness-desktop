@@ -9,8 +9,8 @@
 
 - **`dsh-desktop-kit` 插件**——单体 kit 插件，把桌面壳的便利功能搬进 dsh 本体：技能/MCP 管理、
   诊断、页面缩放、任务提醒、快捷键、`/init`、手机远程访问。随 DSHDesktop 安装包预装，
-  本仓是它的源码权威副本。目录：`ui/`（浏览器半边）、`skills/`、`mcp/`、`doctor/`、`notify/`、
-  `remote/`、`shared/`、`locale/`。
+  本仓是它的源码权威副本。结构照 dsh 官方包：`lib/`（宿主半边，模块按角色扁平摆放）+
+  `lib/client.js`（浏览器半边）+ `lib/sounds/`、`lib/assets/`（资产簇）+ `tests/` + `locale/`。
 - **`.agents/skills/dsh-plugin-authoring/`**——插件编写技能：插件契约、打包、安装与排障配方。
 - **`docs/desktop-kit.md`**——插件自身文档：功能地图、设计取舍、安装/卸载、测试、已知限制。
 

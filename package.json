@@ -4,21 +4,14 @@
   "private": true,
   "description": "Desktop-shell features as a dsh plugin: skill & MCP management (incl. ZIP import), diagnostics, page zoom, task reminders (popup + sound), shortcut rebinding, phone remote access with the mobile UI and project browser, and /init.",
   "type": "module",
-  "main": "index.js",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./index.js",
+    ".": "./lib/index.js",
     "./locale/*.json": "./locale/*.json",
     "./package.json": "./package.json"
   },
   "files": [
-    "index.js",
-    "skills",
-    "mcp",
-    "doctor",
-    "notify",
-    "remote",
-    "shared",
-    "ui",
+    "lib",
     "locale",
     "cordis.patch.yml"
   ],

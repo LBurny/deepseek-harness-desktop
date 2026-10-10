@@ -6,7 +6,7 @@
  *
  * Run from a plugin location where dependencies resolve (the sandbox or the
  * deployed profile copy):
- *   "$RUNTIME/node.exe" test/proxy.test.mjs
+ *   "$RUNTIME/node.exe" tests/proxy.test.mjs
  */
 import { createServer, connect } from "node:net";
 import { PassThrough, Readable } from "node:stream";
@@ -15,7 +15,7 @@ import { gunzipSync } from "node:zlib";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { FrameSplitter, bridgeSockets } from "./wsbridge.js";
+import { FrameSplitter, bridgeSockets } from "../lib/wsbridge.js";
 import {
 	clientAcceptsGzip,
 	gzipEligibleType,
@@ -25,9 +25,9 @@ import {
 	respond,
 	rewriteHtmlDocument,
 	wantsHtmlDocument
-} from "./enhance.js";
-import { contained, contentDisposition, handleProjectRoute, listDir, mimeFor, readProjectFile, resolveWorkspace } from "./project.js";
-import { readPreference, readUiPreferences } from "../shared/preference.js";
+} from "../lib/enhance.js";
+import { contained, contentDisposition, handleProjectRoute, listDir, mimeFor, readProjectFile, resolveWorkspace } from "../lib/project.js";
+import { readPreference, readUiPreferences } from "../lib/preference.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

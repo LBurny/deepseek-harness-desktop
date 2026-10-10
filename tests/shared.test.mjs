@@ -3,12 +3,12 @@
  * clamping, deep merge, and load/save round-trips against a temp file.
  *
  * Run from the repository root:
- *   "$RUNTIME/node.exe" shared/shared.test.mjs
+ *   "$RUNTIME/node.exe" tests/shared.test.mjs
  */
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { mergeDeep, normalizeConfig, defaultConfig, loadConfig, saveConfig } from "./config.js";
+import { mergeDeep, normalizeConfig, defaultConfig, loadConfig, saveConfig } from "../lib/config.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

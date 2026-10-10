@@ -1,6 +1,6 @@
 # DSHPlugin
 
-English | [中文说明](README.zh-CN.md)
+English | [中文说明](README.zh.md)
 
 A workspace for writing plugins for [deepseek-harness](https://github.com/deepseek-ai/deepseek-harness)
 (dsh, DeepSeek's agent harness CLI). **The repository root is the plugin package itself** (`dsh-desktop-kit`),
@@ -11,8 +11,9 @@ with its source split into per-feature folders.
 - **The `dsh-desktop-kit` plugin** — an all-in-one plugin that ports the DSHDesktop shell's conveniences
   into dsh itself: skill / MCP management, diagnostics, page zoom, task notifications, shortcuts, `/init`,
   and phone remote access. It ships preinstalled with the DSHDesktop installer and this repo is its
-  authoritative source. Folders: `ui/` (browser half), `skills/`, `mcp/`, `doctor/`, `notify/`,
-  `remote/`, `shared/`, `locale/`.
+  authoritative source. It follows the official dsh package shape: `lib/` (host half, one module
+  per responsibility, flat) + `lib/client.js` (browser half) + `lib/sounds/`, `lib/assets/`
+  (asset clusters) + `tests/` + `locale/`.
 - **`.agents/skills/dsh-plugin-authoring/`** — the authoring skill: the plugin contract, packaging,
   installation and debugging recipes.
 - **`docs/desktop-kit.md`** — the plugin's own documentation: feature map, design trade-offs, install /

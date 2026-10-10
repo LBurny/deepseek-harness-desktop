@@ -4,7 +4,7 @@
  * Run from a plugin location where `yaml` and `@deepseek-ai/dsh-atomic-write`
  * resolve (i.e. `$DSH_HOME/profiles/plugins/dsh-desktop-kit`), with the bundled node:
  *
- *   "$RUNTIME/node.exe" test/mcp.test.mjs
+ *   "$RUNTIME/node.exe" tests/mcp.test.mjs
  *
  * What it guards: edits must not damage the rest of the shared patch document —
  * other rows, user comments, and `!!js` expression tags all have to survive a
@@ -13,7 +13,7 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { deleteMcpServer, listMcpServers, setMcpEnabled, upsertMcpServer } from "./mcp.js";
+import { deleteMcpServer, listMcpServers, setMcpEnabled, upsertMcpServer } from "../lib/mcp.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

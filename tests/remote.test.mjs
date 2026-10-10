@@ -3,11 +3,11 @@
  * LAN address filtering and cloudflared discovery. No running harness needed.
  *
  * Run from the repository root:
- *   "$RUNTIME/node.exe" remote/remote.test.mjs
+ *   "$RUNTIME/node.exe" tests/remote.test.mjs
  */
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { findCloudflared, generateToken, lanAddresses, parseTunnelUrl } from "./remote.js";
+import { findCloudflared, generateToken, lanAddresses, parseTunnelUrl } from "../lib/remote.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

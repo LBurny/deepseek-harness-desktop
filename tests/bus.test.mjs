@@ -3,9 +3,9 @@
  * buffer. No filesystem and no running harness needed.
  *
  * Run from the repository root:
- *   "$RUNTIME/node.exe" notify/bus.test.mjs
+ *   "$RUNTIME/node.exe" tests/bus.test.mjs
  */
-import { createNotifyBus } from "./bus.js";
+import { createNotifyBus } from "../lib/bus.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

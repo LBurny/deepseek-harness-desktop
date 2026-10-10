@@ -5,14 +5,14 @@
  * here in memory.
  *
  * Run from a plugin location where dependencies resolve:
- *   "$RUNTIME/node.exe" test/zip.test.mjs
+ *   "$RUNTIME/node.exe" tests/zip.test.mjs
  */
 import { deflateRawSync } from "node:zlib";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { discoverZipSkills, extractZipPrefix, listEntries, normalizeEntryName, readEntry, ZipError } from "./zip.js";
-import { importZipSkills, inspectZipSkills } from "./skills.js";
+import { discoverZipSkills, extractZipPrefix, listEntries, normalizeEntryName, readEntry, ZipError } from "../lib/zip.js";
+import { importZipSkills, inspectZipSkills } from "../lib/skills.js";
 
 const results = [];
 const check = (ok, label, detail = "") => results.push({ ok, label, detail });

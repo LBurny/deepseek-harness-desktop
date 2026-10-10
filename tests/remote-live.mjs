@@ -92,7 +92,7 @@ const documentAccept = "text/html,application/xhtml+xml,application/xml;q=0.9,*/
 const index = await raw(`${proxy}/`, { ...cookie, accept: documentAccept });
 const html = await index.text();
 check(index.status === 200, "cookie authenticates the index", String(index.status));
-check(html.includes("dshdesk/kit.js"), "the harness index is served through the proxy (with our injection)");
+check(html.includes("dshdesk/client.js"), "the harness index is served through the proxy (with our injection)");
 
 const api = await raw(`${proxy}/dshdesk/api/state`, cookie);
 const apiJson = await api.json().catch(() => ({}));
