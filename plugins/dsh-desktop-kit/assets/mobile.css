@@ -1,0 +1,535 @@
+/*
+ * DSHDesktop 远程访问移动端适配：代理转发 dsh 的 HTML 文档时注入（proxy.rs）。
+ *
+ * 断点 700px：桌面壳窗口最小宽 900px 永远命中不到，仅手机/窄窗远程访问生效。
+ * 选择器只锚两类稳定目标——语义钩子（[role="dialog"]、data-sidebar-collapsed 等
+ * 源码属性）与 CSS Modules 本地名子串（[class*="_nav"]，哈希前缀随 dsh 版本变化
+ * 不影响匹配）。上游若改名，对应规则静默失效：页面回到未适配状态，不破坏功能。
+ */
+
+/* mobile.js 注入的信息标签/面板：仅 ≤700px 生效，宽屏（含窗口拉窄后又放大）隐藏 */
+[data-dshmobile-tab],
+[data-dshmobile-info] {
+  display: none;
+}
+
+/*
+ * 项目标签/面板（mobile.js 注入，iframe 指向 /dshdesk/remote/project（插件代理自有路由））。
+ * 不受 700px 断点限制：远程宽屏（iPad 横屏等）同样可用；桌面壳窗口直连
+ * dsh 不经代理，天然不可见。面板几何与信息面板同款（顶边 JS 量取、z5
+ * 低于输入条座）；宽屏下原生激活标签的视觉降级在此补一份（≤700px 的
+ * 同款规则在下方媒体查询内）。
+ */
+[data-dshmobile-project-tab] {
+  display: block;
+}
+[data-dshmobile-project-tab][data-active] {
+  color: var(--dsw-alias-state-business-primary);
+}
+[data-dshmobile-project-tab][data-active]::after {
+  background: var(--dsw-alias-state-business-primary);
+}
+[class*="_tabs"][data-dshmobile-open] [class*="_tabActive"] {
+  color: var(--dsw-alias-label-tertiary);
+}
+[class*="_tabs"][data-dshmobile-open] [class*="_tabActive"]::after {
+  background: 0 0;
+}
+[data-dshmobile-project] {
+  display: none;
+}
+[class*="_root"][data-dshmobile-project-open] {
+  position: relative;
+}
+[data-dshmobile-project-open] > [data-dshmobile-project] {
+  display: block;
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 5;
+  background: var(--dsw-alias-bg-base);
+}
+[data-dshmobile-project] > iframe {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+
+@media (max-width: 700px) {
+  /*
+   * 设置弹窗：全屏化，左侧 188px 固定导航列改顶部横向 tab 条。
+   * 原布局在手机上弹窗仅 ~342px 宽，导航列不收缩，内容区不足百像素，
+   * 文字被压成一字一行竖排。
+   */
+  [role="dialog"][class*="_panel"]:has(> [class*="_nav"]) {
+    width: 100vw;
+    max-width: none;
+    height: 100vh;
+    height: 100dvh;
+    max-height: none;
+    border-radius: 0;
+    flex-direction: column;
+  }
+  [role="dialog"][class*="_panel"]:has(> [class*="_nav"]) > [class*="_nav"] {
+    width: 100%;
+    flex: 0 0 auto;
+    flex-direction: row;
+    align-items: center;
+    gap: 4px;
+    padding: 10px 8px 0;
+    overflow-x: auto;
+  }
+  /* “设置”标题在顶部 tab 条里纯属占位，省出纵向空间 */
+  [role="dialog"][class*="_panel"]:has(> [class*="_nav"]) [class*="_navTitle"] {
+    display: none;
+  }
+  [role="dialog"][class*="_panel"]:has(> [class*="_nav"]) [class*="_navList"] {
+    flex: 1 1 auto;
+    flex-direction: row;
+    gap: 2px;
+    overflow-x: auto;
+  }
+  [role="dialog"][class*="_panel"]:has(> [class*="_nav"]) [class*="_navCell"] {
+    flex: 0 0 auto;
+    height: 36px;
+    padding: 6px 12px;
+    white-space: nowrap;
+  }
+  [role="dialog"][class*="_panel"]:has(> [class*="_nav"]) > [class*="_content"] {
+    flex: 1 1 auto;
+    min-height: 0;
+  }
+
+  /*
+   * 侧栏展开改抽屉。dsh narrow 模式（<1024px）下展开侧栏仍占 280px 固定
+   * 网格轨，主区被压到 viewport-280（390px 手机只剩 110px，首页标语竖排）。
+   * 抽屉化：轨道归零、侧栏内容溢出覆盖主区，z-index 抬到内容之上。
+   * data-sidebar-collapsed 展开时不存在（React void 0 移除属性），:not 即展开态。
+   */
+  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) {
+    grid-template-columns: 0 minmax(0, 1fr) 0 !important;
+  }
+  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) > [class*="_sidebarCol"] {
+    position: relative;
+    z-index: 30;
+    overflow: visible;
+  }
+  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) > [class*="_sidebarCol"] > [class*="_root"],
+  [class*="_frame"]:has(> [class*="_sidebarCol"]):not([data-sidebar-collapsed]) > [class*="_sidebarCol"] > [data-slot="sidebar"] > [class*="_root"] {
+    /* 0.2.0 起根节点带行内 width:280px（须 !important 才压得过），且 sidebarCol
+       与根之间多了 display:contents 的槽位包装（子选择器按 DOM 树匹配，必须
+       多写一层包装变体；两条变体并留以同时兼容新旧包装形态） */
+    width: min(300px, 84vw) !important;
+    box-shadow: 16px 0 40px rgba(0, 0, 0, 0.3);
+  }
+  /* 列宽拖拽手柄触屏无用且会挡住边缘触控 */
+  [class*="_frame"]:has(> [class*="_sidebarCol"]) > [class*="_handle"] {
+    display: none;
+  }
+
+  /*
+   * 输入区底栏：模型选择器图标化（手机端惯例：栏内只留图标，具体型号在点开的
+   * 二级菜单里选）。trailing 组 flex 0 0 auto 不收缩（手机上 262px/292px），
+   * 前导 + 按钮被压到 2px 宽并与模型名重叠；允许收缩 + 文案隐藏后整行只余图标。
+   */
+  [class*="_trailing"] {
+    flex: 0 1 auto;
+    min-width: 0;
+  }
+  /* 模型触发器锚 data-slot 语义钩子（conversation.input.model）。旧锚点
+     "_triggerEffort 段" 上游已删（0.4.5 后实测），整组规则曾静默失效：
+     全名药丸在窄屏溢出截断、与发送键挤行——上游改标记时这里的表现就是
+     "回到未适配态"，改版后须手机视口回归一遍。权限触发器的文案上游在
+     窄屏已自行隐藏，无需处理。
+     触发器有两段文案：模型名（_triggerLabel）与推理等级（_triggerEffort），
+     两段都要隐藏。无 API key 时等级段显示 providerDefault 文案 "Default"
+     （有 key 时显示 "High" 等等级名）——只藏模型名会留下裸文本药丸，
+     宽度把 trailing 组挤换行（实踩：无 key 机器上 "✦ Default ⌄" 与发送键
+     被挤到第二行）。 */
+  [data-slot="conversation.input.model"] [class*="_triggerLabel"],
+  [data-slot="conversation.input.model"] [class*="_triggerEffort"] {
+    display: none;
+  }
+  /* 原生模型图标：0.1.5 起触发器自带一枚 triggerIcon（IconDataOutline16），但上游
+     只在容器 ≤360px 时显示（@container 查询里 display:block，默认 display:none）。
+     我们把两段文案藏到 700px，而 361~700px 区间上游不显示图标 → 触发器只剩一个箭头，
+     故在断点内显式点亮原生图标（选择器特异性高于上游的 display:none，与注入顺序无关）。
+     历史：上游还没有图标时，这里是我们自己用 ::before 补的一枚火花 SVG；0.1.5 上游
+     自带图标后就成了「我们的火花 + 上游的数据图标」两枚并排（手机端实拍，用户反馈
+     "重复了"），已删掉自造的、只留上游那一枚。 */
+  [data-slot="conversation.input.model"] [class*="_triggerIcon"] {
+    display: block;
+  }
+
+  /*
+   * 输入区底栏等距排版：原生工具行的 flex gap 虽恒为 12px，但各件盒子宽度不一
+   * （"+"/附件 28px 实心圆、权限/模型触发器 44~46px 且 padding 左 8 右 4 不对称、
+   * 发送键 34px），触发器尾部还各拖一枚 chevron——视觉间距实测 12/20/32/22/18px
+   * 全不一样（0.5.13 手机实拍，用户反馈"都不等距"）。手机端惯例栏内只留图标
+   * （与上方模型触发器藏文案同理）：① 行内两枚触发器 chevron 一并藏掉——本地名
+   * _chevron 实测落盘两包（dsh-client-ui-model-selection 的 svg 与
+   * dsh-client-ui-permission-presets 的 span），工具行内没有别的 chevron；
+   * ② 行内全部按钮统一 32×32 盒、padding 归零、内容居中（发送键 34→32 一并
+   * 拉齐，主操作靠蓝色填充区分而非尺寸），配合组内恒 12px gap 得 44px 均匀
+   * 节拍；组间仍由 space-between 留白分隔，宽至 700px 组距随之拉大属原生行为。
+   * 锚点 scoped 到输入卡片工具行 [class*="_row"]:has(> [class*="_tools"])：
+   * _tools 本地名全 node_modules 仅会话包独有，而 _trailing 与
+   * dsh-client-ui-input-trigger 弹窗组件撞名（其 _trailing 是行尾 inline-flex
+   * 段），故右侧组选择器必须挂在"含 _tools 的 _row"之下，不能裸匹配
+   * [class*="_trailing"]。_row/_tools 这类词做字节探针太泛（任意 JS 串都含
+   * "tools"），契约套件只守 _chevron（upstream::COMPOSER_TRIGGER_CHEVRON_NEEDLE），
+   * 行形状靠跟版时手机端七步法回归。上游改名则规则静默失效、回到原生不等距
+   * 排版，功能不损。实测 360/390/500/700px 组内间距恒 12px 无溢出，720px
+   * 断点外原生全名药丸恢复。
+   */
+  [class*="_row"]:has(> [class*="_tools"]) [class*="_chevron"] {
+    display: none;
+  }
+  [class*="_row"]:has(> [class*="_tools"]) :is([class*="_tools"], [class*="_trailing"]) button {
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    flex: 0 0 auto;
+    justify-content: center;
+  }
+
+  /*
+   * 输入框字号抬到 16px：iOS WKWebView（含微信内置浏览器）聚焦 font-size<16px
+   * 的输入框时自动放大整页、收起键盘后不复原（0.5.4 手机实拍实踩——标签栏与
+   * 输入框被推出可视区）。proxy.rs 已把 viewport meta 改写为禁缩放形态作为主
+   * 防线，本规则是双保险：上游改了 meta 值导致改写 miss 时，16px 字号从触发
+   * 条件上消灭缩放。composer 实测字号 var(--dsh-content-font-size,14px)，锚点
+   * composerStack（native 对话输入卡片祖先）+ 输入控件；0.2.0 起输入框从
+   * textarea 改为 Lexical contenteditable div（role=textbox），两个选择器都要
+   * 覆盖（0.2.0 跟版实测：只留 textarea 时整条规则落空）；16px 会把
+   * line-height(calc(24px+delta)) 顶高一档，行高跟随无碍。
+   */
+  [class*="_composerStack"] textarea,
+  [class*="_composerStack"] [contenteditable="true"] {
+    font-size: 16px;
+  }
+
+  /*
+   * 模型二级菜单越界：菜单 absolute right:0 相对 45px 药丸定位，宽 281px 时
+   * 左缘越出屏幕被裁（模型列表 "-V4-Flash" 左半截）。药丸根改静态定位，包含
+   * 块上移到输入卡片（trailing/row 均 static，卡片是第一个 relative 祖先），
+   * right:0 对齐卡片右缘；上游菜单纵向锚 bottom:36px（相对 28px 药丸=贴药丸
+   * 上方），落到卡片上会叠进输入行——显式 bottom:calc(100%+8px) 抬到卡片
+   * 上方弹出。max-width 兜底超长模型名，菜单内部滚动。
+   */
+  [data-slot="conversation.input.model"] > [class*="_root"] {
+    position: static;
+  }
+  [data-slot="conversation.input.model"] [class*="_menu"] {
+    left: auto;
+    right: 0;
+    top: auto;
+    bottom: calc(100% + 8px);
+    max-width: calc(100vw - 24px);
+    overflow-y: auto;
+  }
+
+  /*
+   * 消息页脚统计（_timeEnd：时间 · 用时 · 首 token · tok/s）：单行 nowrap
+   * 约 367px，手机 ~320px 的内容宽必然溢出窗口右缘；允许换行则第二行压进
+   * 输入卡片被遮挡（实踩）。统计在"信息"标签页已有归处（mobile.js 回合
+   * 统计面板），页脚只留操作图标、保持原生单行 28px。
+   */
+  [class*="_timeEnd"] {
+    display: none;
+  }
+
+  /*
+   * 目录浏览对话框（picker.rs 钉的 browse 交互）：原生高度上限 500px，手机
+   * 844px 视口上下留白过大、列表仅 ~9 行。放宽到近全屏（保留 24px 上下边距
+   * 与圆角，与其它弹窗视觉一致）。Miller 双栏横滚 + JS 自动钉右是上游的
+   * 手机形态，不动。
+   * 锚点 _millerRow 是该包独有的 CSS Modules 本地名（全 node_modules 已核实），
+   * :has 限定不误伤设置弹窗；上游改名则回到 500px 上限，功能不损。
+   */
+  [role="dialog"]:has([class*="_millerRow"]) {
+    height: calc(100dvh - 48px);
+  }
+
+  /*
+   * 同上对话框的 footer：原生四控件（新建文件夹 / 显示隐藏文件 / 取消 / 打开）
+   * flex-wrap:wrap 在手机上把"打开"挤到第二行，且弹性占位把行撑得参差不齐。
+   * pickerpatch.rs 已把隐藏条目改为默认显示（手机端没有频繁切换的需求），
+   * 开关整个移除，剩三控件一行均分：nowrap、去掉 footerGap、三项 flex 等分、
+   * 按钮 min-width 归零并收紧内边距（原生 72px 最小宽 + 24px 侧距在 390px
+   * 视口必然换行）。
+   */
+  [role="dialog"]:has([class*="_millerRow"]) [class*="_footerBar"] {
+    flex-wrap: nowrap;
+    gap: 6px;
+    padding: 10px 12px;
+  }
+  [role="dialog"]:has([class*="_millerRow"]) [class*="_footerGap"] {
+    display: none;
+  }
+  [role="dialog"]:has([class*="_millerRow"]) [class*="_showHiddenToggle"] {
+    display: none;
+  }
+  [role="dialog"]:has([class*="_millerRow"]) [class*="_footerBar"] > * {
+    flex: 1 1 0;
+    min-width: 0;
+    padding-left: 4px;
+    padding-right: 4px;
+  }
+
+  /*
+   * 回合统计行（N 轮 N 步 | token 用量两枚药丸，dsh-client-ui-chat 的 StatsPills）
+   * 内容单行 nowrap，手机宽度必然从中截断（"38.1K tok ·…"贴着屏幕下缘）。
+   * 正常路径：mobile.js 在"对话/轨迹"旁加"信息"标签，统计行克隆进面板（见
+   * mobile.js），打 data-dshmobile-enhanced 后原行隐藏。
+   * 兜底路径（JS 失效/统计行未渲染）：信息全保留，隐藏分隔点、改弹性换行
+   * （约两行居中），条目内部不断行。
+   * 锚点：上游 0.1.5 给该行挂的稳定属性 data-composer-stats。旧锚点
+   * （composerStack 内"直接子代含分隔符的 _root"）在 0.1.5 已失配——分隔点"·"
+   * 挪进了药丸 label 内部，root 的直接子代只剩 .anchor，:has(> _sep) 永假，
+   * 原行就留在输入区下方不走了（0.5.13 手机实拍）。选择器特异性
+   * (0,2,1) 高于上游 (0,1,0)，与注入顺序无关。
+   */
+  html:not([data-dshmobile-enhanced]) [data-composer-stats] {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 2px 10px;
+    padding-left: 8px;
+    padding-right: 8px;
+    white-space: normal;
+    overflow: visible;
+  }
+  html:not([data-dshmobile-enhanced]) [data-composer-stats] [class*="_sep"] {
+    display: none;
+  }
+  html:not([data-dshmobile-enhanced]) [data-composer-stats] span {
+    white-space: nowrap;
+  }
+  html[data-dshmobile-enhanced] [data-composer-stats] {
+    display: none;
+  }
+
+  /*
+   * 上下文用量圆环药丸（ContextMeter，0.2.0 上游在 composer dock 新增）：手机端
+   * 它单独挂在输入框下方同样突兀，与统计行同款处理——mobile.js 克隆进信息页、
+   * 原节点在增强生效的窄断点内隐藏。
+   * 锚点 = 槽位锚 [data-slot="conversation.composer.dock"] 的**兄弟** span 且其
+   * 直接子代是 button[aria-haspopup="dialog"]：药丸根本地名（JObwrW_root 之类的
+   * 哈希前缀随版本变）与 aria 文案（"上下文已用 N%"/"N% of context used"）都不能
+   * 钉；而裸写 button[aria-haspopup="dialog"] 会误伤统计行里的 TimePill/UsagePill
+   * （同属性、也开 dialog），故必须限定为槽位锚的直接兄弟。药丸**仅在 context
+   * pressure 数据存在时渲染**，规则缺席无害（不渲染就无节点可藏）。
+   * 选择器特异性 (0,3,1) 高于上游 (0,1,0)，与注入顺序无关。
+   */
+  html[data-dshmobile-enhanced] [data-slot="conversation.composer.dock"] ~ span:has(> button[aria-haspopup="dialog"]) {
+    display: none;
+  }
+
+  /*
+   * dsh 插件管理页头部（0.2.0 自带插件页）：pageHead 是 space-between 单行
+   * flex（标题组 + 工具组），两侧都不收缩、页面全文件没有一条窄屏媒体查询
+   * （仅 prefers-reduced-motion）——390px 实测（0.5.22 手机截图）"添加插件"
+   * 主按钮被压到文字换行（"添加插 / 件"）、intro 描述折行后 info 图标孤零零
+   * 悬在第二行。只动弹性、不藏控件：
+   * ① 主按钮 nowrap + flex:none——文字永不换行，空间不足时让左侧组收缩；
+   * ② 工具组 flex:none 整体不被压缩；
+   * ③ 左侧标题组 min-width:0 允许收缩（宽屏原样）；
+   * ④ intro 改单行、文案段省略号截断——描述是装饰性文案（完整说明在 ⓘ 的
+   *    tooltip 里，可点），截断不损功能，info 图标随单行排布不再孤行。
+   * 锚 [data-plugin-panel]：上游 section 的语义属性（client.js 里逐字可寻，
+   * upstream::PLUGIN_PANEL_HOOK 契约守门），哈希无关、不与其它页面撞名；
+   * 头部行内再限定 header[class*="_pageHead"] 与 [class*="_toolbar"]/
+   * [class*="_addButton"] 本地名子串（同页 class map 唯一）。
+   */
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] > div:first-child {
+    min-width: 0;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_toolbar"] {
+    flex: none;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_addButton"] {
+    white-space: nowrap;
+    flex: none;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_pageIntro"] {
+    white-space: nowrap;
+  }
+  html[data-dshmobile-enhanced] [data-plugin-panel] header[class*="_pageHead"] [class*="_pageIntro"] > span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /*
+   * 会话头部"更多操作"图标按钮（28px 圆角图标按钮）：手机端直接隐藏——它弹出的
+   * 菜单只有"下载 session 日志"，手机上没人翻日志（要看也在 PC 端看），且它悬浮
+   * 盖住旁边的"N 个后台任务运行中"文案（0.5.5 手机实拍）。
+   * 0.1.5 语义变更：旧版是文字药丸"Session log"下载按钮（本地名 sessionLogButton），
+   * 上游改为 moreButton 图标按钮、下载动作收进菜单——锚点随之改。
+   * 选择器写两遍凑 0-2-0 优先级——上游样式由 JS 运行时注入、文档序在我们之后，
+   * 平级优先级必输。锚点 _moreButton 本地名子串（全 node_modules 仅此一包命中）；
+   * 上游再改名则按钮复原显示，功能不损。
+   */
+  [class*="_moreButton"][class*="_moreButton"] {
+    display: none;
+  }
+
+  /*
+   * 会话头部标题行（titleRow）：标题钉住 + 药丸横向滑动条。
+   *
+   * 原生形状（dsh-client-ui-conversation 的 ConversationRoot）：
+   *   header(titleRow) ├ titleCluster(gap10) ├ crumbs(标题面包屑)  └ headerActions
+   *                   ├ headerUtilities(margin-left 20)  ← "打开方式" + 更多(已隐藏)
+   *                   └ headerCorner(margin-left 8 / margin-right -16) ← 右栏开关
+   * headerActions 是槽位 conversation.session.header.actions，0.2.0 起四名
+   * 贡献者（subagent-catalog / agent-team / agent-preset / job-list），各包
+   * 一个 display:contents 的槽位包装（不生成盒子，其子代才是 flex item）。
+   *
+   * 0.1.5 时代标题归零+固定件重叠由 0.5.18 首修（逐件调下限）。0.2.0 药丸
+   * 多两枚后任务运行场景又坏（0.5.22 手机实拍：子智能体计数逐字竖排六行、
+   * 头部 76→160px、后台任务药丸被顶出屏外），根因三条全在上游：计数 label
+   * 是 .count 死引用（CSS module 无此键→无类名裸 span→零 nowrap 约束）；
+   * jobs root 无 min-width:0 不可收缩；上游 label 自带 @container 窄屏隐藏
+   * 不需要我们干预。
+   *
+   * 对策（0.5.23，用户裁定替代逐药丸调下限的硬编码路线）：药丸区整体改
+   * 横向滑动条——与设置弹窗导航条同款交互。药丸保持天然宽度（> * > *
+   * 结构锚穿透 display:contents 包装钉 flex:none），容器 overflow-x:auto
+   * 收纳溢出：压缩消失，竖排/折行/重叠在机制上不可能发生，上游未来新增
+   * 药丸自动进条、壳零适配。标题 crumbs 保持弹性 + min(76px,20vw) 下限
+   * 钉在条外，恒可见、超宽省略。滚动条双隐藏（standard + webkit）：手机
+   * 本是 overlay 滚动条零占位，桌面远程 Chromium 经典滚动条会把头部撑高
+   * 3px，一并消掉；overscroll-behavior:contain 防横向滑到尽头链到页面级
+   * 回弹/手势。选择器必须限定 header[class*="_header"] 之下——
+   * [class*="_headerActions"] 裸匹配会命中侧栏的 bhn1Oq_headerActions
+   * （div，不在 <header> 内）。本地名前缀（wSkVaW_ 等）随构建变，只按
+   * 子串匹配；改名则规则静默失效、退回原生挤压形态，功能不损。
+   */
+  header[class*="_header"] {
+    padding: 10px 12px 0 12px;
+  }
+  header[class*="_header"] [class*="_headerUtilities"] {
+    margin-left: 12px;
+  }
+  header[class*="_header"] [class*="_headerCorner"] {
+    margin-left: 4px;
+    margin-right: 0;
+  }
+  header[class*="_header"] [class*="_titleCluster"] {
+    gap: 8px;
+  }
+  header[class*="_header"] [class*="_crumbs"] {
+    flex: 1 1 auto;
+    min-width: min(76px, 20vw);
+  }
+  header[class*="_header"] [class*="_headerActions"] {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+    overscroll-behavior: contain;
+  }
+  header[class*="_header"] [class*="_headerActions"]::-webkit-scrollbar {
+    display: none;
+  }
+  header[class*="_header"] [class*="_headerActions"] > * > * {
+    flex: none;
+  }
+
+  /*
+   * 信息标签页（mobile.js 注入）。标签类名克隆自原生标签，此处只补激活态
+   * （对齐原生 _tabActive：主题主色 + 2px 下划线）；信息页打开时把原生激活
+   * 标签视觉降级为未激活——React 状态不动，纯视觉转移。
+   */
+  [data-dshmobile-tab] {
+    display: block;
+  }
+  [data-dshmobile-tab][data-active] {
+    color: var(--dsw-alias-state-business-primary);
+  }
+  [data-dshmobile-tab][data-active]::after {
+    background: var(--dsw-alias-state-business-primary);
+  }
+  [class*="_tabs"][data-dshmobile-open] [class*="_tabActive"] {
+    color: var(--dsw-alias-label-tertiary);
+  }
+  [class*="_tabs"][data-dshmobile-open] [class*="_tabActive"]::after {
+    background: 0 0;
+  }
+
+  /*
+   * 信息面板：绝对定位盖在会话区上（顶边=头部高，由 JS 量取），z-index 5
+   * 低于输入条座（z 7）——面板不挡输入，查看统计时仍可继续发问。
+   */
+  [class*="_root"][data-dshmobile-info-open] {
+    position: relative;
+  }
+  [data-dshmobile-info-open] > [data-dshmobile-info] {
+    display: block;
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 5;
+    overflow-y: auto;
+    background: var(--dsw-alias-bg-base);
+  }
+  [data-dshmobile-info-card] {
+    margin: 16px;
+    padding: 16px 18px;
+    border: 1px solid var(--dsw-alias-border-l1);
+    border-radius: 12px;
+    background: var(--dsw-alias-bg-layer-1);
+  }
+  [data-dshmobile-info-card] h2 {
+    margin: 0 0 12px;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--dsw-alias-label-tertiary);
+  }
+  /* 统计克隆：面板内每条指标独占一行（原行的 | 分隔符不再显示） */
+  [data-dshmobile-info-body] [data-dshmobile-stats] {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 0;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    max-width: none;
+    width: auto;
+    font-size: 13px;
+    color: var(--dsw-alias-label-primary);
+  }
+  /* 旧形状（0.1.2 线）行内直接子代分隔符不再显示；0.1.5 的分隔点在药丸 label
+     内部（"N 轮 N 步 · 38 tok/s"），只能藏行级的，别把药丸内部的也藏了——
+     否则计数与速率文本会粘在一起 */
+  [data-dshmobile-info-body] [data-dshmobile-stats] > [class*="_sep"] {
+    display: none;
+  }
+  /* 圆环克隆件（mobile.js 排在统计行上方）：横向一行——圆环 svg + 百分比读数，
+     字号/色值与统计行克隆件对齐。圆环 svg 原生 14px，无需额外规则。 */
+  [data-dshmobile-info-body] [data-dshmobile-context] {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 0;
+    text-align: left;
+    white-space: normal;
+    overflow: visible;
+    max-width: none;
+    width: auto;
+    font-size: 13px;
+    color: var(--dsw-alias-label-primary);
+  }
+  [data-dshmobile-empty] {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.6;
+    color: var(--dsw-alias-label-tertiary);
+  }
+}

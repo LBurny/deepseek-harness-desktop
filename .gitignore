@@ -1,28 +1,13 @@
 # 依赖与构建产物
 node_modules/
 dist/
-src-tauri/target/
-src-tauri/gen/
-
-# 内嵌运行时由 scripts/fetch-runtime.ps1 生成，不入库
-src-tauri/runtime/*
-!src-tauri/runtime/.gitkeep
 
 # 系统杂项
 .DS_Store
 Thumbs.db
 
-# 内部实施计划文档，仅本地留存，不入库
-docs/superpowers/
-
 # 工具产物
 .playwright-mcp/
-
-# 博客文章，仅本地留存，不入库
-docs/blog.zh-CN.md
-
-# dev 模式真实运行时副本（DSHDESKTOP_RUNTIME_DIR 指向），不入库
-.dev-runtime/
 
 # 本机垃圾暂存区：清理时的落点（可删但先别删的东西），仅本地留存、永不入库
 .trash/

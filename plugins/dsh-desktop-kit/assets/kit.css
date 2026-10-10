@@ -1,0 +1,341 @@
+/*
+ * dsh-desktop-kit panel styles.
+ *
+ * Everything is scoped under `#dshkit` so the injected stylesheet cannot leak
+ * into dsh's own UI. Colours come from CSS variables with a dark-mode override,
+ * and the panel follows the host page's light/dark scheme rather than forcing one.
+ */
+#dshkit-root,
+#dshkit-root * {
+	box-sizing: border-box;
+}
+
+#dshkit-root {
+	--dshkit-bg: #ffffff;
+	--dshkit-fg: #1c1f23;
+	--dshkit-muted: #6b7280;
+	--dshkit-border: #e4e6eb;
+	--dshkit-hover: #f3f4f6;
+	--dshkit-accent: #4d6bfe;
+	--dshkit-danger: #d64545;
+	--dshkit-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+	position: fixed;
+	inset: 0;
+	z-index: 2147483000;
+	pointer-events: none;
+	font: 13px/1.5 -apple-system, "Segoe UI", "Microsoft YaHei", system-ui, sans-serif;
+	color: var(--dshkit-fg);
+}
+
+@media (prefers-color-scheme: dark) {
+	#dshkit-root {
+		--dshkit-bg: #1e2126;
+		--dshkit-fg: #e8eaed;
+		--dshkit-muted: #9aa0a6;
+		--dshkit-border: #34383e;
+		--dshkit-hover: #2a2e34;
+		--dshkit-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+	}
+}
+
+/*
+ * Explicit theme from dsh's own `ui-theme` preference beats the OS scheme:
+ * dsh can be dark while the OS is light and vice versa.
+ */
+#dshkit-root[data-dshkit-theme="dark"] {
+	--dshkit-bg: #1e2126;
+	--dshkit-fg: #e8eaed;
+	--dshkit-muted: #9aa0a6;
+	--dshkit-border: #34383e;
+	--dshkit-hover: #2a2e34;
+	--dshkit-shadow: 0 12px 40px rgba(0, 0, 0, 0.55);
+}
+
+#dshkit-root[data-dshkit-theme="light"] {
+	--dshkit-bg: #ffffff;
+	--dshkit-fg: #1c1f23;
+	--dshkit-muted: #6b7280;
+	--dshkit-border: #e4e6eb;
+	--dshkit-hover: #f3f4f6;
+	--dshkit-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+}
+
+#dshkit-root button {
+	font: inherit;
+	color: inherit;
+	background: transparent;
+	border: 1px solid var(--dshkit-border);
+	border-radius: 8px;
+	padding: 5px 10px;
+	cursor: pointer;
+}
+
+#dshkit-root button:hover {
+	background: var(--dshkit-hover);
+}
+
+#dshkit-root button:disabled {
+	opacity: 0.45;
+	cursor: default;
+}
+
+#dshkit-root button.primary {
+	background: var(--dshkit-accent);
+	border-color: var(--dshkit-accent);
+	color: #fff;
+}
+
+#dshkit-root button.danger {
+	color: var(--dshkit-danger);
+	border-color: color-mix(in srgb, var(--dshkit-danger) 40%, transparent);
+}
+
+#dshkit-root button.active {
+	border-color: var(--dshkit-accent);
+	color: var(--dshkit-accent);
+}
+
+#dshkit-root input,
+#dshkit-root select,
+#dshkit-root textarea {
+	font: inherit;
+	color: inherit;
+	background: var(--dshkit-bg);
+	border: 1px solid var(--dshkit-border);
+	border-radius: 8px;
+	padding: 5px 8px;
+	width: 100%;
+}
+
+#dshkit-launcher {
+	position: absolute;
+	right: 18px;
+	bottom: 18px;
+	pointer-events: auto;
+	width: 44px;
+	height: 44px;
+	border-radius: 50%;
+	display: grid;
+	place-items: center;
+	background: var(--dshkit-bg);
+	border: 1px solid var(--dshkit-border);
+	box-shadow: var(--dshkit-shadow);
+	cursor: pointer;
+	font-size: 18px;
+	user-select: none;
+}
+
+#dshkit-launcher.attention {
+	animation: dshkit-pulse 1.2s ease-in-out 3;
+}
+
+@keyframes dshkit-pulse {
+	50% {
+		transform: scale(1.12);
+		border-color: var(--dshkit-accent);
+	}
+}
+
+#dshkit-panel {
+	position: absolute;
+	right: 18px;
+	bottom: 74px;
+	pointer-events: auto;
+	width: min(520px, calc(100vw - 36px));
+	max-height: min(640px, calc(100vh - 110px));
+	display: flex;
+	flex-direction: column;
+	background: var(--dshkit-bg);
+	border: 1px solid var(--dshkit-border);
+	border-radius: 14px;
+	box-shadow: var(--dshkit-shadow);
+	overflow: hidden;
+}
+
+#dshkit-panel[hidden] {
+	display: none;
+}
+
+.dshkit-head {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 12px;
+	border-bottom: 1px solid var(--dshkit-border);
+}
+
+.dshkit-title {
+	font-weight: 600;
+	flex: 1;
+}
+
+.dshkit-tabs {
+	display: flex;
+	gap: 4px;
+	padding: 8px 12px;
+	border-bottom: 1px solid var(--dshkit-border);
+	flex-wrap: wrap;
+}
+
+.dshkit-body {
+	padding: 12px;
+	overflow: auto;
+	flex: 1;
+}
+
+.dshkit-row {
+	display: flex;
+	align-items: flex-start;
+	gap: 10px;
+	padding: 8px;
+	border: 1px solid var(--dshkit-border);
+	border-radius: 10px;
+	margin-bottom: 8px;
+}
+
+.dshkit-row-main {
+	flex: 1;
+	min-width: 0;
+}
+
+.dshkit-row-name {
+	font-weight: 600;
+	word-break: break-all;
+}
+
+.dshkit-row-sub {
+	color: var(--dshkit-muted);
+	font-size: 12px;
+	word-break: break-all;
+}
+
+.dshkit-row-actions {
+	display: flex;
+	gap: 6px;
+	align-items: center;
+	flex-shrink: 0;
+}
+
+.dshkit-muted {
+	color: var(--dshkit-muted);
+}
+
+.dshkit-field {
+	margin-bottom: 8px;
+}
+
+.dshkit-field > label {
+	display: block;
+	font-size: 12px;
+	color: var(--dshkit-muted);
+	margin-bottom: 3px;
+}
+
+.dshkit-grid {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	gap: 4px 10px;
+	font-size: 12px;
+}
+
+.dshkit-grid dt {
+	color: var(--dshkit-muted);
+}
+
+.dshkit-grid dd {
+	margin: 0;
+	word-break: break-all;
+}
+
+.dshkit-logs {
+	font: 11px/1.45 ui-monospace, Consolas, monospace;
+	white-space: pre-wrap;
+	word-break: break-all;
+	background: var(--dshkit-hover);
+	border-radius: 8px;
+	padding: 8px;
+	max-height: 260px;
+	overflow: auto;
+	margin: 0;
+}
+
+.dshkit-switch {
+	position: relative;
+	width: 34px;
+	height: 20px;
+	border-radius: 999px;
+	background: var(--dshkit-border);
+	cursor: pointer;
+	flex-shrink: 0;
+	transition: background 0.15s;
+}
+
+.dshkit-switch[data-on="true"] {
+	background: var(--dshkit-accent);
+}
+
+.dshkit-switch::after {
+	content: "";
+	position: absolute;
+	top: 2px;
+	left: 2px;
+	width: 16px;
+	height: 16px;
+	border-radius: 50%;
+	background: #fff;
+	transition: transform 0.15s;
+}
+
+.dshkit-switch[data-on="true"]::after {
+	transform: translateX(14px);
+}
+
+.dshkit-actions {
+	display: flex;
+	gap: 8px;
+	margin-bottom: 10px;
+	flex-wrap: wrap;
+}
+
+.dshkit-note {
+	color: var(--dshkit-muted);
+	font-size: 12px;
+	margin: 0 0 10px;
+}
+
+.dshkit-toasts {
+	position: absolute;
+	left: 50%;
+	transform: translateX(-50%);
+	bottom: 78px;
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	pointer-events: none;
+	width: min(420px, calc(100vw - 40px));
+}
+
+.dshkit-toast {
+	pointer-events: auto;
+	background: var(--dshkit-bg);
+	border: 1px solid var(--dshkit-border);
+	border-left: 3px solid var(--dshkit-accent);
+	border-radius: 10px;
+	padding: 10px 12px;
+	box-shadow: var(--dshkit-shadow);
+}
+
+.dshkit-toast-title {
+	font-weight: 600;
+	margin-bottom: 2px;
+}
+
+.dshkit-keycap {
+	font: 11px/1.4 ui-monospace, Consolas, monospace;
+	border: 1px solid var(--dshkit-border);
+	border-radius: 6px;
+	padding: 2px 6px;
+	min-width: 90px;
+	text-align: center;
+	display: inline-block;
+}

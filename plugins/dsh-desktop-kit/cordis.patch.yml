@@ -1,0 +1,18 @@
+# dsh-desktop-kit bundle patch：把本插件的行插进 profile 根组。
+#
+# 声明 dsh.bundle 之后，`dsh plugin add` 会把这个包并进 profile 的
+# dsh.profile.bundles 层列表，`dsh plugin remove` 时由上游 reconcile 自动摘掉
+# ——所以永远不要手写 profile 的 package.json / cordis.patch.yml。
+#
+# 行 id `desktop-kit` 是别的层按 id 覆盖本行的把手，刻意不与官方行撞名。
+#
+# config 里的可选项：
+#   provideInit: true   注册本插件自带的 /init 兜底命令。
+#                       **默认关闭**：/init 归 dsh-command-init 所有，而命令名先到先得，
+#                       抢先注册会把官方插件顶掉（启动日志出现 "1 entry did not activate"）。
+#                       只有在没装 dsh-command-init 的 profile 里才需要打开。
+- insert:
+    - id: desktop-kit
+      name: dsh-desktop-kit
+      # config:
+      #   provideInit: true

@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Desktop Kit",
+    "description": "DSHDesktop's convenience features as a dsh plugin: skill and MCP management (incl. ZIP import), diagnostics, page zoom, task reminders (popup + sound), shortcut rebinding, phone remote access with the mobile UI and project browser, and the /skills /mcp /doctor /kit commands."
+  }
+}
