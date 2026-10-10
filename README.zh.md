@@ -46,9 +46,13 @@ dsh plugin --profile web remove dsh-zoom
 ```
 
 一次一条规格，装完重启 dsh。两个坑写在那仓 README 里：Windows 上 `dsh.cmd` 会把钉 commit 那条里的
-`&` 吃掉（改在应用自己的插件面板里钉）；pnpm 用自己的 TLS 栈抓取、不认系统代理，拦过 TLS 的网络要在
+`&` 吃掉（改在应用自己的页面里钉）；pnpm 用自己的 TLS 栈抓取、不认系统代理，拦过 TLS 的网络要在
 `$DSH_HOME/profiles/<profile>/.npmrc` 里写一行代理——或者干脆不联网：把包拷进
 `$DSH_HOME/profiles/plugins/<包名>/`，再把那个路径 add 进去。
+
+官方桌面版自己管着 profile、命令行改不动，那些规格是在它的**插件**页 → **添加插件**里一条条粘进去的；
+那个输入框也收本地目录路径——本包自己走这条路最短。它那个页面没有自动更新（升级＝先卸载再装新版），
+GitHub 拉不动时就换它自己的「安装源」。
 
 工作约定、环境事实与命令清单见 [AGENTS.md](AGENTS.md)。
 

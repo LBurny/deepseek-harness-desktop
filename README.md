@@ -55,10 +55,15 @@ dsh plugin --profile web remove dsh-zoom
 ```
 
 One spec at a time, and restart dsh afterwards. Two traps are spelled out in that repo's README: on
-Windows `dsh.cmd` eats the `&` of the pinned form (pin from the app's own plugin panel instead), and pnpm
-fetches with its own TLS stack, so a network that intercepts TLS needs a proxy line in
+Windows `dsh.cmd` eats the `&` of the pinned form (pin from the app's own page instead), and pnpm fetches
+with its own TLS stack, so a network that intercepts TLS needs a proxy line in
 `$DSH_HOME/profiles/<profile>/.npmrc` — or no network at all, by copying the package into
 `$DSH_HOME/profiles/plugins/<name>/` and adding that path.
+
+In the official desktop app, whose profile the command line cannot touch, those specs are pasted one at a
+time into its **Plugins** page → **Add plugin**; that box also takes a local directory path, which is the
+shortest route for this package itself. Its page has no auto-update (upgrade = uninstall, then install
+again), and its own **Install source** choice covers reaching GitHub through a mirror.
 
 Working agreements, environment facts and the command list are in [AGENTS.md](AGENTS.md).
 
